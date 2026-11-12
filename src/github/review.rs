@@ -98,13 +98,21 @@ impl GitHub {
         {
             return Ok(None);
         }
-        if snapshot.mergeable == super::Mergeable::No {
-            return Ok(Some(snapshot.pr.head));
+        if snapshot.mergeable != super::Mergeable::No
+            && !crate::ci::needs_repair(&self.checks_on(&pr.issue, &snapshot.head_commit)?)
+        {
+            return Ok(None);
         }
-        Ok(
-            crate::ci::needs_repair(&self.checks_on(&pr.issue, &snapshot.head_commit)?)
-                .then_some(snapshot.pr.head),
-        )
+        for issue in self.closing_issues(pr)? {
+            if self.issue_labels(&issue)?.has(crate::claim::IN_PROGRESS) {
+                crate::progress::step(format_args!(
+                    "skipping #{} ({}): closing issue #{} ({}) has an in-progress Claim from a live Command",
+                    pr.issue.number, pr.url, issue.number, issue.url
+                ));
+                return Ok(None);
+            }
+        }
+        Ok(Some(snapshot.pr.head))
     }
 
     pub fn review_labels(&self, pr: &PullRequestUrl) -> Result<crate::labels::Labels> {
@@ -344,7 +352,7 @@ impl GitHub {
     }
 
     /// Read every closing issue without fetching its contents or PR comments.
-    /// An incomplete observation must not authorize Review Pass admission.
+    /// An incomplete observation must not authorize Review or Fix Pass admission.
     pub fn closing_issues(&self, pr: &PullRequestUrl) -> Result<Vec<crate::issue::IssueUrl>> {
         let mut after = None;
         let mut issues = std::collections::BTreeSet::new();

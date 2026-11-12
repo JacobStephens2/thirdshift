@@ -6,6 +6,162 @@ use serde_json::json;
 use support::Scenario;
 
 #[test]
+fn pass_skips_a_claimed_issue_then_repairs_after_its_claim_ends() {
+    for issue_labels in [json!(["spec", "in-progress"]), json!(["in-progress"])] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("issue-7", "main", &["Feature"]);
+        let url = scenario.github_has_pr("issue-7", "main", "OPEN");
+        let head = scenario.origin_git(&["rev-parse", "issue-7"]);
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+        state["labels"]["7"] = issue_labels.clone();
+        state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+        scenario.write_gh_state(&state);
+        scenario.agent_does(
+            r#"
+echo repaired > ci-fix.txt
+git add ci-fix.txt
+git commit -qm 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+        );
+
+        let held = scenario.run(&["fix", "base", "main", "no-email"]);
+
+        assert_eq!(held.code, Some(0), "{}", held.stderr);
+        assert_eq!(
+            scenario.origin_git(&["rev-parse", "issue-7"]),
+            head,
+            "Fix Pass pushed a branch whose issue still has a live Claim: {}",
+            held.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(held.stderr.contains(&url), "{}", held.stderr);
+        assert!(
+            held.stderr.contains("closing issue #7") && held.stderr.contains("in-progress"),
+            "{}",
+            held.stderr
+        );
+        assert_eq!(scenario.gh_state()["labels"]["7"], issue_labels);
+
+        let mut state = scenario.gh_state();
+        state["labels"]["7"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|label| label != "in-progress");
+        scenario.write_gh_state(&state);
+        let released = scenario.run(&["fix", "base", "main", "no-email"]);
+
+        assert_eq!(released.code, Some(0), "{}", released.stderr);
+        assert_eq!(
+            scenario.origin_file("issue-7", "ci-fix.txt").as_deref(),
+            Some("repaired\n")
+        );
+        assert_eq!(scenario.claude_calls().len(), 1);
+        assert!(
+            released.stderr.contains("is ready for review"),
+            "{}",
+            released.stderr
+        );
+    }
+}
+
+#[test]
+fn pass_rechecks_every_closing_issue_after_reserving_and_takes_the_next_candidate() {
+    let scenario = Scenario::new();
+    for branch in ["held", "available"] {
+        scenario.origin_has_branch(branch, "main", &["Feature"]);
+        scenario.github_has_pr(branch, "main", "OPEN");
+    }
+    let held_head = scenario.origin_git(&["rev-parse", "held"]);
+    let mut state = scenario.gh_state();
+    let mut linked = Vec::new();
+    for number in 10..=110 {
+        state["issues"][number.to_string()] = json!("OPEN");
+        linked.push(json!({"url": scenario.issue_url(number)}));
+    }
+    state["prs"][0]["closingIssuesReferences"] = json!(linked);
+    for branch in ["held", "available"] {
+        let head = scenario.origin_git(&["rev-parse", branch]);
+        state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+    }
+    scenario.write_gh_state(&state);
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "post-receive",
+        r#"#!/bin/sh
+while read old new reference; do
+    if [ "$reference" = refs/thirdshift/reservations/1 ] &&
+       [ "$new" != 0000000000000000000000000000000000000000 ]; then
+        gh fake labels 110 '["In-Progress"]'
+    fi
+done
+"#,
+    );
+    scenario.agent_does(
+        r#"
+echo repaired > ci-fix.txt
+git add ci-fix.txt
+git commit -qm 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+    );
+
+    let result = scenario.run(&["fix", "base", "main", "no-email"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("closing issue #110"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.origin_git(&["rev-parse", "held"]), held_head);
+    assert_eq!(scenario.issue_labels(110), ["In-Progress"]);
+    assert_eq!(
+        scenario.origin_file("available", "ci-fix.txt").as_deref(),
+        Some("repaired\n")
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(
+        scenario.gh_state()["prs"][0]["labels"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(support::concurrency::reservations(&scenario).is_empty());
+}
+
+#[test]
+fn pass_fails_closed_when_closing_issues_or_their_claims_cannot_be_read() {
+    for call in [
+        "api graphql",
+        "issue view 7 --repo acme/widgets --json labels",
+    ] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("feature", "main", &["Feature"]);
+        scenario.github_has_pr("feature", "main", "OPEN");
+        let head = scenario.origin_git(&["rev-parse", "feature"]);
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+        state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+        state["fail_next"] = json!({"call":call,"times":1,"error":"Claim observation unavailable"});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["fix", "base", "main", "no-email"]);
+
+        assert_eq!(result.code, Some(1), "{call}: {}", result.stderr);
+        assert!(
+            result.stderr.contains("Claim observation unavailable"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(scenario.origin_git(&["rev-parse", "feature"]), head);
+        assert!(scenario.claude_calls().is_empty());
+        assert!(support::concurrency::reservations(&scenario).is_empty());
+    }
+}
+
+#[test]
 fn locally_occupied_head_skips_without_starting_a_fix_run() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("occupied", "main", &["Feature"]);
