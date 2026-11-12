@@ -30,6 +30,8 @@ struct Group {
     session_kind: Option<String>,
 }
 
+/// `repairs`, `ci_rounds` and `total_minutes` cover Succeeded Commands only,
+/// so a wave of fast crashes cannot make them look better.
 #[derive(Default, Serialize)]
 pub(crate) struct Row {
     #[serde(flatten)]
@@ -50,8 +52,8 @@ pub(crate) struct Row {
 pub(crate) struct Signal {
     pub(crate) observed: usize,
     pub(crate) missing: usize,
-    sum: Option<f64>,
-    mean: Option<f64>,
+    pub(crate) sum: Option<f64>,
+    pub(crate) mean: Option<f64>,
 }
 
 #[derive(Default, Serialize)]
@@ -147,7 +149,7 @@ impl Signal {
         )
     }
 
-    fn add(&mut self, value: Option<f64>) {
+    pub(super) fn add(&mut self, value: Option<f64>) {
         match value {
             Some(value) => {
                 self.observed += 1;
@@ -314,12 +316,14 @@ fn collect(
         row.missing_outcomes += 1;
     }
     let metrics = record.run_metrics.as_ref();
-    row.repairs
-        .add(metrics.map(|metrics| metrics.repairs as f64));
-    row.ci_rounds
-        .add(metrics.map(|metrics| metrics.ci_rounds as f64));
-    row.total_minutes
-        .add(metrics.and_then(|metrics| metrics.total_minutes));
+    if super::outcomes::succeeded(command) {
+        row.repairs
+            .add(metrics.map(|metrics| metrics.repairs as f64));
+        row.ci_rounds
+            .add(metrics.map(|metrics| metrics.ci_rounds as f64));
+        row.total_minutes
+            .add(metrics.and_then(|metrics| metrics.total_minutes));
+    }
     row.confirmed_bug_origins
         .add(Some(origins.for_run(command) as f64));
     let unaddressed = metrics.and_then(|metrics| metrics.unaddressed_findings.as_ref());

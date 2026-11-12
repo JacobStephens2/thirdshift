@@ -1344,13 +1344,14 @@ fn absent_completion_times_and_live_metrics_stay_missing() {
         .iter()
         .find(|row| row["session_kind"].is_null())
         .unwrap();
+    // Means cover Succeeded Commands: the crash is in neither count.
     assert_eq!(
         row["total_minutes"],
-        json!({"observed": 0, "missing": 2, "sum": null, "mean": null})
+        json!({"observed": 0, "missing": 1, "sum": null, "mean": null})
     );
     assert_eq!(
         row["repairs"],
-        json!({"observed": 1, "missing": 1, "sum": 0.0, "mean": 0.0})
+        json!({"observed": 1, "missing": 0, "sum": 0.0, "mean": 0.0})
     );
     // Its writer is gone: a crash, not a live run with no outcome yet.
     assert_eq!(row["missing_outcomes"], 0);
@@ -1702,4 +1703,417 @@ fn signal_rows_keep_died_apart_from_live_and_drop_pass_through_pickups() {
         totals.iter().all(|row| row["missing_outcomes"] == 0),
         "{report:#}"
     );
+}
+
+/// A Run that ended `minutes` after it started `days` ago, with saved Run
+/// metrics: one implement Session that cost `cost` USD, past a 10–20 minute
+/// Usual range when it took longer.
+fn finished(
+    number: u32,
+    outcome: &str,
+    days: i64,
+    minutes: f64,
+    repairs: usize,
+    cost: f64,
+) -> Value {
+    let mut value = dated(number, "Run", Some(outcome), days);
+    let started =
+        chrono::DateTime::parse_from_rfc3339(value["started_at"].as_str().unwrap()).unwrap();
+    value["ended_at"] =
+        json!((started + chrono::Duration::milliseconds((minutes * 60_000.0) as i64)).to_rfc3339());
+    let position = if minutes > 20.0 { "above" } else { "within" };
+    value["run_metrics"] = json!({
+        "outcome": outcome, "repairs": repairs, "ci_rounds": 1 + repairs,
+        "unaddressed_findings": {"standards": 4, "spec": 2, "security": 0},
+        "total_minutes": minutes, "session_signals": {},
+        "stages": [{
+            "name": "implement", "seconds": minutes * 60.0, "minutes": minutes,
+            "usual_range": {"lower_seconds": 600.0, "upper_seconds": 1200.0},
+            "position": position, "review_findings": {"standards": 3, "spec": 1},
+            "session_signals": {"harness": "codex", "harness_version": "1.0", "signals": {
+                "tokens_by_model": [], "cost_usd": cost, "tool_errors": 1,
+                "permission_denials": 0, "killed_work": 0, "repeated_tool_calls": 2,
+                "destructive_commands": []
+            }}
+        }]
+    });
+    value
+}
+
+fn group_line<'a>(report: &'a Value, path: &[&str]) -> &'a Value {
+    let mut group = &report["groups"];
+    for name in path {
+        group = &group[name];
+    }
+    let lines = group["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 1, "{group:#}");
+    &lines[0]
+}
+
+#[test]
+fn fast_failures_and_crashes_raise_waste_without_flattering_succeeded_means() {
+    let scenario = Scenario::new();
+    write(
+        &scenario,
+        "1-fixture.command.json",
+        &finished(1, "merged", 1, 30.0, 0, 3.0),
+    );
+    write(
+        &scenario,
+        "2-fixture.command.json",
+        &finished(2, "merged", 2, 50.0, 2, 5.0),
+    );
+    let before = metrics(&scenario, &["metrics", "--json"]);
+    let line = &group_line(&before, &["efficiency"]);
+    assert_eq!(
+        (&line["kind"], &line["harness"], &line["model"]),
+        (&json!("Ticket run"), &json!("codex"), &json!("sol"))
+    );
+    let window = &line["window"];
+    assert_eq!(window["first_pass_clean_rate"], 0.5);
+    assert_eq!(window["minutes_per_success"], 40.0);
+    assert_eq!(window["cost_usd_per_success"], 4.0);
+    assert_eq!(window["wasted_time_share"], 0.0);
+    let means = |window: &Value| {
+        (
+            window["succeeded_minutes"]["mean"].clone(),
+            window["succeeded_repairs"]["mean"].clone(),
+            window["succeeded_ci_rounds"]["mean"].clone(),
+        )
+    };
+    assert_eq!(means(window), (json!(40.0), json!(1.0), json!(2.0)));
+
+    // Two startup failures, and a crash whose Command log stopped three minutes in.
+    write(
+        &scenario,
+        "3-fixture.command.json",
+        &finished(3, "failed", 1, 0.5, 0, 0.1),
+    );
+    write(
+        &scenario,
+        "4-fixture.command.json",
+        &finished(4, "failed", 1, 0.5, 0, 0.1),
+    );
+    let mut crashed = dated(5, "Run", None, 0);
+    crashed["started_at"] = json!((chrono::Utc::now() - chrono::Duration::minutes(3)).to_rfc3339());
+    write(&scenario, "5-fixture.command.json", &crashed);
+    fs::write(scenario.path(LOGS).join("5-fixture.log"), "started\n").unwrap();
+    let after = metrics(&scenario, &["metrics", "--json"]);
+    let window = &group_line(&after, &["efficiency"])["window"];
+    assert_eq!(
+        means(window),
+        means(&group_line(&before, &["efficiency"])["window"])
+    );
+    assert_eq!(
+        (&window["succeeded"], &window["ended"]),
+        (&json!(2), &json!(5))
+    );
+    assert_eq!(window["first_pass_clean_rate"], 0.5);
+    // Every attempt's time counts against the deliveries, the crash's too.
+    assert_eq!(window["attempt_minutes"]["observed"], 5, "{window:#}");
+    assert_eq!(window["wasted_minutes"]["observed"], 3);
+    assert!(
+        window["wasted_time_share"].as_f64().unwrap() > 0.04,
+        "{window:#}"
+    );
+    assert!(window["minutes_per_success"].as_f64().unwrap() > 40.0);
+    // The crash wrote no Session signals: its spend is missing, not zero.
+    assert_eq!(
+        (
+            &window["attempt_cost_usd"]["observed"],
+            &window["attempt_cost_usd"]["missing"]
+        ),
+        (&json!(4), &json!(1))
+    );
+    let spend = window["wasted_spend_share"].as_f64().unwrap();
+    assert!((spend - 0.2 / 8.2).abs() < 1e-9, "{window:#}");
+    let failed: u64 = after["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["failed"].as_u64().unwrap())
+        .sum();
+    assert_eq!(failed, 3);
+    // The setup rows' means are over Succeeded Commands too.
+    for row in after["weeks"].as_array().unwrap() {
+        if row["session_kind"].is_null() && row["repairs"]["observed"] != 0 {
+            assert_eq!(row["repairs"]["missing"], 0, "{row:#}");
+        }
+    }
+    let repairs: f64 = after["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["repairs"]["sum"].as_f64())
+        .sum();
+    assert_eq!(repairs, 2.0);
+    assert!(scenario.gh_calls().is_empty());
+}
+
+fn scored(criterion: &str, passed: bool) -> Value {
+    json!({"criterion": criterion, "passed": passed, "reason": "Checked."})
+}
+
+#[test]
+fn kept_pull_requests_bug_origins_and_calibrated_scores_read_no_github() {
+    let scenario = Scenario::new();
+    let pr = |number: u32| format!("https://github.com/acme/widgets/pull/{number}");
+    for (number, outcome) in [
+        (1, "merged"),
+        (2, "ready for review"),
+        (3, "ready for review"),
+    ] {
+        let mut run = finished(number, outcome, 1, 30.0, 0, 1.0);
+        run["pull_request"] = json!(pr(number));
+        write(&scenario, &format!("{number}-fixture.command.json"), &run);
+    }
+    let merged_at = (chrono::Utc::now() - chrono::Duration::hours(12)).to_rfc3339();
+    let logs = scenario.path("home/.thirdshift/logs");
+    fs::write(
+        logs.join("github-inbox.json"),
+        serde_json::to_vec(&json!({"version": 2, "subjects": {
+            // Kept URLs match without case or a trailing slash.
+            format!("{}/", pr(1).to_uppercase().replace("HTTPS://GITHUB.COM", "https://github.com")):
+                {"state": "Merged", "merged_at": merged_at, "closed_at": merged_at},
+            pr(2): {"state": "Closed", "merged_at": null, "closed_at": merged_at}
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    // Twenty pull requests you and the Grader both scored: they agree on every
+    // criterion but Tested, where you failed three the Grader passed.
+    let mut sample: Vec<Value> = (0..20)
+        .map(|index| {
+            let criteria = ["Correct", "Scoped", "Tested", "Honest", "Standards"];
+            json!({
+                "repository": "acme/widgets", "number": 100 + index, "url": pr(100 + index),
+                "merged_at": merged_at, "harness": "codex", "harness_version": "1.0",
+                "model": "sol", "effort": "high",
+                "assessment": {"grader": {"harness": "claude", "model": "opus"},
+                    "scores": criteria.map(|c| scored(c, true))},
+                "mine": {"scored_at": format!("2026-10-20T00:00:{index:02}Z"),
+                    "scores": criteria.map(|c| scored(c, !(c == "Tested" && index < 3)))}
+            })
+        })
+        .collect();
+    // One is for you to score: its model Scores stay out of the rates.
+    sample.push(json!({
+        "repository": "acme/widgets", "number": 200, "url": pr(200), "merged_at": merged_at,
+        "harness": "codex", "harness_version": "1.0", "model": "sol", "effort": "high",
+        "for_you": true,
+        "assessment": {"grader": {"harness": "claude", "model": "opus"},
+            "scores": (["Correct", "Scoped", "Tested", "Honest", "Standards"].map(|c| scored(c, false)))}
+    }));
+    let start = chrono::Utc::now() - chrono::Duration::days(1);
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    let mut origin = bug_origin(99, "confirmed", 1);
+    origin["settlement"]["pull_request"]["url"] = json!(pr(1));
+    fs::write(
+        folder.join("week.json"),
+        serde_json::to_vec(&json!({
+            "week": "this", "window_start": start.to_rfc3339(),
+            "window_end": (start + chrono::Duration::days(7)).to_rfc3339(), "seed": 1,
+            "sample": sample, "bug_origins": [origin]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let survival = &group_line(&report, &["yield", "pull_requests"])["window"];
+    assert_eq!(
+        survival,
+        &json!({"merged": 1, "closed": 1, "open": 0, "not_kept": 1, "survival_rate": 0.5})
+    );
+    let cohort = &group_line(&report, &["quality", "bug_origins"])["window"];
+    assert_eq!(
+        cohort,
+        &json!({"merged": 1, "confirmed_bug_origins": 1, "bug_origins_per_merged": 1.0})
+    );
+    let scores = report["groups"]["quality"]["scores"]["lines"]
+        .as_array()
+        .unwrap();
+    let criterion = |name: &str| {
+        scores
+            .iter()
+            .find(|line| line["criterion"] == name)
+            .unwrap()
+    };
+    assert_eq!(criterion("Correct")["calibrated"], true);
+    assert_eq!(
+        criterion("Correct")["window"],
+        json!({"graded": 20, "passed": 20, "pass_rate": 1.0})
+    );
+    assert_eq!(criterion("Tested")["calibrated"], false);
+    assert_eq!(
+        criterion("Tested")["window"],
+        json!({"graded": 20, "passed": 20, "pass_rate": null})
+    );
+    let narrowed = metrics(&scenario, &["metrics", "--model", "other", "--json"]);
+    assert_eq!(narrowed["groups"]["quality"]["scores"]["lines"], json!([]));
+    let text = scenario.run(&["metrics"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    for expected in [
+        "survival_rate: 0.5",
+        "confirmed_bug_origins: 1",
+        "pass_rate: 1.0",
+    ] {
+        assert!(
+            text.stdout.contains(expected),
+            "{expected}: {}",
+            text.stdout
+        );
+    }
+    assert!(scenario.gh_calls().is_empty());
+}
+
+#[test]
+fn stage_bottlenecks_friction_and_interventions_compare_with_the_preceding_window() {
+    let scenario = Scenario::new();
+    let mut slow = finished(1, "merged", 1, 30.0, 0, 1.0);
+    slow["run_metrics"]["unaddressed_findings"]["security"] = json!(1);
+    slow["run_metrics"]["stages"][0]["session_signals"]["signals"]["destructive_commands"] =
+        json!([{"pattern": "force-push", "command": "git push --force origin main"}]);
+    write(&scenario, "1-fixture.command.json", &slow);
+    write(
+        &scenario,
+        "2-fixture.command.json",
+        &finished(2, "merged", 2, 15.0, 0, 1.0),
+    );
+    let stopped = write(
+        &scenario,
+        "3-fixture.command.json",
+        &finished(3, "interrupted", 1, 15.0, 0, 1.0),
+    );
+    fs::write(
+        stopped.with_extension("stop.json"),
+        r#"{"who": "jacob", "requeue": false}"#,
+    )
+    .unwrap();
+    let mut prior = finished(4, "merged", 9, 15.0, 0, 1.0);
+    prior["run_metrics"]["stages"][0]["session_signals"]["signals"]["tool_errors"] = json!(4);
+    write(&scenario, "4-fixture.command.json", &prior);
+
+    let report = metrics(&scenario, &["metrics", "--window", "7d", "--json"]);
+    let friction = group_line(&report, &["friction"]);
+    let window = &friction["window"];
+    assert_eq!(
+        (&window["above"], &window["ranged"]),
+        (&json!(1), &json!(3))
+    );
+    assert_eq!(window["stages"]["implement"]["above"], 1);
+    assert_eq!(window["sessions"], 3);
+    assert_eq!(window["tool_errors"]["mean"], 1.0);
+    assert_eq!(window["repeated_tool_calls"]["mean"], 2.0);
+    assert_eq!(
+        (
+            &window["destructive_sessions"],
+            &window["destructive_checked"]
+        ),
+        (&json!(1), &json!(3))
+    );
+    assert_eq!(window["security_holds"], 1);
+    let delta = &friction["comparison"]["delta"];
+    let above = delta["above_usual_range_share"].as_f64().unwrap();
+    assert!((above - 1.0 / 3.0).abs() < 1e-9, "{delta:#}");
+    assert_eq!(delta["tool_errors"], -3.0);
+    assert_eq!(delta["security_holds"], 1.0);
+    let interventions = group_line(&report, &["quality", "interventions"]);
+    assert_eq!(
+        interventions["window"],
+        json!({"commands": 3, "needs_you": 2, "stops": 1})
+    );
+    assert_eq!(interventions["comparison"]["delta"]["needs_you"], 2.0);
+    assert_eq!(interventions["comparison"]["delta"]["stops"], 1.0);
+    // Findings show only as Security holds, never as a quality score.
+    let groups = report["groups"].to_string();
+    for raw in ["review_findings", "\"standards\"", "\"spec\""] {
+        assert!(!groups.contains(raw), "{raw}: {groups}");
+    }
+    // Unbounded, nothing to compare.
+    let all = metrics(&scenario, &["metrics", "--json"]);
+    assert!(group_line(&all, &["friction"])["comparison"].is_null());
+}
+
+#[test]
+fn a_failed_command_without_run_metrics_still_counts_its_attempt_time() {
+    let scenario = Scenario::new();
+    write(
+        &scenario,
+        "1-fixture.command.json",
+        &finished(1, "merged", 1, 30.0, 0, 1.0),
+    );
+    let mut failed = dated(2, "Run", Some("failed"), 1);
+    let started =
+        chrono::DateTime::parse_from_rfc3339(failed["started_at"].as_str().unwrap()).unwrap();
+    failed["ended_at"] = json!((started + chrono::Duration::minutes(10)).to_rfc3339());
+    write(&scenario, "2-fixture.command.json", &failed);
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let window = &group_line(&report, &["efficiency"])["window"];
+    assert_eq!(window["wasted_minutes"]["observed"], 1, "{window:#}");
+}
+
+#[test]
+fn last_weeks_scores_show_in_a_seven_day_window() {
+    let scenario = Scenario::new();
+    let start = chrono::Utc::now() - chrono::Duration::days(9);
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("week.json"),
+        serde_json::to_vec(&json!({
+            "week": "last", "window_start": start.to_rfc3339(),
+            "window_end": (start + chrono::Duration::days(7)).to_rfc3339(), "seed": 1,
+            "sample": [{"repository": "acme/widgets", "number": 1,
+                "url": "https://github.com/acme/widgets/pull/1",
+                "merged_at": start.to_rfc3339(), "harness": "codex", "harness_version": "1.0",
+                "model": "sol", "effort": "high",
+                "assessment": {"grader": {"harness": "claude", "model": "opus"},
+                    "scores": [scored("Correct", true)]}}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let report = metrics(&scenario, &["metrics", "--window", "7d", "--json"]);
+    assert_ne!(
+        report["groups"]["quality"]["scores"]["lines"],
+        json!([]),
+        "{report:#}"
+    );
+    // In the shown window itself, not only the preceding one.
+    let line = group_line(&report, &["quality", "scores"]);
+    assert_eq!(line["window"]["graded"], 1, "{line:#}");
+}
+
+#[test]
+fn confirmed_bug_origins_show_without_a_kept_answer() {
+    let scenario = Scenario::new();
+    let pr = "https://github.com/acme/widgets/pull/1";
+    let mut run = finished(1, "merged", 1, 30.0, 0, 1.0);
+    run["pull_request"] = json!(pr);
+    write(&scenario, "1-fixture.command.json", &run);
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    let mut origin = bug_origin(99, "confirmed", 1);
+    origin["settlement"]["pull_request"]["url"] = json!(pr);
+    let start = chrono::Utc::now() - chrono::Duration::days(1);
+    fs::write(
+        folder.join("week.json"),
+        serde_json::to_vec(&json!({
+            "week": "this", "window_start": start.to_rfc3339(),
+            "window_end": (start + chrono::Duration::days(7)).to_rfc3339(), "seed": 1,
+            "sample": [], "bug_origins": [origin]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let total: u64 = report["groups"]["quality"]["bug_origins"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["window"]["confirmed_bug_origins"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 1, "{report:#}");
 }

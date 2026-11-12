@@ -78,6 +78,11 @@ test('Metrics opens by keyboard, fits a phone and stacks outcomes in every Theme
   assert.match(page.url(), /window=7d/);
   await page.getByRole('heading', { name: 'Compared with the preceding window' }).waitFor();
   assert.ok(await page.locator('svg.metrics-bar rect').count() > 0);
+  for (const name of ['Yield and pull-request survival', 'Post-merge quality and interventions',
+    'Efficiency, wasted effort and Repair churn', 'Stage bottlenecks and session friction']) {
+    await page.getByRole('heading', { name, exact: true }).waitFor();
+  }
+  assert.ok(await page.locator('svg.metrics-spark path').count() > 0);
   assert.equal(await page.locator('main script').count(), 0);
   for (const theme of [...THEMES, 'my-metrics']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -88,6 +93,12 @@ test('Metrics opens by keyboard, fits a phone and stacks outcomes in every Theme
     assert.equal(new Set(Object.values(colours)).size, 4, `${theme}: ${JSON.stringify(colours)}`);
     for (const colour of Object.values(colours)) assert.notEqual(colour, 'none', theme);
     if (theme === 'my-metrics') assert.equal(colours.failed, 'rgb(18, 52, 86)');
+    const spark = await page.evaluate(() => {
+      const style = getComputedStyle(document.querySelector('svg.metrics-spark path'));
+      return { stroke: style.stroke, fill: style.fill };
+    });
+    assert.notEqual(spark.stroke, 'none', theme);
+    assert.equal(spark.fill, 'none', theme);
     const moving = await page.evaluate(() => [...document.querySelectorAll('main *')].filter(element => {
       const style = getComputedStyle(element);
       return style.animationName !== 'none' || (style.transitionDuration.split(',').some(value => parseFloat(value) > 0));

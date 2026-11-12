@@ -14,7 +14,7 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::reading::Snapshot;
+use super::reading::{Snapshot, pull_request_key};
 use crate::config::UserConfig;
 use crate::github::{GitHub, InboxState, IssueState, PullRequestState, QuotaWait};
 
@@ -329,6 +329,35 @@ pub fn load(logs_dir: &Path) -> Kept {
             ..Kept::default()
         },
     }
+}
+
+/// The kept pull-request facts by URL, keyed by [`pull_request_key`]. Unlike [`load`], this reads the file alone: no GitHub
+/// read and no quota check. A History row's frozen answer stands in only
+/// for a pull request with no current one.
+pub(super) fn kept_pull_requests(logs_dir: &Path) -> BTreeMap<String, PullRequestState> {
+    let Some(file) = std::fs::read(path(logs_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<File>(&bytes).ok())
+        .filter(|file| matches!(file.version, 1 | 2))
+    else {
+        return BTreeMap::new();
+    };
+    let mut kept = BTreeMap::new();
+    // Only `row::url` keys name their pull request; legacy row-only keys do not.
+    let frozen = file.history.into_iter().filter_map(|(key, state)| {
+        let (_, url) = key.rsplit_once("::")?;
+        Some((pull_request_key(url), state?))
+    });
+    let current = file
+        .subjects
+        .into_iter()
+        .filter_map(|(url, state)| Some((pull_request_key(&url), state?)));
+    for (url, state) in frozen.chain(current) {
+        if let InboxState::PullRequest(state) = state {
+            kept.insert(url, state);
+        }
+    }
+    kept
 }
 
 /// Refresh without an age gate, even when no page is open. All this work,

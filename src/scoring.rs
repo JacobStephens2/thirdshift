@@ -18,7 +18,7 @@ pub(crate) mod origins;
 mod sample;
 mod store;
 pub(crate) use sample::PullRequest;
-pub(crate) use store::read_confirmed_origins;
+pub(crate) use store::{ScoreHistory, read_confirmed_origins, read_scores};
 pub(crate) mod packet;
 pub(crate) use grader::{Criterion, Score};
 

@@ -239,16 +239,21 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 object(json!({"version": version, "hostname": text, "command": record})),
                 {
                     "type": "object",
-                    "description": "Signal rows are weeks by week grain, days by day grain.",
+                    "description": "Signal rows are weeks by week grain, days by day grain; their repairs, ci_rounds and total_minutes cover Succeeded Commands. Each group holds an axis of shown buckets and lines, each with its key, window totals, per-bucket values and, for a bounded window, a comparison with current, prior and delta.",
                     "properties": {
                         "version": version, "hostname": text, "window": window, "filters": record,
                         "unavailable_accounts": array(text.clone()), "outcomes": array(tally),
                         "comparison": {"oneOf": [{"type": "null"}, object(json!({
                             "current": record, "prior": record, "rows": array(record.clone())
                         }))]},
+                        "groups": object(json!({
+                            "yield": object(json!({"pull_requests": record})),
+                            "quality": object(json!({"bug_origins": record, "scores": record, "interventions": record})),
+                            "efficiency": record, "friction": record
+                        })),
                         "weeks": array(record.clone()), "days": array(record)
                     },
-                    "required": ["version", "hostname", "window", "filters", "unavailable_accounts", "outcomes", "comparison"]
+                    "required": ["version", "hostname", "window", "filters", "unavailable_accounts", "outcomes", "comparison", "groups"]
                 }
             ]})
         }
