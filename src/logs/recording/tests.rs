@@ -701,7 +701,8 @@ fn completion_metrics_place_each_stage_against_repository_history() {
 fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end() {
     let ending = |failure: anyhow::Error,
                   recovery: Option<crate::recovery::Stage>,
-                  outcome: &str| {
+                  outcome: &str,
+                  stages: &[StageName]| {
         let memory = Scripted::default();
         let mut record = Record::new(memory.clone());
         record.begin(Begin::Run(&issue()));
@@ -711,7 +712,9 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
         let started: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
         assert_eq!(started["thirdshift_version"], env!("CARGO_PKG_VERSION"));
         assert!(started.get("stopped_at").is_none() && started.get("failure_category").is_none());
-        record.stage(StageName::CiWatch, None);
+        for stage in stages {
+            record.stage(*stage, None);
+        }
         let ended = crate::run::Ended {
             outcome: Err(crate::failed_run::FailedRun {
                 recovery: recovery.map(|stage| {
@@ -739,6 +742,7 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
             saved["failure_category"].clone(),
         )
     };
+    use StageName::{CiWatch, Cleanup, Implement};
     // A Recovery's stage is kept in the Command record's own stage words.
     assert_eq!(
         ending(
@@ -748,22 +752,75 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
             .into(),
             Some(crate::recovery::Stage::SelfMerge),
             "failed",
+            &[Implement, CiWatch, Cleanup],
         ),
         (serde_json::json!("Self-merge"), serde_json::json!("held"))
     );
     // Without a Recovery, the stage in force when it ended.
     assert_eq!(
-        ending(anyhow::anyhow!("origin mismatch"), None, "failed"),
+        ending(
+            anyhow::anyhow!("origin mismatch"),
+            None,
+            "failed",
+            &[CiWatch]
+        ),
         (
             serde_json::json!("CI watch"),
             serde_json::json!("stage_failed")
         )
     );
+    // A Worktree dropped while the failure unwound enters cleanup last;
+    // the stage that failed came before it (#2107).
+    for recovery in [None, Some(crate::recovery::Stage::BaseFix)] {
+        assert_eq!(
+            ending(
+                anyhow::anyhow!("origin mismatch"),
+                recovery,
+                "failed",
+                &[Implement, CiWatch, Cleanup],
+            ),
+            (
+                serde_json::json!("CI watch"),
+                serde_json::json!("stage_failed")
+            ),
+            "{recovery:?}"
+        );
+    }
+    // Cleanup alone is still where it stopped.
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    let mut cleaned: CommandRecord =
+        serde_json::from_str(&memory.file(record.record_path().unwrap())).unwrap();
+    cleaned.stages.truncate(1);
+    cleaned.stages[0].name = Cleanup.name().into();
+    let ended = crate::run::Ended {
+        outcome: Err(crate::failed_run::FailedRun {
+            recovery: None,
+            error: anyhow::anyhow!("origin mismatch"),
+            pr_url: None,
+            log: None,
+            interrupted: false,
+            ticket_lines: Vec::new(),
+        }),
+        base_fix: None,
+        advice: Vec::new(),
+    };
+    cleaned.finish(
+        &crate::run_ending::Account::of_run(&ended),
+        &mut memory.clone(),
+        &crate::logs::usual_range::UsualRanges::default(),
+        None,
+    );
+    assert_eq!(cleaned.stopped_at.as_deref(), Some("cleanup"));
     assert_eq!(
         ending(
             anyhow::anyhow!("git push failed"),
             Some(crate::recovery::Stage::Implementation),
             "failed",
+            &[CiWatch],
         ),
         (
             serde_json::json!("implement"),
@@ -781,6 +838,7 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
         .into(),
         None,
         "paused",
+        &[CiWatch, Cleanup],
     );
     assert!(stopped_at.is_null() && category.is_null());
 }

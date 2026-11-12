@@ -112,7 +112,7 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window) -> WhereRunsFailed {
         let (stopped_at, ending) = match record.failure_category {
             Some(category) => (record.stopped_at.clone(), Ending::Recorded(category)),
             None => (
-                record.last_stage().map(str::to_owned),
+                record.stopped_stage().map(str::to_owned),
                 if fact.command.state == "died" {
                     Ending::Died
                 } else {

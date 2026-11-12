@@ -251,7 +251,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                         }))]},
                         "where_runs_failed": {
                             "type": "object",
-                            "description": "Failed Commands, died ones included, as rows by stopped_at and category, each listing its Commands' selectors; observed recorded both, missing fell back to the last stage and died or failed.",
+                            "description": "Failed Commands, died ones included, as rows by stopped_at and category, each listing its Commands' selectors; observed recorded both, missing fell back to the last stage before any trailing cleanup and died or failed.",
                             "properties": {"failed": integer, "observed": integer, "missing": integer, "rows": array(record.clone())}
                         },
                         "versions": object(json!({
