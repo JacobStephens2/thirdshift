@@ -3373,6 +3373,17 @@ request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits `0`
 without a session or Run notification. `--recommend-only` works on this form too.
+The Pass also skips a pull request while any linked closing issue has an
+`in-progress` Claim or an issue reservation on that issue's origin, including
+Ticket and Spec Delivery on another machine. It logs the PR, holding issue and
+observed Claim or reservation, then tries the next candidate. After the hold
+ends, the next Pass can take the PR. Retained reservations still hold it until
+the Day shift confirms the owner stopped and releases them; no timer expires
+another Command's reservation. Failed hold observations stop admission.
+This guard is checked again after reserving the PR, before inspecting its
+worktree. It does not lock out a Delivery started afterwards; captured-head
+checks still protect Review publication. Explicit `review <PR URL>` keeps its
+existing behavior and does not apply this closing-issue guard.
 An unrecoverable local branch or occupied worktree is skipped so later waiting
 pull requests can run. The Pass saves a conflict fingerprint under
 `~/.thirdshift/review-conflicts/` and sends one failure notification per state;
