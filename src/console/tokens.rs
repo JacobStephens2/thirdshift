@@ -26,7 +26,7 @@ pub(crate) enum Action {
 }
 
 pub(crate) fn parse(args: &[String]) -> Result<Action> {
-    let usage = "usage: thirdshift console token create <holder> [--scopes read,security,act,run,admin] [--expires <date>] | list [--json] | revoke <holder>";
+    let usage = "usage: thirdshift console token create <holder> [--scopes read,security,act,run,admin | --scopes report] [--expires <date>] | list [--json] | revoke <holder>";
     match args.first().map(String::as_str) {
         Some("create") => {
             let holder = args
@@ -45,7 +45,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Action> {
                 match flag.as_str() {
                     "--scopes" if scopes.is_none() => {
                         ensure!(!value.is_empty(), "at least one token scope is required");
-                        scopes = Some(Scope::parse(value)?);
+                        scopes = Some(Scope::parse_token(value)?);
                     }
                     "--expires" if expires_at.is_none() => {
                         expires_at = Some(expiry(value)?);
@@ -53,9 +53,15 @@ pub(crate) fn parse(args: &[String]) -> Result<Action> {
                     _ => bail!("{usage}"),
                 }
             }
+            let scopes = scopes.unwrap_or_else(|| vec![Scope::Read]);
+            // A report token writes only its holder's own Fleet metrics
+            // snapshot, so its holder is that machine's Fleet name.
+            if scopes.contains(&Scope::Report) {
+                crate::config::console::fleet::validate_name(holder)?;
+            }
             Ok(Action::Create {
                 holder: holder.clone(),
-                scopes: scopes.unwrap_or_else(|| vec![Scope::Read]),
+                scopes,
                 expires_at,
             })
         }

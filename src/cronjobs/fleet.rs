@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::{CronJob, CronJobs};
 use crate::config::{UserConfig, console::fleet::Entry};
-use crate::console::fleet::read::{Refusal, Remote};
+use crate::console::fleet::read::{Failure, Remote};
 use crate::resend_key::Credentials;
 
 #[derive(Serialize)]
@@ -72,17 +72,10 @@ impl Machine {
                 (self, inventory.jobs)
             }
             Err(error) => {
-                self.status = if let Some(refusal) = error.downcast_ref::<Refusal>() {
-                    match refusal.status.as_u16() {
-                        401 | 403 => Status::Refused,
-                        404 => Status::Incompatible,
-                        _ if refusal.message.contains("incompatible") => Status::Incompatible,
-                        _ => Status::Unavailable,
-                    }
-                } else if error.to_string().contains("incompatible") {
-                    Status::Incompatible
-                } else {
-                    Status::Unavailable
+                self.status = match Failure::of(&error) {
+                    Failure::Refused => Status::Refused,
+                    Failure::Incompatible => Status::Incompatible,
+                    Failure::Unavailable => Status::Unavailable,
                 };
                 self.error = Some(format!("{error:#}"));
                 (self, Vec::new())

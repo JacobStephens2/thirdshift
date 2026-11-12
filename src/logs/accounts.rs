@@ -139,6 +139,16 @@ pub(crate) fn discover(config: &UserConfig) -> Sources {
     result
 }
 
+/// The serving OS account's name, as `account` filters and tags name it.
+pub(crate) fn serving_name() -> Option<String> {
+    // SAFETY: geteuid takes no arguments, cannot fail and touches no memory.
+    let uid = unsafe { libc::geteuid() };
+    local_accounts()
+        .into_iter()
+        .find(|account| account.uid == uid)
+        .map(|account| account.name)
+}
+
 /// The log directory's canonical path when it stays inside this account's home.
 fn accepted_log_directory(home: &Path, root: &Path) -> Option<PathBuf> {
     let root = root.canonicalize().ok()?;

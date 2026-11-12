@@ -190,3 +190,49 @@ fn fleet_config_uses_owners_admin_scope_and_refusals_survive_forwarding() {
         .unwrap();
     assert_eq!(refusal.status(), 403);
 }
+
+#[test]
+fn a_cached_peer_snapshot_stays_with_the_person_who_read_it() {
+    const OTHER: &str = "other@example.test";
+    let owner = configured();
+    let mut value = record(owner.path(), 73, Some("failed"), 0);
+    value["name"] = json!("widgets#73");
+    write_record(owner.path(), 73, &value);
+    let caller = configured();
+    fs::write(
+        caller.path().join(".thirdshift/config.toml"),
+        format!("[console]\nport = 0\nallowed_emails = [\"{EMAIL}\", \"{OTHER}\"]\n"),
+    )
+    .unwrap();
+    for email in [EMAIL, OTHER] {
+        assert!(
+            password(caller.path(), Some(email), PASSWORD, PASSWORD)
+                .0
+                .success()
+        );
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let owner_console = Console::start(binary, owner.path());
+    paired(caller.path(), owner.path(), &owner_console, "read");
+    let console = Console::start_mode(binary, caller.path(), false);
+    let allowed = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let other = cookie(&sign_in(&console, OTHER, PASSWORD));
+    let page = get(&console, "/metrics?window=7d", &allowed)
+        .text()
+        .unwrap();
+    assert!(page.contains("widgets#73</a> on owner"), "{page}");
+    // The owner does not list the other person, so it refuses them.
+    let page = get(&console, "/metrics?window=7d", &other).text().unwrap();
+    assert!(!page.contains("widgets#73"), "{page}");
+    // Its saved snapshot must not answer for it once it is offline.
+    drop(owner_console);
+    let page = get(&console, "/metrics?window=7d", &other).text().unwrap();
+    assert!(!page.contains("widgets#73"), "{page}");
+    let page = get(&console, "/metrics?window=7d", &allowed)
+        .text()
+        .unwrap();
+    assert!(
+        page.contains("widgets#73 (cached, acme/widgets, "),
+        "{page}"
+    );
+}

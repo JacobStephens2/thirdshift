@@ -9,7 +9,8 @@
 //! with its [`Ending`]: the Factory skills it wrote out for its sessions
 //! removed, then the Activity log's end line, the terminal display and the
 //! Run notification, in that order, only the display of those three for a
-//! skipped pass.
+//! skipped pass; then, best effort, its Run metrics pushed to any report
+//! destination.
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -137,6 +138,11 @@ pub fn start(
 }
 
 impl Started {
+    /// Whether this is the top-level command, not a child Run it started.
+    fn top_level(&self) -> bool {
+        self.started.is_some()
+    }
+
     /// Take note that the command's sessions run on `harness`, which its Run
     /// notification names.
     pub fn built_with(&mut self, harness: &Choice) {
@@ -205,8 +211,13 @@ impl Started {
             eprintln!("{diagnostic}");
         }
         let code = account.show(elapsed);
+        let top_level = self.top_level();
         if let Some(notification) = self.notification {
             notification.finish(&account);
+        }
+        // Only the top-level Command reports, once its own record is written.
+        if top_level {
+            crate::console::report::after_command();
         }
         code
     }
