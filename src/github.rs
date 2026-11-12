@@ -1988,7 +1988,7 @@ impl Conclusion {
 }
 
 /// A check run or a commit status.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Check {
     pub name: String,
     pub conclusion: Conclusion,
