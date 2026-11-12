@@ -262,7 +262,9 @@ fn gives_the_agent_the_fresh_prompt() {
          Write the reviewers' reports, with each axis's final files-read list, \
          to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). \
          Write `<review reports directory>/summary.json` beside them with the finding counts, \
-         following the `thirdshift-code-review` skill's summary format.\n\
+         following the `thirdshift-code-review` skill's summary format. Each count is the number of actionable findings \
+         in that axis's report; use `0` when no change or human follow-up is needed. \
+         Exclude declined or accepted observations that require no change.\n\
          Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, \
          with the line of code, plan decision, ADR or run that refutes each finding. \
