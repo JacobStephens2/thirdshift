@@ -7,6 +7,9 @@
 
 mod support;
 
+#[path = "ci/polling.rs"]
+mod polling;
+
 use support::Scenario;
 
 /// The agent adds feature.txt and opens a PR.

@@ -337,10 +337,19 @@ impl<A: Adapter> PullRequest<A> {
     /// session has produced a PR, absence is allowed; a captured PR may not
     /// disappear. Drafts are allowed only before initial readiness.
     pub fn ensure_actionable(&mut self, ready: bool) -> Result<()> {
+        self.actionable_head(ready).map(|_| ())
+    }
+
+    /// The head seen by the same actionability observation, for waits that
+    /// must reset their cadence when another writer moves the PR.
+    pub fn actionable_head(&mut self, ready: bool) -> Result<Option<String>> {
         let captured = self.identified.is_some();
         match self.observe(false)? {
-            Some(snapshot) => self.validate(&snapshot, ready),
-            None if !captured => Ok(()),
+            Some(snapshot) => {
+                self.validate(&snapshot, ready)?;
+                Ok(Some(snapshot.head_commit))
+            }
+            None if !captured => Ok(None),
             None => bail!("no PR found"),
         }
     }
@@ -522,6 +531,7 @@ impl<A: Adapter> PullRequest<A> {
     fn settled_ready_snapshot(&mut self) -> Result<PrSnapshot> {
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
         let mut waiting_line = poll::WaitingLine::new();
+        let mut backoff = poll::Backoff::new();
         loop {
             let snapshot = self.observe(false)?.context("no PR found")?;
             self.validate(&snapshot, true)?;
@@ -533,7 +543,9 @@ impl<A: Adapter> PullRequest<A> {
                             snapshot.pr.url
                         ));
                     }
-                    self.adapter.pause()?;
+                    let state = (snapshot.head_commit, snapshot.mergeable);
+                    self.adapter
+                        .pause(backoff.observe(state, std::time::Instant::now()))?;
                 }
                 Mergeable::Yes | Mergeable::No | Mergeable::Unknown => return Ok(snapshot),
             }
@@ -738,8 +750,8 @@ pub(crate) trait Adapter {
     ) -> Result<String>;
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
-    fn pause(&mut self) -> Result<()> {
-        poll::pause()
+    fn pause(&mut self, delay: std::time::Duration) -> Result<()> {
+        poll::sleep(delay)
     }
     fn grace_period(&self) -> std::time::Duration {
         poll::grace_period()
@@ -1054,7 +1066,7 @@ mod tests {
             }
             Ok(())
         }
-        fn pause(&mut self) -> Result<()> {
+        fn pause(&mut self, _: Duration) -> Result<()> {
             Ok(())
         }
         fn grace_period(&self) -> Duration {
