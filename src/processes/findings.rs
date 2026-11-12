@@ -49,6 +49,12 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
     let mut urls = Vec::new();
     while let Some((record, finding)) = records.take_next_fix()? {
         interrupt::check()?;
+        // A repository with issues turned off cannot hold a fix Ticket.
+        if urls.is_empty() && !github.has_issues(&repo.slug())? {
+            let message = crate::security::issues_turned_off(&repo);
+            progress::step(&message);
+            return Ok(message);
+        }
         run.completed
             .lock()
             .expect("completed Runs")

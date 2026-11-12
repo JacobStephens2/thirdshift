@@ -2094,10 +2094,12 @@ a lock of a kind or the Architect run&#39;s open-plan, waiting-idea or Ready-iss
 <p>The Built-in <code>security-run</code> owns <code>security-audit</code> → <code>reproduce-findings</code> →
 <code>fix-findings</code> → <code>close-findings</code>, inheriting the Command&#39;s Harness, Model and
 Effort and limits. Its Command limit, the lock of its kind and Ready-issue,
-failed-fix and unchanged-Base skip gates stay before the file. The first two
+failed-fix and unchanged-Base skip gates stay before the file, followed by
+its check that Issues are on. The first two
 Steps skip when an earlier
-reproduced finding awaits an allowed fix; fixing and closing retain their
-permission gates. The Security run fixes at most one finding per invocation,
+reproduced finding awaits an allowed fix, unless the repository has issues
+turned off; fixing and closing retain their permission gates. The Security
+run fixes at most one finding per invocation,
 and closes only that finding after its fix merges and its proof passes.
 Inspect it with <code>thirdshift process show security-run</code> or validate it with
 <code>thirdshift process check security-run</code>. A copy under a new Custom process
@@ -2364,7 +2366,8 @@ outside parallel groups, and cannot use an Issue-branch or Spec-branch worktree.
 Each takes its own Harness, Model and Effort. Their session traces stay local,
 including when OTLP export is configured.</p>
 <p>With <code>security-fix</code> (or <code>--security-fix</code>) on the command, or <code>[security] fix = true</code>,
-each Step skips itself when a recorded finding awaits an allowed fix;
+each Step skips itself when a recorded finding awaits an allowed fix, unless
+the repository has issues turned off and so cannot hold the fix;
 <code>no-security-fix</code> overrides the config. Before the Process name use the dashed
 flags. These Steps publish no fix or finding, and a file cannot loosen their
 privacy rules. Security runs execute the Built-in <code>security-run</code> sequence
@@ -2544,7 +2547,9 @@ the worktree kind, and it gets the usual one Resume with or without an issue.</p
 <code>security-fix</code> or <code>fix = true</code> under <code>[security]</code> allows it, fixes each
 reproduced finding still awaiting a fix, in severity order. <code>no-security-fix</code>
 overrides the setting. Unreproduced findings and findings with an existing
-fix are skipped. The Step uses the Security run&#39;s private publication checks:
+fix are skipped. In a repository with issues turned off, the Step fixes
+nothing, starts no session and says so: no fix Ticket can be filed there.
+The Step uses the Security run&#39;s private publication checks:
 a public fix issue contains only the proposed change and a private-record
 link. It links the fix, starts a Ticket run or Spec run, and records its
 ending privately. A failed fix stops the Step and stays with the Day shift.
@@ -3606,6 +3611,7 @@ sequence; sessions, progress, logs, Run notifications and the Security run name
 stay the same.</p>
 <p>The command takes the Harness, Model and Effort words and the shared Pass words (<code>merge</code>, <code>no-merge</code>, <code>base-fix</code>, <code>no-base-fix</code>, <code>parallel</code>, <code>email</code>, <code>email-unless-merged</code>, <code>no-email</code>, <code>security-fix</code>, <code>no-security-fix</code>, <code>security-close</code> and <code>no-security-close</code>, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.</p>
 <p>Fixing is off by default. <code>security-fix</code> on the command or <code>fix = true</code> under <code>[security]</code> allows one fix; <code>no-security-fix</code> overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.</p>
+<p>A repository with GitHub issues turned off cannot hold a fix Ticket, so a Security run there fails before any session, fixing allowed or not, as its gates below describe. A failed or unreadable <code>has_issues</code> setting fails the run before the audit too, rather than being taken as Issues turned off.</p>
 <p>Closing is on by default when fixing is allowed. <code>no-security-close</code> on the command or <code>close = false</code> under <code>[security]</code> leaves the finding open after fixing; <code>security-close</code> overrides that setting. After a dispatched fix ends merged, the run re-runs the private record&#39;s proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix&#39;s outcome. A closed record is never picked up as waiting or as the next fix.</p>
 <p>A publishing session reads the private record and follows the reproduction&#39;s fix-size decision: a single <strong>Ticket</strong>, or a <strong>Spec</strong> with <strong>Tickets</strong> through <code>thirdshift-to-spec</code> and <code>thirdshift-to-tickets</code>. Every new issue is terse, saying only what the fix changes and linking the private record. thirdshift checks all the issues, reserves the top issue on <code>origin</code> as a <a href="#pickup-runs">Pickup run</a> reserves the Ready issue it takes, failing if another run holds it, swaps the top issue&#39;s <code>needs-triage</code> for <code>ready-for-agent</code>, adds <code>security-fix</code> to every fix issue (creating the label when missing), records the fix link privately and dispatches its <strong>Ticket run</strong> or <strong>Spec run</strong>. The Security run ends as that run ends, including a <strong>Ticket run</strong> that Self-merges when asked by the command or the User config.</p>
 <p>On a public repository, thirdshift checks issues created during the publishing session&#39;s window before creating the staged issue or Spec, and again after linking a Spec&#39;s Tickets. The second sweep skips the staged Spec and its Tickets. Each other issue&#39;s title and body face the same public-text check as staged text: they must link the private record and include none of its private write-up lines or test text. Issues that fail are closed and fail the Security run. Issues that pass are left open, named in the <strong>Activity log</strong>, and do not fail the run. The time window alone does not establish who created an issue.</p>

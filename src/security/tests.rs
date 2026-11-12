@@ -85,7 +85,7 @@ fn a_finding_waiting_for_the_day_shift_does_not_hold_off_the_audit() {
                         Call::ReadySearch,
                         Call::AdvisoryList,
                         Call::AuditHistory,
-                        Call::IssuesCheck,
+                        Call::HasIssues,
                         Call::HarnessCheck,
                         Call::NodeCheck,
                         Call::Started(None),
@@ -111,7 +111,7 @@ fn checks_prerequisites_then_audits_without_pulling() {
             Call::ReadySearch,
             Call::AdvisoryList,
             Call::AuditHistory,
-            Call::IssuesCheck,
+            Call::HasIssues,
             Call::HarnessCheck,
             Call::NodeCheck,
             Call::Started(None),
@@ -248,7 +248,7 @@ fn each_failed_prerequisite_prevents_later_operations() {
                 Call::ReadySearch,
                 Call::AdvisoryList,
                 Call::AuditHistory,
-                Call::IssuesCheck,
+                Call::HasIssues,
                 Call::HarnessCheck,
             ],
         ),
@@ -258,7 +258,7 @@ fn each_failed_prerequisite_prevents_later_operations() {
                 Call::ReadySearch,
                 Call::AdvisoryList,
                 Call::AuditHistory,
-                Call::IssuesCheck,
+                Call::HasIssues,
                 Call::HarnessCheck,
                 Call::NodeCheck,
             ],
@@ -285,7 +285,7 @@ fn issues_turned_off_fail_after_the_skip_gates_and_before_any_session() {
     for fixing in [false, true] {
         let mut outside = InMemory::default()
             .advisories(vec![reproduced.clone()])
-            .issues_off();
+            .has_issues(Ok(false));
         let Outcome::Audited(Ended {
             outcome: Err(failed),
             audit_started: false,
@@ -295,13 +295,45 @@ fn issues_turned_off_fail_after_the_skip_gates_and_before_any_session() {
             panic!("a Security run on a repository with Issues off should fail");
         };
         assert_eq!(issues_off_cause(&failed.error), Some("Issues turned off"));
-        assert_eq!(outside.calls.last(), Some(&Call::IssuesCheck));
+        assert_eq!(outside.calls.last(), Some(&Call::HasIssues));
         assert!(!outside.calls.contains(&Call::HarnessCheck));
     }
-    let mut skipped = InMemory::default().issues_off().unchanged_base();
+    let mut skipped = InMemory::default().has_issues(Ok(false)).unchanged_base();
     assert!(matches!(
         run_through(&mut skipped, &widgets(), "main", false, false, None),
         Outcome::Skipped(Skipped::UnchangedBase(_))
     ));
-    assert!(!skipped.calls.contains(&Call::IssuesCheck));
+    assert!(!skipped.calls.contains(&Call::HasIssues));
+}
+
+/// A failed or malformed repository metadata read is a pre-audit failure,
+/// never taken for Issues turned off.
+#[test]
+fn an_unreadable_issues_setting_fails_before_any_session() {
+    let mut outside =
+        InMemory::default().has_issues(Err("gh api repository metadata has no has_issues setting"));
+    let outcome = run_through(&mut outside, &widgets(), "main", true, false, None);
+    let Outcome::Audited(Ended {
+        outcome: Err(failed),
+        audit_started: false,
+        ..
+    }) = outcome
+    else {
+        panic!("expected a pre-audit failure");
+    };
+    assert!(
+        format!("{:#}", failed.error).contains("no has_issues setting"),
+        "{:#}",
+        failed.error
+    );
+    assert_eq!(issues_off_cause(&failed.error), None);
+    assert_eq!(
+        outside.calls,
+        [
+            Call::ReadySearch,
+            Call::AdvisoryList,
+            Call::AuditHistory,
+            Call::HasIssues
+        ]
+    );
 }

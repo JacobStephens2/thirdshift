@@ -1442,6 +1442,23 @@ fn a_dispatched_fix_holds_off_no_audit_and_is_not_dispatched_again() {
     assert_eq!(scenario.gh_state()["issues"], issues);
 }
 
+/// Unreadable repository metadata is never taken for issues turned off.
+#[test]
+fn malformed_issues_metadata_fails_before_the_audit() {
+    let scenario = with_reproduced_findings(&["critical"]);
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!("unknown");
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("no has_issues setting"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
 #[test]
 fn reproduced_findings_without_permission_are_not_fixed_and_hold_off_no_audit() {
     for config in ["", "[security]\nfix = false\n", "[security]\nfix = true\n"] {

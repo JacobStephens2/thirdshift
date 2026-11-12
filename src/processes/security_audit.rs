@@ -20,6 +20,9 @@ pub(super) fn run(prepared: &Prepared, step: &ResolvedStep, index: usize) -> Res
     if !owes_reproduction
         && prepared.security_fix
         && github.security_records(&repo.slug())?.next_fix()?.is_some()
+        // A repository with issues turned off cannot hold the fix, so its
+        // reproduced findings hold off no audit.
+        && github.has_issues(&repo.slug())?
     {
         let message = format!(
             "{} skipped: a recorded Security finding awaits an allowed fix",

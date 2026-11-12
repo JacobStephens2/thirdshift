@@ -2036,10 +2036,12 @@ a lock of a kind or the Architect run's open-plan, waiting-idea or Ready-issue g
 The Built-in `security-run` owns `security-audit` → `reproduce-findings` →
 `fix-findings` → `close-findings`, inheriting the Command's Harness, Model and
 Effort and limits. Its Command limit, the lock of its kind and Ready-issue,
-failed-fix and unchanged-Base skip gates stay before the file. The first two
+failed-fix and unchanged-Base skip gates stay before the file, followed by
+its check that Issues are on. The first two
 Steps skip when an earlier
-reproduced finding awaits an allowed fix; fixing and closing retain their
-permission gates. The Security run fixes at most one finding per invocation,
+reproduced finding awaits an allowed fix, unless the repository has issues
+turned off; fixing and closing retain their permission gates. The Security
+run fixes at most one finding per invocation,
 and closes only that finding after its fix merges and its proof passes.
 Inspect it with `thirdshift process show security-run` or validate it with
 `thirdshift process check security-run`. A copy under a new Custom process
@@ -2335,7 +2337,8 @@ Each takes its own Harness, Model and Effort. Their session traces stay local,
 including when OTLP export is configured.
 
 With `security-fix` (or `--security-fix`) on the command, or `[security] fix = true`,
-each Step skips itself when a recorded finding awaits an allowed fix;
+each Step skips itself when a recorded finding awaits an allowed fix, unless
+the repository has issues turned off and so cannot hold the fix;
 `no-security-fix` overrides the config. Before the Process name use the dashed
 flags. These Steps publish no fix or finding, and a file cannot loosen their
 privacy rules. Security runs execute the Built-in `security-run` sequence
@@ -2531,7 +2534,9 @@ the worktree kind, and it gets the usual one Resume with or without an issue.
 `security-fix` or `fix = true` under `[security]` allows it, fixes each
 reproduced finding still awaiting a fix, in severity order. `no-security-fix`
 overrides the setting. Unreproduced findings and findings with an existing
-fix are skipped. The Step uses the Security run's private publication checks:
+fix are skipped. In a repository with issues turned off, the Step fixes
+nothing, starts no session and says so: no fix Ticket can be filed there.
+The Step uses the Security run's private publication checks:
 a public fix issue contains only the proposed change and a private-record
 link. It links the fix, starts a Ticket run or Spec run, and records its
 ending privately. A failed fix stops the Step and stays with the Day shift.
@@ -3816,6 +3821,8 @@ stay the same.
 The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email`, `email-unless-merged`, `no-email`, `security-fix`, `no-security-fix`, `security-close` and `no-security-close`, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.
 
 Fixing is off by default. `security-fix` on the command or `fix = true` under `[security]` allows one fix; `no-security-fix` overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.
+
+A repository with GitHub issues turned off cannot hold a fix Ticket, so a Security run there fails before any session, fixing allowed or not, as its gates below describe. A failed or unreadable `has_issues` setting fails the run before the audit too, rather than being taken as Issues turned off.
 
 Closing is on by default when fixing is allowed. `no-security-close` on the command or `close = false` under `[security]` leaves the finding open after fixing; `security-close` overrides that setting. After a dispatched fix ends merged, the run re-runs the private record's proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix's outcome. A closed record is never picked up as waiting or as the next fix.
 

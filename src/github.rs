@@ -437,6 +437,17 @@ impl GitHub {
             .collect()
     }
 
+    /// Whether the repository `repo`, an `owner/repo`, accepts issues. A
+    /// metadata read that fails or has no `has_issues` setting is an error,
+    /// never a guess.
+    pub fn has_issues(&self, repo: &str) -> Result<bool> {
+        self.repository(repo)?["has_issues"]
+            .as_bool()
+            .context(CommandFailure::InvalidResponse(
+                "gh api repository metadata has no has_issues setting".into(),
+            ))
+    }
+
     /// Every issue in the repository `repo`, an `owner/repo`, created at or
     /// after `since`, open or closed, regardless of author. Security fix
     /// publication checks their text before deciding which are leaks.
@@ -616,16 +627,6 @@ impl GitHub {
             bail!("invalid repository name");
         }
         self.gh_json(&["api", &format!("repos/{repo}")])
-    }
-
-    /// Whether the repository `repo`, an `owner/repo`, has Issues turned on,
-    /// as its `has_issues` says.
-    pub fn issues_enabled(&self, repo: &str) -> Result<bool> {
-        self.repository(repo)?["has_issues"]
-            .as_bool()
-            .context(CommandFailure::InvalidResponse(
-                "gh api output has no has_issues".into(),
-            ))
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository

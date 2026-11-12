@@ -339,6 +339,36 @@ fn catalogue_skips_both_steps_when_a_record_awaits_an_allowed_fix() {
     }
 }
 
+/// #2094: a repository with issues turned off cannot hold the fix, so its
+/// reproduced record holds off no audit.
+#[test]
+fn a_record_awaiting_a_fix_skips_no_audit_when_issues_are_turned_off() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "audit", AUDIT);
+    scenario.agent_does_in_session(1, &audit_script());
+    scenario.agent_does_in_session(2, REPRODUCE);
+    let first = scenario.run(&["process", "audit"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!(false);
+    scenario.write_gh_state(&state);
+    scenario.user_config_is("[security]\nfix = true\n");
+    scenario.agent_does_in_session(3, &audit_script());
+    let result = scenario.run(&["process", "audit"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 3, "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("awaits an allowed fix"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_state()["advisories"].as_array().unwrap().len(),
+        1
+    );
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+}
+
 #[test]
 fn each_security_step_uses_its_own_harness_model_and_effort() {
     let scenario = Scenario::new();

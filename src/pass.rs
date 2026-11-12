@@ -122,11 +122,11 @@ pub trait Outside {
     fn audit(&mut self, base: &str) -> crate::security::audit::Attempt;
     /// Private advisory or issue records in every state.
     fn security_records(&mut self) -> Result<SecurityRecords>;
+    /// Whether the repository has Issues turned on, and so can hold a
+    /// Security fix Ticket; a Security run reads it before its first session.
+    fn has_issues(&mut self) -> Result<bool>;
     /// Whether origin's prepared Base branch is the last completed audit's commit.
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool>;
-    /// Whether the repository has Issues turned on, read before a Security
-    /// run's first session.
-    fn issues_enabled(&mut self) -> Result<bool>;
     /// Record one finding in the repository's private storage.
     fn create_security_record(
         &mut self,
@@ -314,15 +314,15 @@ impl Outside for LaunchAndGitHub<'_> {
         GitHub::new().security_records(&self.repo.slug())
     }
 
+    fn has_issues(&mut self) -> Result<bool> {
+        GitHub::new().has_issues(&self.repo.slug())
+    }
+
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
         Ok(
             crate::security::audit::last_commit(self.repo, self.base.name())?.as_deref()
                 == Some(self.base.origin_commit()),
         )
-    }
-
-    fn issues_enabled(&mut self) -> Result<bool> {
-        GitHub::new().issues_enabled(&self.repo.slug())
     }
 
     fn create_security_record(
@@ -513,10 +513,10 @@ mod in_memory {
         SecurityAudit(String),
         /// It listed private advisories in every state.
         AdvisoryList,
+        /// It read whether the repository accepts issues.
+        HasIssues,
         /// It compared the Base branch with the completed audit history.
         AuditHistory,
-        /// It read whether the repository has Issues turned on.
-        IssuesCheck,
         /// It recorded this fingerprint privately.
         CreateAdvisory(String),
         /// It tried to reproduce this private record, in sequence.
@@ -604,9 +604,10 @@ mod in_memory {
         audit_error: Option<String>,
         advisories: Vec<Value>,
         finding_issues: Option<Vec<Value>>,
+        /// Whether the repository accepts issues, or the cause reading
+        /// that fails with.
+        has_issues: Result<bool, String>,
         unchanged_base: bool,
-        /// Whether the repository has Issues turned on.
-        issues_enabled: bool,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
@@ -643,8 +644,8 @@ mod in_memory {
                 audit_error: None,
                 advisories: Vec::new(),
                 finding_issues: None,
+                has_issues: Ok(true),
                 unchanged_base: false,
-                issues_enabled: true,
                 review: Ok(None),
                 session_log: None,
                 ending: None,
@@ -755,14 +756,15 @@ mod in_memory {
             self
         }
 
-        pub fn unchanged_base(mut self) -> Self {
-            self.unchanged_base = true;
+        /// Have the repository accept issues or not, or reading that
+        /// fail with `Err(cause)`.
+        pub fn has_issues(mut self, has_issues: Result<bool, &str>) -> Self {
+            self.has_issues = has_issues.map_err(str::to_string);
             self
         }
 
-        /// Turn the repository's Issues off.
-        pub fn issues_off(mut self) -> Self {
-            self.issues_enabled = false;
+        pub fn unchanged_base(mut self) -> Self {
+            self.unchanged_base = true;
             self
         }
 
@@ -991,14 +993,16 @@ mod in_memory {
             })
         }
 
+        fn has_issues(&mut self) -> Result<bool> {
+            self.calls.push(Call::HasIssues);
+            self.has_issues
+                .clone()
+                .map_err(|error| anyhow::anyhow!(error))
+        }
+
         fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
             self.calls.push(Call::AuditHistory);
             Ok(self.unchanged_base)
-        }
-
-        fn issues_enabled(&mut self) -> Result<bool> {
-            self.calls.push(Call::IssuesCheck);
-            Ok(self.issues_enabled)
         }
 
         fn create_security_record(

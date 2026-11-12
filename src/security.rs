@@ -262,7 +262,7 @@ fn run_through(
     // A private repository's fallback has already read the answer.
     let issues_enabled = match records.issues_enabled() {
         Some(known) => Ok(known),
-        None => outside.issues_enabled(),
+        None => outside.has_issues(),
     };
     match issues_enabled {
         Ok(true) => {}
@@ -281,6 +281,14 @@ fn run_through(
             offer_command,
             pending,
         },
+    )
+}
+
+/// That fixing is skipped in `repo`, whose issues are turned off, and why.
+pub(crate) fn issues_turned_off(repo: &Repo) -> String {
+    format!(
+        "Security fixing skipped: {} has issues turned off, so no Security fix Ticket can be filed",
+        repo.slug()
     )
 }
 
