@@ -77,9 +77,6 @@ pub struct Ended {
     /// shift's triage.
     pub waiting: Vec<String>,
     pub advice: Vec<Advice>,
-    /// Why fixing, though allowed, was skipped: the repository cannot hold
-    /// a fix Ticket.
-    pub fixing_skipped: Option<String>,
 }
 
 impl From<anyhow::Error> for Ended {
@@ -91,7 +88,6 @@ impl From<anyhow::Error> for Ended {
             findings: Vec::new(),
             waiting: Vec::new(),
             advice: Vec::new(),
-            fixing_skipped: None,
         }
     }
 }
@@ -125,6 +121,33 @@ impl fmt::Display for Skipped {
             ),
         }
     }
+}
+
+/// A Security run's repository has Issues turned off, so it can take no
+/// finding issue or fix issue.
+#[derive(Debug)]
+pub(crate) struct IssuesOff {
+    repo: String,
+}
+
+impl fmt::Display for IssuesOff {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let repo = &self.repo;
+        write!(
+            f,
+            "{repo} has Issues turned off; turn on Issues for {repo} or remove its Security schedule"
+        )
+    }
+}
+
+impl std::error::Error for IssuesOff {}
+
+/// The fixed Run notification Cause for a Security run that failed because
+/// its repository has Issues turned off.
+pub(crate) fn issues_off_cause(error: &anyhow::Error) -> Option<&'static str> {
+    error
+        .downcast_ref::<IssuesOff>()
+        .map(|_| "Issues turned off")
 }
 
 #[derive(Default)]
@@ -215,19 +238,6 @@ fn run_through(
         Ok(None) => {}
         Err(error) => return Outcome::Audited(error.into()),
     }
-    // A repository with issues turned off cannot hold a fix Ticket, so its
-    // reproduced findings neither take a publishing session nor hold off
-    // the audit.
-    let fixing_skipped = if fixing {
-        match outside.has_issues() {
-            Ok(true) => None,
-            Ok(false) => Some(issues_turned_off(repo)),
-            Err(error) => return Outcome::Audited(error.into()),
-        }
-    } else {
-        None
-    };
-    let fixing = fixing && fixing_skipped.is_none();
     let pending = if fixing {
         match records.next_fix() {
             Ok(pending) => pending,
@@ -247,10 +257,21 @@ fn run_through(
             Err(error) => return Outcome::Audited(error.into()),
         }
     }
-    if let Some(reason) = &fixing_skipped {
-        outside.step(reason.clone());
+    // Fixes, and a private repository's findings, are filed as issues, so a
+    // repository that takes none fails here, before any session is paid for.
+    // A private repository's fallback has already read the answer.
+    let issues_enabled = match records.issues_enabled() {
+        Some(known) => Ok(known),
+        None => outside.has_issues(),
+    };
+    match issues_enabled {
+        Ok(true) => {}
+        Ok(false) => {
+            return Outcome::Audited(anyhow::Error::new(IssuesOff { repo: repo.slug() }).into());
+        }
+        Err(error) => return Outcome::Audited(error.into()),
     }
-    let outcome = crate::processes::security::run(
+    crate::processes::security::run(
         outside,
         crate::processes::security::SecurityRun {
             repo,
@@ -260,14 +281,7 @@ fn run_through(
             offer_command,
             pending,
         },
-    );
-    match outcome {
-        Outcome::Audited(ended) => Outcome::Audited(Ended {
-            fixing_skipped,
-            ..ended
-        }),
-        outcome @ (Outcome::Skipped(_) | Outcome::Fixed { .. }) => outcome,
-    }
+    )
 }
 
 /// That fixing is skipped in `repo`, whose issues are turned off, and why.

@@ -44,6 +44,9 @@ enum RecordStorage {
 /// Loaded records retain lazy decoding: only a selected finding is validated.
 pub struct SecurityRecords {
     storage: RecordStorage,
+    /// Whether the repository has Issues turned on, when reading the
+    /// records already read the repository.
+    has_issues: Option<bool>,
 }
 
 /// A resolved finding and whether this collection created its private record.
@@ -90,13 +93,21 @@ impl SecurityRecords {
     pub(crate) fn advisories(records: Vec<Value>) -> Self {
         Self {
             storage: RecordStorage::Advisories(records),
+            has_issues: None,
         }
     }
 
     pub(crate) fn issues(records: Vec<Value>) -> Self {
         Self {
             storage: RecordStorage::Issues(records),
+            has_issues: None,
         }
+    }
+
+    /// Whether the repository has Issues turned on, if reading the records
+    /// already read the repository, so the Security run need not read it again.
+    pub(crate) fn issues_enabled(&self) -> Option<bool> {
+        self.has_issues
     }
 
     /// Reuse every state without changing its grade or write-up. Remember a
@@ -711,7 +722,7 @@ impl GitHub {
         ) {
             Ok(records) => Ok(SecurityRecords::advisories(records)),
             Err(error) if format!("{error:#}").contains("(HTTP 404)") => {
-                let repository = self.gh_json(&["api", &format!("repos/{repo}")])?;
+                let repository = self.repository(repo)?;
                 if repository["private"].as_bool() != Some(true) {
                     bail!(
                         "security advisories unavailable; refusing to record findings in public issues"
@@ -722,12 +733,15 @@ impl GitHub {
                     &format!("repos/{repo}/issues?state=all&labels=security-finding&per_page=100"),
                     "",
                 )?;
-                Ok(SecurityRecords::issues(
-                    records
-                        .into_iter()
-                        .filter(|record| record.get("pull_request").is_none())
-                        .collect(),
-                ))
+                Ok(SecurityRecords {
+                    has_issues: repository["has_issues"].as_bool(),
+                    ..SecurityRecords::issues(
+                        records
+                            .into_iter()
+                            .filter(|record| record.get("pull_request").is_none())
+                            .collect(),
+                    )
+                })
             }
             Err(error) => Err(error),
         }
