@@ -17,7 +17,7 @@ use crate::logs::{self, Work};
 use crate::pull_request::PullRequest;
 use crate::recovery::Continuation;
 use crate::review::Reservation;
-use crate::run::Ended;
+use crate::run::{Ended, Goal};
 use crate::session::Logs;
 use crate::worktree::Worktree;
 
@@ -196,15 +196,22 @@ fn targeted(
         // Acquisition samples origin independently of PR metadata. Evidence
         // must cover the head actually adopted before Delivery begins.
         let adopted_head = worktree.head()?;
-        let reviewed = asks.goal != crate::run::Goal::Merged
-            || github.authored_or_reviewed_head(&pr, &adopted_head)?;
+        let reviewed =
+            asks.goal != Goal::Merged || github.authored_or_reviewed_head(&pr, &adopted_head)?;
         let mut target =
             PullRequest::on_pull_request(&pr, &snapshot.branch, &snapshot.base, github);
         if !reviewed {
-            target.hold_self_merge(format!(
+            let reason = format!(
                 "PR {} stays ready for review: adopted head {} has no recorded agent review; run thirdshift review {} before retrying Self-merge",
                 pr.url, adopted_head, pr.url
-            ));
+            );
+            // A Pass or User config merge default may hand off for review.
+            // An explicit targeted merge must still report its unmet goal.
+            if pass || command.flags.goal != Some(Goal::Merged) {
+                crate::progress::step(format!("Self-merge held: {reason}"));
+                asks.goal = Goal::ReadyForReview;
+            }
+            target.hold_self_merge(reason);
         }
         let result = Delivery {
             security_review: false,
