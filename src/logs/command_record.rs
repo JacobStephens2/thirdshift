@@ -171,6 +171,8 @@ pub(crate) enum FailureCategory {
 }
 
 impl FailureCategory {
+    pub(crate) const ALL: [Self; 4] = [Self::Held, Self::Waiting, Self::Crashed, Self::StageFailed];
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Held => "held",
@@ -430,7 +432,7 @@ impl CommandRecord {
                 .recovery
                 .and_then(|recovery| recovery.stage().recorded())
                 .map(|stage| stage.name().to_owned())
-                .or_else(|| self.stages.last().map(|stage| stage.name.clone()))
+                .or_else(|| self.last_stage().map(str::to_owned))
         });
         self.failure_category = failure.map(|cause| cause.category(account.interrupted));
         self.pull_request = account.pr_url.map(String::from);
@@ -539,6 +541,11 @@ impl CommandRecord {
             experiment: None,
             process: work.process(),
         }
+    }
+
+    /// The stage entered last, by its persisted name, known or not.
+    pub fn last_stage(&self) -> Option<&str> {
+        self.stages.last().map(|stage| stage.name.as_str())
     }
 
     /// Unknown stages are deliberately not used to interpret a newer record.

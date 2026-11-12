@@ -564,12 +564,12 @@ pub(crate) enum ArchivePage {
     Security,
 }
 
-/// The History filters asked for. `commands` are selectors, as Metrics links
-/// a failure cluster: a row shows when it or a Command it owns is one.
+/// The History filters asked for. `commands` are selectors, as a Metrics
+/// failure cluster chooses them: a row shows when it or a Command it owns is one.
 pub(super) struct Chosen<'a> {
     pub(super) outcome: &'a str,
     pub(super) repository: &'a str,
-    pub(super) commands: &'a [String],
+    pub(super) commands: Option<&'a [String]>,
 }
 
 impl Chosen<'_> {
@@ -584,13 +584,15 @@ impl Chosen<'_> {
                     .chain(&command.dispatched)
                     .any(|child| owns(child, commands))
         }
-        self.commands.is_empty()
-            || match entry {
-                Entry::Record(command) => owns(command, self.commands),
-                Entry::History(command) => Observation::History(command)
-                    .selector()
-                    .is_some_and(|selector| self.commands.contains(&selector)),
-            }
+        let Some(commands) = self.commands else {
+            return true;
+        };
+        match entry {
+            Entry::Record(command) => owns(command, commands),
+            Entry::History(command) => Observation::History(command)
+                .selector()
+                .is_some_and(|selector| commands.contains(&selector)),
+        }
     }
 }
 

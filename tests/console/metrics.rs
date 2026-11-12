@@ -369,61 +369,105 @@ fn where_runs_failed_and_failed_buckets_open_the_matching_commands_in_history() 
         .skip(1)
         .filter_map(|tail| {
             tail.split_once('"')
-                .map(|(href, _)| href.replace("&amp;", "&"))
+                .map(|(href, _)| href.replace("&#38;", "&"))
         })
         .collect();
-    // The page shows each row the API reports, linked to History with just its Commands.
+    // Which fixture Commands a History page shows.
+    let shown = |link: &str| {
+        let history = console.get(link).text().unwrap();
+        assert!(
+            history.contains("Failed Commands a Metrics link chose"),
+            "{link}: {history}"
+        );
+        [7, 8, 9]
+            .into_iter()
+            .filter(|number| history.contains(&format!("issues/{number}\"")))
+            .collect::<Vec<_>>()
+    };
+    let number = |selector: &Value| {
+        if selector.as_str().unwrap().contains("/7-fixture.") {
+            7
+        } else {
+            8
+        }
+    };
+    // The page shows each row the API reports, linked to History by the row
+    // and the page's own window, which shows just that row's Commands.
     for row in failures["rows"].as_array().unwrap() {
         let mut url = reqwest::Url::parse("http://localhost/history").unwrap();
-        for command in row["commands"].as_array().unwrap() {
-            url.query_pairs_mut()
-                .append_pair("command", command["selector"].as_str().unwrap());
+        url.query_pairs_mut().append_pair("window", "7d");
+        if let Some(stage) = row["stopped_at"].as_str() {
+            url.query_pairs_mut().append_pair("stopped_at", stage);
         }
+        url.query_pairs_mut()
+            .append_pair("category", row["category"].as_str().unwrap());
         let link = format!("{}?{}", url.path(), url.query().unwrap());
         assert!(hrefs.contains(&link), "missing {link}: {hrefs:#?}");
-        let selector = row["commands"][0]["selector"].as_str().unwrap();
-        let (number, other) = if selector.contains("/7-fixture.") {
-            ("7", "8")
-        } else {
-            ("8", "7")
-        };
-        let history = console.get(&link).text().unwrap();
-        assert!(
-            history.contains("Showing the 1 Commands a Metrics link chose"),
-            "{history}"
+        assert_eq!(
+            shown(&link),
+            [number(&row["commands"][0]["selector"])],
+            "{link}"
         );
-        assert!(history.contains(&format!("issues/{number}\"")), "{history}");
-        assert!(!history.contains(&format!("issues/{other}\"")), "{history}");
-        let stage = row["stopped_at"].as_str().unwrap();
+        let stage = row["stopped_at"].as_str().unwrap_or("no stage");
         let category = row["category"].as_str().unwrap();
         assert!(
             html.contains(&format!("{stage}</a></th><td>{category}</td>")),
             "missing {stage} {category}: {html}"
         );
     }
-    // Each day's Failed count opens that day's Failed Commands.
+    // Each day's Failed count opens that day's Failed Commands, as the API lists them.
     let buckets = api["outcomes"].as_array().unwrap();
-    assert_eq!(
-        buckets
+    assert_eq!(buckets.len(), 2, "{api:#}");
+    for bucket in buckets {
+        let failed = bucket["failed_commands"].as_array().unwrap();
+        assert_eq!(failed.len(), 1, "{bucket:#}");
+        let day = bucket["bucket"].as_str().unwrap();
+        let link = hrefs
             .iter()
-            .map(|bucket| &bucket["failed"])
-            .collect::<Vec<_>>(),
-        [&json!(1), &json!(1)],
-        "{api:#}"
-    );
-    assert_eq!(
-        hrefs
-            .iter()
-            .filter(|href| href.starts_with("/history?command="))
-            .count(),
-        2 * 2 + 2,
-        "two links per Where runs failed row and one per Failed bucket: {hrefs:#?}"
-    );
+            .find(|href| href.contains(&format!("failed_on={day}")))
+            .unwrap_or_else(|| panic!("no Failed link for {day}: {hrefs:#?}"));
+        assert_eq!(shown(link), [number(&failed[0])], "{link}");
+    }
     // Each Command details link opens.
-    for href in hrefs
+    let details: Vec<_> = hrefs
         .iter()
         .filter(|href| href.starts_with("/peek?command="))
-    {
+        .collect();
+    assert_eq!(details.len(), 2, "{hrefs:#?}");
+    for href in details {
         assert_eq!(console.get(href).status(), 200, "{href}");
+    }
+    // A version slices the view as it stands.
+    let html = console
+        .get("/metrics?window=7d&repo=acme/widgets")
+        .text()
+        .unwrap();
+    assert!(
+        html.contains("href=\"/metrics?window=7d&#38;repo=acme%2Fwidgets&#38;version=0.30.0\""),
+        "{html}"
+    );
+}
+
+#[test]
+fn failure_drilldown_links_stay_within_a_proxy_request_line() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for number in 1..=120 {
+        let mut failed = record(home.path(), number, Some("failed"), 0);
+        failed["stopped_at"] = json!("CI watch");
+        failed["failure_category"] = json!("stage_failed");
+        write_record(home.path(), number, &failed);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/metrics?window=7d").text().unwrap();
+    for href in html
+        .split("<a href=\"")
+        .skip(1)
+        .filter_map(|t| t.split_once('"').map(|(h, _)| h.to_owned()))
+    {
+        if href.starts_with("/history?") {
+            // Apache's default LimitRequestLine, less "GET " and " HTTP/1.1".
+            assert!(href.len() <= 8190 - 13, "{} bytes", href.len());
+        }
     }
 }

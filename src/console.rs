@@ -1201,8 +1201,10 @@ struct InboxPage {
     archive: Option<status::Archive>,
     outcome: String,
     repository: String,
-    /// The Command selectors a Metrics failure link chose, if any.
-    commands: Vec<String>,
+    /// How many Failed Commands a Metrics failure link chose, if it chose any.
+    chosen: Option<usize>,
+    /// That link's query pairs, kept when History's own filters change.
+    drilldown: Vec<(String, String)>,
     /// The `section` the URL asked for, as its slug.
     section: String,
     machine: String,
@@ -1329,19 +1331,6 @@ fn slug(group: &str) -> String {
     group.replace(' ', "-")
 }
 
-/// Every value of a repeated query parameter, in order.
-fn query_values(query: &Option<String>, key: &str) -> Vec<String> {
-    let url = reqwest::Url::parse(&format!(
-        "http://localhost/?{}",
-        query.as_deref().unwrap_or_default()
-    ))
-    .expect("fixed URL");
-    url.query_pairs()
-        .filter(|(name, value)| name == key && !value.is_empty())
-        .map(|(_, value)| value.into_owned())
-        .collect()
-}
-
 fn query_value(query: &Option<String>, key: &str) -> String {
     let url = reqwest::Url::parse(&format!(
         "http://localhost/?{}",
@@ -1419,7 +1408,7 @@ async fn render_page(
         let all = archive_page.is_some() || query_value(&query, "all") == "true";
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
-        let commands = query_values(&query, "command");
+        let chosen = metrics::chosen(&config, &query)?;
         let (title, cli) = match archive_page {
             Some(status::ArchivePage::History) => {
                 ("History", "thirdshift status --local --all --json")
@@ -1453,11 +1442,14 @@ async fn render_page(
                 inbox,
                 title,
                 archive: archive_page
-                    .map(|page| read.archive(&config, page, &outcome, &repository, &commands))
+                    .map(|page| {
+                        read.archive(&config, page, &outcome, &repository, chosen.as_deref())
+                    })
                     .transpose()?,
                 outcome,
                 repository,
-                commands,
+                chosen: chosen.map(|commands| commands.len()),
+                drilldown: metrics::drilldown(&query)?,
                 section: query_value(&query, "section"),
                 machine,
                 machines,

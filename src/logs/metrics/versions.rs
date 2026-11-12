@@ -47,7 +47,8 @@ pub(crate) enum Dimension {
 }
 
 impl Dimension {
-    fn name(self) -> &'static str {
+    /// The word a transition's text begins with.
+    fn label(self) -> &'static str {
         match self {
             Self::ThirdshiftVersion => "thirdshift",
             Self::Harness => "Harness",
@@ -71,7 +72,7 @@ impl Transition {
             |values: &BTreeSet<String>| values.iter().cloned().collect::<Vec<_>>().join(", ");
         format!(
             "{} {} → {}",
-            self.dimension.name(),
+            self.dimension.label(),
             join(&self.from),
             join(&self.to)
         )

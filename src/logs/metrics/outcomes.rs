@@ -241,9 +241,8 @@ pub(crate) struct Bucket {
     pub(crate) kind: &'static str,
     #[serde(flatten)]
     pub(crate) tally: Tally,
-    /// The Failed Commands' selectors, for the Console to link through to them.
-    #[serde(skip)]
-    pub(crate) failed: Vec<String>,
+    /// The Failed Commands' selectors, for `thirdshift show` and History.
+    pub(crate) failed_commands: Vec<String>,
 }
 
 /// The window against the one before it, per OS account and Command kind.
@@ -341,7 +340,7 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window) -> Outcomes {
                 account,
                 kind,
                 tally,
-                failed,
+                failed_commands: failed,
             })
             .collect(),
         comparison: window

@@ -129,7 +129,7 @@ fn triage_and_review_render_in_inbox_history_and_catalog() {
         .flat_map(|section| &section.rows)
         .collect();
     let history = read
-        .archive(&config, ArchivePage::History, "", "", &[])
+        .archive(&config, ArchivePage::History, "", "", None)
         .unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(history.rows.len(), 2);

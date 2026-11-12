@@ -234,7 +234,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 "from": nullable, "through": nullable,
                 "prior": {"oneOf": [{"type": "null"}, object(json!({"from": text, "through": text}))]}
             }));
-            let tally = json!({"type": "object", "description": "Succeeded, Failed (Died included), Paused, Stopped and Live counts; n is Succeeded + Failed; success_rate is Succeeded / n."});
+            let tally = json!({"type": "object", "description": "Succeeded, Failed (Died included), Paused, Stopped and Live counts; n is Succeeded + Failed; success_rate is Succeeded / n. An outcomes bucket also lists its Failed Commands' selectors as failed_commands."});
             json!({"oneOf": [
                 object(json!({"version": version, "hostname": text, "command": record})),
                 {

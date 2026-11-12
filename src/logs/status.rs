@@ -100,7 +100,7 @@ impl Read {
         page: ArchivePage,
         outcome: &str,
         repository: &str,
-        commands: &[String],
+        commands: Option<&[String]>,
     ) -> Result<Archive> {
         inbox::archive_from_read(
             config,
