@@ -8,6 +8,385 @@ use support::Scenario;
 const NO_FINDINGS: &str = "printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"";
 
 #[test]
+fn author_pass_leaves_a_closing_issue_reservation_until_operator_release() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.origin_has_branch("feature", "main", &["Feature"]);
+    scenario.github_has_pr("feature", "main", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&state);
+    let reference = "refs/heads/thirdshift/pickup/7";
+    scenario.origin_git(&["update-ref", reference, "refs/heads/feature"]);
+    let token = scenario.origin_git(&["rev-parse", reference]);
+
+    let held = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+    assert_eq!(held.code, Some(0), "{}", held.stderr);
+    assert!(
+        held.stderr.contains("skipping #1")
+            && held.stderr.contains("closing issue #7")
+            && held.stderr.contains("issue reservation"),
+        "{}",
+        held.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["rev-parse", reference]), token);
+    assert!(scenario.issue_labels(7).is_empty());
+
+    scenario.origin_git(&["update-ref", "-d", reference]);
+    let released = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+    assert_eq!(released.code, Some(0), "{}", released.stderr);
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_array());
+}
+
+#[test]
+fn author_pass_checks_every_page_of_closing_issues_before_taking_the_next_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    for branch in ["held", "waiting"] {
+        scenario.origin_has_branch(branch, "main", &["Feature"]);
+        scenario.github_has_pr(branch, "main", "OPEN");
+    }
+    let mut state = scenario.gh_state();
+    let mut linked = Vec::new();
+    for number in 10..=110 {
+        state["issues"][number.to_string()] = json!("OPEN");
+        linked.push(json!({"url": scenario.issue_url(number)}));
+    }
+    state["prs"][0]["closingIssuesReferences"] = json!(linked);
+    state["labels"]["110"] = json!(["In-Progress"]);
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("closing issue #110"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert!(state["prs"][0]["postedComments"].is_null());
+    assert!(state["prs"][1]["postedComments"].is_array());
+    assert_eq!(state["labels"]["110"], json!(["In-Progress"]));
+}
+
+#[test]
+fn author_pass_rechecks_closing_issue_holds_after_reserving_the_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.origin_has_branch("feature", "main", &["Feature"]);
+    scenario.github_has_pr("feature", "main", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&state);
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "post-receive",
+        r#"#!/bin/sh
+while read old new reference; do
+    if [ "$reference" = refs/thirdshift/reservations/1 ] &&
+       [ "$new" != 0000000000000000000000000000000000000000 ]; then
+        gh fake labels 7 '["in-progress"]'
+    fi
+done
+"#,
+    );
+    // The closing-issue recheck must precede even local-conflict inspection.
+    scenario.launch_git(&["branch", "feature", "main"]);
+    let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("closing issue #7"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("local branch/worktree conflict"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(
+        scenario.gh_state()["prs"][0]["labels"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        scenario
+            .launch_git(&[
+                "ls-remote",
+                "origin",
+                "refs/thirdshift/reservations/*",
+                "refs/heads/thirdshift/pickup/*"
+            ])
+            .is_empty()
+    );
+}
+
+#[test]
+fn unreadable_closing_issue_links_or_claims_never_authorize_admission() {
+    for call in [
+        "api graphql",
+        "issue view 7 --repo acme/widgets --json labels",
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(NO_FINDINGS);
+        scenario.origin_has_branch("feature", "main", &["Feature"]);
+        scenario.github_has_pr("feature", "main", "OPEN");
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+        state["fail_next"] =
+            json!({"call": call, "times": 1, "error": "hold observation unavailable"});
+        scenario.write_gh_state(&state);
+        let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+        assert_eq!(result.code, Some(1), "{call}: {}", result.stderr);
+        assert!(
+            result.stderr.contains("hold observation unavailable"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+    }
+}
+
+#[test]
+fn explicit_pr_review_keeps_its_behavior_when_a_closing_issue_is_held() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.origin_has_branch("feature", "main", &["Feature"]);
+    let url = scenario.github_has_pr("feature", "main", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    state["labels"]["7"] = json!(["in-progress"]);
+    scenario.write_gh_state(&state);
+    scenario.origin_git(&[
+        "update-ref",
+        "refs/heads/thirdshift/pickup/7",
+        "refs/heads/feature",
+    ]);
+    let before = support::concurrency::reservations(&scenario);
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_array());
+    assert_eq!(support::concurrency::reservations(&scenario), before);
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+}
+
+#[test]
+fn closing_issue_reservations_are_read_from_the_issues_repository() {
+    for foreign_held in [false, true] {
+        let scenario = Scenario::new();
+        let foreign = Scenario::new();
+        let mut foreign_state = foreign.gh_state();
+        foreign_state["repo"] = json!("acme/other");
+        foreign.write_gh_state(&foreign_state);
+        scenario.agent_does(NO_FINDINGS);
+        scenario.origin_has_branch("feature", "main", &["Feature"]);
+        scenario.github_has_pr("feature", "main", "OPEN");
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!([{
+            "url": "https://github.com/acme/other/issues/7"
+        }]);
+        scenario.write_gh_state(&state);
+        let reference = "refs/heads/thirdshift/pickup/7";
+        scenario.origin_git(&["update-ref", reference, "refs/heads/feature"]);
+        if foreign_held {
+            foreign.origin_git(&["update-ref", reference, "refs/heads/main"]);
+        }
+        scenario.launch_git(&[
+            "config",
+            "--global",
+            &format!("url.{}.insteadOf", foreign.origin_dir().display()),
+            "https://github.com/acme/other.git",
+        ]);
+        // Route GitHub requests for the linked repository to its own fake
+        // state, just as the Git URL rewrite routes it to its own bare origin.
+        std::fs::create_dir(scenario.path("original-bin")).unwrap();
+        std::fs::rename(scenario.path("bin/gh"), scenario.path("original-bin/gh")).unwrap();
+        support::write_executable(
+            &scenario.path("bin/gh"),
+            &format!(
+                r#"#!/bin/sh
+for argument do
+    case "$argument" in
+        acme/other|repo=other) export FAKE_GH_STATE='{}' ;;
+    esac
+done
+exec '{}' "$@"
+"#,
+                foreign.path("gh-state.json").display(),
+                scenario.path("original-bin/gh").display()
+            ),
+        );
+        let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            scenario.gh_state()["prs"][0]["postedComments"].is_array(),
+            !foreign_held,
+            "{}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), usize::from(!foreign_held));
+        if foreign_held {
+            assert!(
+                result.stderr.contains("acme/other/issues/7")
+                    && result.stderr.contains("reservation"),
+                "{}",
+                result.stderr
+            );
+        }
+        assert!(support::concurrency::reservations(&scenario).contains(reference));
+    }
+}
+
+#[test]
+fn unreadable_origin_reservations_never_authorize_admission() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.origin_has_branch("feature", "main", &["Feature"]);
+    scenario.github_has_pr("feature", "main", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&state);
+    scenario.launch_git(&["config", "remote.origin.uploadpack", "/bin/false"]);
+    let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("ls-remote")
+            && result.stderr.contains("refs/heads/thirdshift/pickup/7"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+}
+
+#[test]
+fn author_pass_waits_for_a_live_ticket_delivery_on_another_clone() {
+    live_delivery_is_held(false, false, false);
+}
+
+#[test]
+fn author_pass_skips_a_pickup_ticket_delivery_and_takes_the_next_pr() {
+    live_delivery_is_held(false, true, true);
+}
+
+#[test]
+fn author_pass_skips_a_direct_spec_delivery_and_takes_the_next_pr() {
+    live_delivery_is_held(true, false, true);
+}
+
+#[test]
+fn author_pass_waits_for_a_pickup_spec_delivery_on_another_clone() {
+    live_delivery_is_held(true, true, false);
+}
+
+fn live_delivery_is_held(spec: bool, pickup: bool, next_candidate: bool) {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[pass]\ncommand_limit = 2\n[pickup]\nwait_minutes = 0\n");
+    if spec {
+        scenario.spec_has_tickets(7, &[(8, &[])]);
+        scenario.issue_is(8, "CLOSED");
+        scenario.origin_has_branch("issue-7", "main", &["Feature"]);
+    } else {
+        scenario.agent_does_for(
+            7,
+            r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -qm 'Feature'
+gh pr create --base main --head issue-7 --title Feature --body 'Closes #7'
+"#,
+        );
+    }
+    if pickup {
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        if spec {
+            use support::TimelineEvent::{Labelled, Unlabelled};
+            scenario.issue_timeline(
+                7,
+                &[
+                    (Labelled("in-progress"), 30),
+                    (Unlabelled("in-progress"), 20),
+                    (Labelled("ready-for-agent"), 10),
+                ],
+            );
+        }
+    }
+    let other = scenario.path("other-clone");
+    scenario.launch_git(&[
+        "clone",
+        "-q",
+        &scenario.github_url(),
+        other.to_str().unwrap(),
+    ]);
+    scenario.agent_does(NO_FINDINGS);
+    let mut state = scenario.gh_state();
+    state["on_ci_read"] = json!({
+        "times": 1, "seen": [], "script": support::concurrency::waits_on("delivery")
+    });
+    scenario.write_gh_state(&state);
+    let url = scenario.issue_url(7);
+    let args = if pickup {
+        vec!["pickup"]
+    } else {
+        vec![url.as_str()]
+    };
+    let held = scenario.run_until(&args, &[], "started-delivery");
+    let mut during = scenario.gh_state();
+    // The fake records explicit GraphQL links separately from the PR body.
+    during["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&during);
+    let reservations = support::concurrency::reservations(&scenario);
+    if next_candidate {
+        scenario.origin_has_branch("waiting", "main", &["Other feature"]);
+        scenario.github_has_pr("waiting", "main", "OPEN");
+    }
+    let author = "colleague";
+    let review = scenario.run_from(&other, &["review", "--author", author, "--recommend-only"]);
+    let after_review = scenario.gh_state();
+    support::concurrency::release(&scenario, "delivery");
+    let delivery = held.finish();
+    assert_eq!(delivery.code, Some(0), "{}", delivery.stderr);
+    assert_eq!(review.code, Some(0), "{}", review.stderr);
+    assert_eq!(
+        reservations.contains("refs/heads/thirdshift/pickup/7"),
+        pickup
+    );
+    assert!(
+        during["labels"]["7"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("in-progress"))
+    );
+    assert!(
+        after_review["prs"][0]["postedComments"].is_null(),
+        "Review took a pull request during live Delivery: {}",
+        review.stderr
+    );
+    assert!(
+        review.stderr.contains("#7") && review.stderr.contains("Claim"),
+        "{}",
+        review.stderr
+    );
+    if next_candidate {
+        assert!(after_review["prs"][1]["postedComments"].is_array());
+    } else {
+        assert!(
+            review.stderr.contains("no waiting pull request"),
+            "{}",
+            review.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 1);
+    }
+    let next = scenario.run_from(&other, &["review", "--author", author, "--recommend-only"]);
+    assert_eq!(next.code, Some(0), "{}", next.stderr);
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_array());
+}
+
+#[test]
 fn author_pass_skips_local_conflicts_and_notifies_once_per_state() {
     let scenario = Scenario::new();
     let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"accepted"}"#);
