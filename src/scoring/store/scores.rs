@@ -11,9 +11,10 @@ use super::super::calibration::{self, HumanScores};
 use super::super::grader::{Criterion, Score};
 use super::{Store, Windowed};
 
-/// One retained Scoring week, by the start of its window.
+/// One retained Scoring week's window and Scores.
 pub(crate) struct ScoredWeek {
     pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
     pub pull_requests: Vec<ScoredPullRequest>,
 }
 
@@ -96,6 +97,7 @@ impl Store {
                 .filter_map(|week| {
                     Some(ScoredWeek {
                         start: week.window_start?,
+                        end: week.window_end,
                         pull_requests: week
                             .sample
                             .into_iter()

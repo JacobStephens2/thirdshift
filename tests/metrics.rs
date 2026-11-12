@@ -1969,7 +1969,7 @@ fn kept_pull_requests_bug_origins_and_calibrated_scores_read_no_github() {
 }
 
 #[test]
-fn stage_bottlenecks_friction_and_attention_compare_with_the_preceding_window() {
+fn stage_bottlenecks_friction_and_interventions_compare_with_the_preceding_window() {
     let scenario = Scenario::new();
     let mut slow = finished(1, "merged", 1, 30.0, 0, 1.0);
     slow["run_metrics"]["unaddressed_findings"]["security"] = json!(1);
@@ -2019,13 +2019,13 @@ fn stage_bottlenecks_friction_and_attention_compare_with_the_preceding_window() 
     assert!((above - 1.0 / 3.0).abs() < 1e-9, "{delta:#}");
     assert_eq!(delta["tool_errors"], -3.0);
     assert_eq!(delta["security_holds"], 1.0);
-    let attention = group_line(&report, &["quality", "attention"]);
+    let interventions = group_line(&report, &["quality", "interventions"]);
     assert_eq!(
-        attention["window"],
+        interventions["window"],
         json!({"commands": 3, "needs_you": 2, "stops": 1})
     );
-    assert_eq!(attention["comparison"]["delta"]["needs_you"], 2.0);
-    assert_eq!(attention["comparison"]["delta"]["stops"], 1.0);
+    assert_eq!(interventions["comparison"]["delta"]["needs_you"], 2.0);
+    assert_eq!(interventions["comparison"]["delta"]["stops"], 1.0);
     // Findings show only as Security holds, never as a quality score.
     let groups = report["groups"].to_string();
     for raw in ["review_findings", "\"standards\"", "\"spec\""] {
@@ -2034,4 +2034,86 @@ fn stage_bottlenecks_friction_and_attention_compare_with_the_preceding_window() 
     // Unbounded, nothing to compare.
     let all = metrics(&scenario, &["metrics", "--json"]);
     assert!(group_line(&all, &["friction"])["comparison"].is_null());
+}
+
+#[test]
+fn a_failed_command_without_run_metrics_still_counts_its_attempt_time() {
+    let scenario = Scenario::new();
+    write(
+        &scenario,
+        "1-fixture.command.json",
+        &finished(1, "merged", 1, 30.0, 0, 1.0),
+    );
+    let mut failed = dated(2, "Run", Some("failed"), 1);
+    let started =
+        chrono::DateTime::parse_from_rfc3339(failed["started_at"].as_str().unwrap()).unwrap();
+    failed["ended_at"] = json!((started + chrono::Duration::minutes(10)).to_rfc3339());
+    write(&scenario, "2-fixture.command.json", &failed);
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let window = &group_line(&report, &["efficiency"])["window"];
+    assert_eq!(window["wasted_minutes"]["observed"], 1, "{window:#}");
+}
+
+#[test]
+fn last_weeks_scores_show_in_a_seven_day_window() {
+    let scenario = Scenario::new();
+    let start = chrono::Utc::now() - chrono::Duration::days(9);
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("week.json"),
+        serde_json::to_vec(&json!({
+            "week": "last", "window_start": start.to_rfc3339(),
+            "window_end": (start + chrono::Duration::days(7)).to_rfc3339(), "seed": 1,
+            "sample": [{"repository": "acme/widgets", "number": 1,
+                "url": "https://github.com/acme/widgets/pull/1",
+                "merged_at": start.to_rfc3339(), "harness": "codex", "harness_version": "1.0",
+                "model": "sol", "effort": "high",
+                "assessment": {"grader": {"harness": "claude", "model": "opus"},
+                    "scores": [scored("Correct", true)]}}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let report = metrics(&scenario, &["metrics", "--window", "7d", "--json"]);
+    assert_ne!(
+        report["groups"]["quality"]["scores"]["lines"],
+        json!([]),
+        "{report:#}"
+    );
+    // In the shown window itself, not only the preceding one.
+    let line = group_line(&report, &["quality", "scores"]);
+    assert_eq!(line["window"]["graded"], 1, "{line:#}");
+}
+
+#[test]
+fn confirmed_bug_origins_show_without_a_kept_answer() {
+    let scenario = Scenario::new();
+    let pr = "https://github.com/acme/widgets/pull/1";
+    let mut run = finished(1, "merged", 1, 30.0, 0, 1.0);
+    run["pull_request"] = json!(pr);
+    write(&scenario, "1-fixture.command.json", &run);
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    let mut origin = bug_origin(99, "confirmed", 1);
+    origin["settlement"]["pull_request"]["url"] = json!(pr);
+    let start = chrono::Utc::now() - chrono::Duration::days(1);
+    fs::write(
+        folder.join("week.json"),
+        serde_json::to_vec(&json!({
+            "week": "this", "window_start": start.to_rfc3339(),
+            "window_end": (start + chrono::Duration::days(7)).to_rfc3339(), "seed": 1,
+            "sample": [], "bug_origins": [origin]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let total: u64 = report["groups"]["quality"]["bug_origins"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["window"]["confirmed_bug_origins"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 1, "{report:#}");
 }

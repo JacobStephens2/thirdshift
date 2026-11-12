@@ -248,7 +248,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                         }))]},
                         "groups": object(json!({
                             "yield": object(json!({"pull_requests": record})),
-                            "quality": object(json!({"bug_origins": record, "scores": record, "attention": record})),
+                            "quality": object(json!({"bug_origins": record, "scores": record, "interventions": record})),
                             "efficiency": record, "friction": record
                         })),
                         "weeks": array(record.clone()), "days": array(record)

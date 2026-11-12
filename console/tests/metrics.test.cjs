@@ -78,7 +78,7 @@ test('Metrics opens by keyboard, fits a phone and stacks outcomes in every Theme
   assert.match(page.url(), /window=7d/);
   await page.getByRole('heading', { name: 'Compared with the preceding window' }).waitFor();
   assert.ok(await page.locator('svg.metrics-bar rect').count() > 0);
-  for (const name of ['Yield and pull-request survival', 'Post-merge quality and attention',
+  for (const name of ['Yield and pull-request survival', 'Post-merge quality and interventions',
     'Efficiency, wasted effort and Repair churn', 'Stage bottlenecks and session friction']) {
     await page.getByRole('heading', { name, exact: true }).waitFor();
   }

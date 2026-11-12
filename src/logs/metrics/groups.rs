@@ -1,5 +1,5 @@
 //! The four paired signal groups: yield and kept pull-request survival,
-//! post-merge quality and attention, survivorship-safe efficiency, and stage
+//! post-merge quality and interventions, survivorship-safe efficiency, and stage
 //! and session friction. Each line keeps its own units and coverage, per
 //! bucket for its sparkline and against the preceding window when bounded.
 
@@ -22,7 +22,7 @@ use crate::scoring::ScoreHistory;
 /// What the groups read besides Command records, all of it local.
 pub(super) struct Sources<'a> {
     pub(super) origins: &'a ConfirmedCounts,
-    /// Kept pull-request facts by [`super::super::github::pull_request_key`].
+    /// Kept pull-request facts by [`super::super::reading::pull_request_key`].
     pub(super) kept: &'a BTreeMap<String, PullRequestState>,
     pub(super) scores: &'a ScoreHistory,
     pub(super) filters: &'a Filters,
@@ -34,27 +34,27 @@ pub(crate) struct Groups {
     pub(crate) yield_: Yield,
     pub(crate) quality: Quality,
     pub(crate) efficiency: Group<Setup, Efficiency>,
-    pub(crate) friction: Group<Kind, Friction>,
+    pub(crate) friction: Group<AccountKind, Friction>,
 }
 
 /// Per-kind outcomes are the trend's `outcomes`; this adds what became of
 /// their pull requests, as the kept GitHub answer last showed.
 #[derive(Serialize)]
 pub(crate) struct Yield {
-    pub(crate) pull_requests: Group<Kind, Survival>,
+    pub(crate) pull_requests: Group<AccountKind, Survival>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct Quality {
     /// By the bucket each pull request merged in.
-    pub(crate) bug_origins: Group<Kind, Cohort>,
+    pub(crate) bug_origins: Group<AccountKind, Cohort>,
     /// By each Scoring week's start.
-    pub(crate) scores: Group<Criterion, CriterionScores>,
-    pub(crate) attention: Group<Kind, Attention>,
+    pub(crate) scores: Group<CriterionKey, CriterionScores>,
+    pub(crate) interventions: Group<AccountKind, Interventions>,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(crate) struct Kind {
+pub(crate) struct AccountKind {
     pub(crate) account: Option<String>,
     pub(crate) kind: &'static str,
 }
@@ -68,15 +68,59 @@ pub(crate) struct Setup {
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(crate) struct Criterion {
+pub(crate) struct CriterionKey {
     pub(crate) criterion: &'static str,
     pub(crate) calibrated: bool,
 }
 
-/// The values a line is compared and drawn by, the first one drawn. Names
-/// ending in `_rate` or `_share` are fractions; those with `cost` are USD.
+/// How a headline value reads.
+#[derive(Clone, Copy)]
+pub(crate) enum Unit {
+    Number,
+    Fraction,
+    Usd,
+}
+
+impl Unit {
+    /// `12`, `12.5`, `50%` or `$1.25`, or `missing`.
+    fn value(self, value: Option<f64>) -> String {
+        match (self, value) {
+            (_, None) => "missing".into(),
+            (Self::Fraction, Some(value)) => format!("{:.0}%", value * 100.0),
+            (Self::Usd, Some(value)) => format!("${value:.2}"),
+            (Self::Number, Some(value)) if value.fract() == 0.0 => format!("{value:.0}"),
+            (Self::Number, Some(value)) => format!("{value:.1}"),
+        }
+    }
+
+    /// `+2`, `-3.5`, `+10 pts` or `+0.25`, or `missing`.
+    fn change(self, change: Option<f64>) -> String {
+        match (self, change) {
+            (_, None) => "missing".into(),
+            (Self::Fraction, Some(change)) => format!("{:+.0} pts", change * 100.0),
+            (Self::Usd, Some(change)) => format!("{change:+.2}"),
+            (Self::Number, Some(change)) if change.fract() == 0.0 => format!("{change:+.0}"),
+            (Self::Number, Some(change)) => format!("{change:+.1}"),
+        }
+    }
+}
+
+/// One named headline value in its unit.
+pub(crate) struct Reading {
+    name: &'static str,
+    unit: Unit,
+    value: Option<f64>,
+}
+
+fn reading(name: &'static str, unit: Unit, value: Option<f64>) -> Reading {
+    Reading { name, unit, value }
+}
+
+/// The values a line is compared and drawn by, the first one drawn, and the
+/// sample size `n` they rest on.
 pub(crate) trait Headline {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)>;
+    fn headline(&self) -> Vec<Reading>;
+    fn n(&self) -> usize;
 }
 
 pub(super) trait Measure<I>: Headline + Default {
@@ -171,13 +215,17 @@ impl<K: Ord + Clone, T> Group<K, T> {
 
 impl<T: Headline> Compared<T> {
     fn of(current: T, prior: T) -> Self {
-        let before: BTreeMap<_, _> = prior.headline().into_iter().collect();
+        let before: BTreeMap<_, _> = prior
+            .headline()
+            .into_iter()
+            .map(|reading| (reading.name, reading.value))
+            .collect();
         let delta = current
             .headline()
             .into_iter()
-            .map(|(name, now)| {
-                let then = before.get(name).copied().flatten();
-                (name, now.zip(then).map(|(now, then)| now - then))
+            .map(|now| {
+                let then = before.get(now.name).copied().flatten();
+                (now.name, now.value.zip(then).map(|(now, then)| now - then))
             })
             .collect();
         Self {
@@ -187,15 +235,16 @@ impl<T: Headline> Compared<T> {
         }
     }
 
-    /// `minutes per success -3.5; wasted time share +10 pts`.
+    /// `minutes per success -3.5; wasted time share +10 pts; n 4, prior 3`.
     pub(crate) fn text(&self) -> String {
         self.current
             .headline()
             .into_iter()
-            .map(|(name, _)| {
-                let change = self.delta.get(name).copied().flatten();
-                format!("{} {}", label(name), change_text(name, change))
+            .map(|now| {
+                let change = self.delta.get(now.name).copied().flatten();
+                format!("{} {}", label(now.name), now.unit.change(change))
             })
+            .chain([format!("n {}, prior {}", self.current.n(), self.prior.n())])
             .collect::<Vec<_>>()
             .join("; ")
     }
@@ -209,7 +258,8 @@ pub(crate) struct Spark {
 
 impl<K, T: Headline> Line<K, T> {
     pub(crate) fn spark(&self, axis: &[NaiveDate]) -> Spark {
-        let name = self.window.headline().first().map_or("", |(name, _)| *name);
+        let drawn = self.window.headline().into_iter().next();
+        let (name, unit) = drawn.map_or(("", Unit::Number), |first| (first.name, first.unit));
         let values: Vec<_> = axis
             .iter()
             .map(|bucket| {
@@ -217,11 +267,11 @@ impl<K, T: Headline> Line<K, T> {
                     .buckets
                     .iter()
                     .find(|point| point.bucket == *bucket)
-                    .and_then(|point| point.value.headline().first().and_then(|(_, v)| *v));
+                    .and_then(|point| point.value.headline().into_iter().next()?.value);
                 (*bucket, value)
             })
             .collect();
-        spark(name, &values)
+        spark(name, unit, &values)
     }
 }
 
@@ -229,31 +279,7 @@ fn label(name: &str) -> String {
     name.replace('_', " ")
 }
 
-fn fraction(name: &str) -> bool {
-    name.ends_with("_rate") || name.ends_with("_share")
-}
-
-fn value_text(name: &str, value: Option<f64>) -> String {
-    match value {
-        None => "missing".into(),
-        Some(value) if fraction(name) => format!("{:.0}%", value * 100.0),
-        Some(value) if name.contains("cost") => format!("${value:.2}"),
-        Some(value) if value.fract() == 0.0 => format!("{value:.0}"),
-        Some(value) => format!("{value:.1}"),
-    }
-}
-
-fn change_text(name: &str, change: Option<f64>) -> String {
-    match change {
-        None => "missing".into(),
-        Some(change) if fraction(name) => format!("{:+.0} pts", change * 100.0),
-        Some(change) if name.contains("cost") => format!("{change:+.2}"),
-        Some(change) if change.fract() == 0.0 => format!("{change:+.0}"),
-        Some(change) => format!("{change:+.1}"),
-    }
-}
-
-fn spark(name: &str, values: &[(NaiveDate, Option<f64>)]) -> Spark {
+fn spark(name: &str, unit: Unit, values: &[(NaiveDate, Option<f64>)]) -> Spark {
     let top = values
         .iter()
         .filter_map(|(_, value)| *value)
@@ -285,7 +311,7 @@ fn spark(name: &str, values: &[(NaiveDate, Option<f64>)]) -> Spark {
     }
     let readings = values
         .iter()
-        .map(|(bucket, value)| format!("{bucket} {}", value_text(name, *value)))
+        .map(|(bucket, value)| format!("{bucket} {}", unit.value(*value)))
         .collect::<Vec<_>>()
         .join(", ");
     Spark {
@@ -335,17 +361,21 @@ impl Measure<(String, Fate)> for Survival {
 
 impl Survival {
     pub(crate) fn rate(&self) -> String {
-        value_text("survival_rate", self.survival_rate)
+        Unit::Fraction.value(self.survival_rate)
     }
 }
 
 impl Headline for Survival {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)> {
+    fn headline(&self) -> Vec<Reading> {
         vec![
-            ("survival_rate", self.survival_rate),
-            ("merged", Some(self.merged as f64)),
-            ("closed_unmerged", Some(self.closed as f64)),
+            reading("survival_rate", Unit::Fraction, self.survival_rate),
+            reading("merged", Unit::Number, Some(self.merged as f64)),
+            reading("closed_unmerged", Unit::Number, Some(self.closed as f64)),
         ]
+    }
+
+    fn n(&self) -> usize {
+        self.merged + self.closed
     }
 }
 
@@ -370,19 +400,28 @@ impl Measure<(String, usize)> for Cohort {
 
 impl Cohort {
     pub(crate) fn per_merged(&self) -> String {
-        value_text("bug_origins_per_merged", self.bug_origins_per_merged)
+        Unit::Number.value(self.bug_origins_per_merged)
     }
 }
 
 impl Headline for Cohort {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)> {
+    fn headline(&self) -> Vec<Reading> {
         vec![
-            (
+            reading(
                 "confirmed_bug_origins",
+                Unit::Number,
                 Some(self.confirmed_bug_origins as f64),
             ),
-            ("bug_origins_per_merged", self.bug_origins_per_merged),
+            reading(
+                "bug_origins_per_merged",
+                Unit::Number,
+                self.bug_origins_per_merged,
+            ),
         ]
+    }
+
+    fn n(&self) -> usize {
+        self.merged
     }
 }
 
@@ -412,19 +451,23 @@ impl Measure<Scored> for CriterionScores {
 
 impl CriterionScores {
     pub(crate) fn rate(&self) -> String {
-        value_text("pass_rate", self.pass_rate)
+        Unit::Fraction.value(self.pass_rate)
     }
 }
 
 impl Headline for CriterionScores {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)> {
-        vec![("pass_rate", self.pass_rate)]
+    fn headline(&self) -> Vec<Reading> {
+        vec![reading("pass_rate", Unit::Fraction, self.pass_rate)]
+    }
+
+    fn n(&self) -> usize {
+        self.graded
     }
 }
 
 /// Commands that ended needing the Day shift, and Stops asked of them.
 #[derive(Default, Serialize)]
-pub(crate) struct Attention {
+pub(crate) struct Interventions {
     pub(crate) commands: usize,
     /// Failed, died, Paused or Stopped, or holding Security findings.
     pub(crate) needs_you: usize,
@@ -436,7 +479,7 @@ pub(super) struct Asked {
     stop: bool,
 }
 
-impl Measure<Asked> for Attention {
+impl Measure<Asked> for Interventions {
     fn add(&mut self, asked: &Asked) {
         self.commands += 1;
         self.needs_you += usize::from(asked.needs_you);
@@ -444,12 +487,16 @@ impl Measure<Asked> for Attention {
     }
 }
 
-impl Headline for Attention {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)> {
+impl Headline for Interventions {
+    fn headline(&self) -> Vec<Reading> {
         vec![
-            ("needs_you", Some(self.needs_you as f64)),
-            ("stops", Some(self.stops as f64)),
+            reading("needs_you", Unit::Number, Some(self.needs_you as f64)),
+            reading("stops", Unit::Number, Some(self.stops as f64)),
         ]
+    }
+
+    fn n(&self) -> usize {
+        self.commands
     }
 }
 
@@ -526,10 +573,10 @@ impl Measure<Attempt> for Efficiency {
 }
 
 /// `12.5 (3 observed, 1 missing)`.
-fn covered(name: &str, value: Option<f64>, signal: &Signal) -> String {
+fn covered(unit: Unit, value: Option<f64>, signal: &Signal) -> String {
     format!(
         "{} ({} observed, {} missing)",
-        value_text(name, value),
+        unit.value(value),
         signal.observed,
         signal.missing
     )
@@ -542,33 +589,29 @@ impl Efficiency {
             "{}/{} ({})",
             self.first_pass_clean,
             self.succeeded_repairs.observed,
-            value_text("first_pass_clean_rate", self.first_pass_clean_rate)
+            Unit::Fraction.value(self.first_pass_clean_rate)
         )
     }
 
     pub(crate) fn minutes_per_success_text(&self) -> String {
-        covered("minutes", self.minutes_per_success, &self.attempt_minutes)
+        covered(
+            Unit::Number,
+            self.minutes_per_success,
+            &self.attempt_minutes,
+        )
     }
 
     pub(crate) fn cost_per_success_text(&self) -> String {
-        covered(
-            "cost_usd",
-            self.cost_usd_per_success,
-            &self.attempt_cost_usd,
-        )
+        covered(Unit::Usd, self.cost_usd_per_success, &self.attempt_cost_usd)
     }
 
     pub(crate) fn wasted_time_text(&self) -> String {
-        covered(
-            "wasted_time_share",
-            self.wasted_time_share,
-            &self.wasted_minutes,
-        )
+        covered(Unit::Fraction, self.wasted_time_share, &self.wasted_minutes)
     }
 
     pub(crate) fn wasted_spend_text(&self) -> String {
         covered(
-            "wasted_spend_share",
+            Unit::Fraction,
             self.wasted_spend_share,
             &self.wasted_cost_usd,
         )
@@ -576,17 +619,45 @@ impl Efficiency {
 }
 
 impl Headline for Efficiency {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)> {
+    fn headline(&self) -> Vec<Reading> {
         vec![
-            ("minutes_per_success", self.minutes_per_success),
-            ("cost_usd_per_success", self.cost_usd_per_success),
-            ("first_pass_clean_rate", self.first_pass_clean_rate),
-            ("wasted_time_share", self.wasted_time_share),
-            ("wasted_spend_share", self.wasted_spend_share),
-            ("succeeded_minutes", self.succeeded_minutes.mean),
-            ("succeeded_repairs", self.succeeded_repairs.mean),
-            ("succeeded_ci_rounds", self.succeeded_ci_rounds.mean),
+            reading(
+                "minutes_per_success",
+                Unit::Number,
+                self.minutes_per_success,
+            ),
+            reading("cost_usd_per_success", Unit::Usd, self.cost_usd_per_success),
+            reading(
+                "first_pass_clean_rate",
+                Unit::Fraction,
+                self.first_pass_clean_rate,
+            ),
+            reading("wasted_time_share", Unit::Fraction, self.wasted_time_share),
+            reading(
+                "wasted_spend_share",
+                Unit::Fraction,
+                self.wasted_spend_share,
+            ),
+            reading(
+                "succeeded_minutes",
+                Unit::Number,
+                self.succeeded_minutes.mean,
+            ),
+            reading(
+                "succeeded_repairs",
+                Unit::Number,
+                self.succeeded_repairs.mean,
+            ),
+            reading(
+                "succeeded_ci_rounds",
+                Unit::Number,
+                self.succeeded_ci_rounds.mean,
+            ),
         ]
+    }
+
+    fn n(&self) -> usize {
+        self.ended
     }
 }
 
@@ -639,7 +710,7 @@ impl Above {
             "{}/{} ({})",
             self.above,
             self.ranged,
-            value_text("above_share", self.above_share)
+            Unit::Fraction.value(self.above_share)
         )
     }
 }
@@ -707,10 +778,7 @@ impl Friction {
             "{}/{} ({})",
             self.destructive_sessions,
             self.destructive_checked,
-            value_text(
-                "destructive_incidence_rate",
-                self.destructive_incidence_rate
-            )
+            Unit::Fraction.value(self.destructive_incidence_rate)
         )
     }
 
@@ -724,24 +792,45 @@ impl Friction {
 }
 
 impl Headline for Friction {
-    fn headline(&self) -> Vec<(&'static str, Option<f64>)> {
+    fn headline(&self) -> Vec<Reading> {
         vec![
-            ("above_usual_range_share", self.all_stages.above_share),
-            ("repeated_tool_calls", self.repeated_tool_calls.mean),
-            ("tool_errors", self.tool_errors.mean),
-            ("permission_denials", self.permission_denials.mean),
-            ("killed_work", self.killed_work.mean),
-            (
+            reading(
+                "above_usual_range_share",
+                Unit::Fraction,
+                self.all_stages.above_share,
+            ),
+            reading(
+                "repeated_tool_calls",
+                Unit::Number,
+                self.repeated_tool_calls.mean,
+            ),
+            reading("tool_errors", Unit::Number, self.tool_errors.mean),
+            reading(
+                "permission_denials",
+                Unit::Number,
+                self.permission_denials.mean,
+            ),
+            reading("killed_work", Unit::Number, self.killed_work.mean),
+            reading(
                 "destructive_incidence_rate",
+                Unit::Fraction,
                 self.destructive_incidence_rate,
             ),
-            ("security_holds", Some(self.security_holds as f64)),
+            reading(
+                "security_holds",
+                Unit::Number,
+                Some(self.security_holds as f64),
+            ),
         ]
+    }
+
+    fn n(&self) -> usize {
+        self.runs
     }
 }
 
 pub(super) fn read(facts: &[Fact<'_>], window: &Window, sources: &Sources<'_>) -> Groups {
-    let kind = |fact: &Fact<'_>| Kind {
+    let kind = |fact: &Fact<'_>| AccountKind {
         account: fact.counted.account.clone(),
         kind: fact.counted.kind,
     };
@@ -753,7 +842,7 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window, sources: &Sources<'_>) -
     let pull_requests = || {
         ended().filter_map(|fact| {
             let url = fact.command.record.pull_request.as_deref()?;
-            let key = super::super::github::pull_request_key(url);
+            let key = super::super::reading::pull_request_key(url);
             let kept = sources.kept.get(&key);
             Some((fact, key, kept))
         })
@@ -768,16 +857,23 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window, sources: &Sources<'_>) -
         (fact.counted.bucket, kind(fact), (key, fate))
     });
     let cohorts = pull_requests().filter_map(|(fact, key, kept)| {
-        let kept = kept.filter(|kept| kept.state == PrState::Merged)?;
-        let merged = DateTime::parse_from_rfc3339(kept.merged_at.as_deref()?).ok()?;
+        let origins = sources.origins.for_run(fact.command);
+        let record = &fact.command.record;
+        // Without a kept answer, a confirmed Bug origin or a merged outcome
+        // says it merged, about when the Command ended.
+        let merged_at = match kept {
+            Some(kept) if kept.state == PrState::Merged => kept.merged_at.as_deref()?,
+            Some(_) => return None,
+            None if origins > 0 || record.outcome.as_deref() == Some("merged") => {
+                record.ended_at.as_deref()?
+            }
+            None => return None,
+        };
+        let merged = DateTime::parse_from_rfc3339(merged_at).ok()?;
         let bucket = window.bucket_on(merged.with_timezone(&Utc).date_naive());
-        Some((
-            bucket,
-            kind(fact),
-            (key, sources.origins.for_run(fact.command)),
-        ))
+        Some((bucket, kind(fact), (key, origins)))
     });
-    let attention = facts.iter().map(|fact| {
+    let interventions = facts.iter().map(|fact| {
         let needs_you = matches!(
             fact.counted.class,
             Class::Failed | Class::Paused | Class::Stopped
@@ -834,17 +930,19 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window, sources: &Sources<'_>) -
         quality: Quality {
             bug_origins: Group::of(cohorts, window),
             scores: Group::of(scores(sources, window), window),
-            attention: Group::of(attention, window),
+            interventions: Group::of(interventions, window),
         },
         efficiency: Group::of(efficiency, window),
         friction: Group::of(friction, window),
     }
 }
 
-fn scores(sources: &Sources<'_>, window: &Window) -> Vec<(NaiveDate, Criterion, Scored)> {
+fn scores(sources: &Sources<'_>, window: &Window) -> Vec<(NaiveDate, CriterionKey, Scored)> {
     let mut items = Vec::new();
     for week in &sources.scores.weeks {
-        let bucket = window.bucket_on(week.start.date_naive());
+        // A week counts where it finished, so a daily window holds last week.
+        let last_day = (week.end - chrono::Duration::seconds(1)).max(week.start);
+        let bucket = window.bucket_on(last_day.date_naive());
         for pr in &week.pull_requests {
             if !sources
                 .filters
@@ -861,7 +959,7 @@ fn scores(sources: &Sources<'_>, window: &Window) -> Vec<(NaiveDate, Criterion, 
                     .unwrap_or(false);
                 items.push((
                     bucket,
-                    Criterion {
+                    CriterionKey {
                         criterion: criterion.name(),
                         calibrated,
                     },
@@ -950,46 +1048,6 @@ fn cost_usd(sessions: &[Option<&Signals>]) -> Option<f64> {
 mod tests {
     use super::*;
 
-    fn attempt(class: Class, minutes: f64, repairs: usize) -> Attempt {
-        Attempt {
-            class,
-            minutes: Some(minutes),
-            cost_usd: Some(minutes / 10.0),
-            repairs: Some(repairs),
-            ci_rounds: Some(1 + repairs),
-        }
-    }
-
-    #[test]
-    fn crashes_raise_waste_without_flattering_succeeded_means() {
-        let mut efficiency = Efficiency::default();
-        efficiency.add(&attempt(Class::Succeeded, 30.0, 0));
-        efficiency.add(&attempt(Class::Succeeded, 50.0, 2));
-        let before = (
-            efficiency.succeeded_minutes.mean,
-            efficiency.succeeded_repairs.mean,
-            efficiency.succeeded_ci_rounds.mean,
-        );
-        assert_eq!(efficiency.wasted_time_share, Some(0.0));
-        for _ in 0..4 {
-            efficiency.add(&attempt(Class::Failed, 0.5, 0));
-        }
-        efficiency.add(&attempt(Class::Stopped, 2.0, 0));
-        assert_eq!(
-            (
-                efficiency.succeeded_minutes.mean,
-                efficiency.succeeded_repairs.mean,
-                efficiency.succeeded_ci_rounds.mean,
-            ),
-            before
-        );
-        assert_eq!(efficiency.first_pass_clean_rate, Some(0.5));
-        assert_eq!(efficiency.minutes_per_success, Some(42.0));
-        for share in [efficiency.wasted_time_share, efficiency.wasted_spend_share] {
-            assert!((share.unwrap() - 4.0 / 84.0).abs() < 1e-12, "{share:?}");
-        }
-    }
-
     #[test]
     fn a_missing_session_cost_leaves_the_commands_spend_missing() {
         let priced = Signals {
@@ -1006,6 +1064,7 @@ mod tests {
         let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
         let drawn = spark(
             "wasted_time_share",
+            Unit::Fraction,
             &[(day(1), Some(0.5)), (day(2), None), (day(3), Some(0.25))],
         );
         assert_eq!(drawn.path, "M0.00 2.00 M100.00 10.00");
@@ -1017,20 +1076,20 @@ mod tests {
 
     #[test]
     fn deltas_need_both_windows() {
-        let mut current = Attention::default();
+        let mut current = Interventions::default();
         current.add(&Asked {
             needs_you: true,
             stop: true,
         });
-        let compared = Compared::of(current, Attention::default());
+        let compared = Compared::of(current, Interventions::default());
         assert_eq!(compared.delta["needs_you"], Some(1.0));
-        assert_eq!(compared.text(), "needs you +1; stops +1");
+        assert_eq!(compared.text(), "needs you +1; stops +1; n 1, prior 0");
         let mut current = CriterionScores::default();
         current.add(&Scored {
             passed: true,
             calibrated: true,
         });
         let compared = Compared::of(current, CriterionScores::default());
-        assert_eq!(compared.text(), "pass rate missing");
+        assert_eq!(compared.text(), "pass rate missing; n 1, prior 0");
     }
 }

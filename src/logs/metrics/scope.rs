@@ -140,9 +140,6 @@ impl Filters {
     /// `account` is the Command's OS account, the serving one included.
     pub(super) fn admit(&self, command: &Command, account: Option<&str>) -> bool {
         let record = &command.record;
-        let any = |values: &[String], value: Option<&str>| {
-            values.is_empty() || value.is_some_and(|value| values.iter().any(|v| v == value))
-        };
         any(&self.repo, Some(&record.repository))
             && (any(&self.kind, Some(&record.kind))
                 || any(&self.kind, Some(crate::logs::display_name(&record.kind))))
@@ -155,11 +152,15 @@ impl Filters {
     /// Harness and Model. Kind and account name Commands, not samples, so
     /// they leave Scores unfiltered.
     pub(super) fn admit_scored(&self, repository: &str, harness: &str, model: &str) -> bool {
-        let any = |values: &[String], value: &str| {
-            values.is_empty() || values.iter().any(|v| v.eq_ignore_ascii_case(value))
-        };
-        any(&self.repo, repository) && any(&self.harness, harness) && any(&self.model, model)
+        any(&self.repo, Some(repository))
+            && any(&self.harness, Some(harness))
+            && any(&self.model, Some(model))
     }
+}
+
+/// An unused filter admits everything; a used one, only an exact match.
+fn any(values: &[String], value: Option<&str>) -> bool {
+    values.is_empty() || value.is_some_and(|value| values.iter().any(|v| v == value))
 }
 
 #[cfg(test)]
@@ -241,5 +242,18 @@ mod tests {
         assert_eq!(open.grain, "week");
         assert!(open.prior.is_none());
         assert!(open.shows(date("2026-11-09")) && !open.shows(date("2026-10-26")));
+    }
+
+    #[test]
+    fn scores_take_the_repo_filter_as_commands_do() {
+        let filters = Filters {
+            repo: vec!["acme/widgets".into()],
+            kind: vec![],
+            harness: vec![],
+            model: vec![],
+            account: vec![],
+        };
+        // admit() compares exactly, so a Command in ACME/Widgets is excluded; its sample must be too.
+        assert!(!filters.admit_scored("ACME/Widgets", "codex", "gpt-6"));
     }
 }

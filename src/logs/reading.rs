@@ -27,7 +27,9 @@ use super::effects::OnMachine;
 use super::pass_starts::{self, PassStart};
 pub(super) use super::usual_range::UsualRange;
 use super::{Pass, activity};
-pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
+pub(super) use attribution::{
+    CommandIdentity, PullRequestAttribution, identity as pull_request_key,
+};
 pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Departure, Group, InboxItem, NeedsYouKind, RowOrder};

@@ -14,7 +14,7 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::reading::Snapshot;
+use super::reading::{Snapshot, pull_request_key};
 use crate::config::UserConfig;
 use crate::github::{GitHub, InboxState, IssueState, PullRequestState, QuotaWait};
 
@@ -331,8 +331,7 @@ pub fn load(logs_dir: &Path) -> Kept {
     }
 }
 
-/// The kept pull-request facts by URL, compared without ASCII case or a
-/// trailing slash. Unlike [`load`], this reads the file alone: no GitHub
+/// The kept pull-request facts by URL, keyed by [`pull_request_key`]. Unlike [`load`], this reads the file alone: no GitHub
 /// read and no quota check. A History row's frozen answer stands in only
 /// for a pull request with no current one.
 pub(super) fn kept_pull_requests(logs_dir: &Path) -> BTreeMap<String, PullRequestState> {
@@ -344,8 +343,9 @@ pub(super) fn kept_pull_requests(logs_dir: &Path) -> BTreeMap<String, PullReques
         return BTreeMap::new();
     };
     let mut kept = BTreeMap::new();
+    // Only `row::url` keys name their pull request; legacy row-only keys do not.
     let frozen = file.history.into_iter().filter_map(|(key, state)| {
-        let url = key.rsplit_once("::").map_or(key.as_str(), |(_, url)| url);
+        let (_, url) = key.rsplit_once("::")?;
         Some((pull_request_key(url), state?))
     });
     let current = file
@@ -358,10 +358,6 @@ pub(super) fn kept_pull_requests(logs_dir: &Path) -> BTreeMap<String, PullReques
         }
     }
     kept
-}
-
-pub(super) fn pull_request_key(url: &str) -> String {
-    url.trim_end_matches('/').to_ascii_lowercase()
 }
 
 /// Refresh without an age gate, even when no page is open. All this work,

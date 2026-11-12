@@ -269,7 +269,7 @@ fn metrics_page_shows_the_four_signal_groups_as_the_api_reports_them() {
     let html = console.get("/metrics?window=7d").text().unwrap();
     for expected in [
         "<h2 id=\"metrics-yield\">Yield and pull-request survival</h2>",
-        "<h2 id=\"metrics-quality\">Post-merge quality and attention</h2>",
+        "<h2 id=\"metrics-quality\">Post-merge quality and interventions</h2>",
         "<h2 id=\"metrics-efficiency\">Efficiency, wasted effort and Repair churn</h2>",
         "<h2 id=\"metrics-friction\">Stage bottlenecks and session friction</h2>",
         "<svg class=\"metrics-spark\"",
@@ -285,4 +285,44 @@ fn metrics_page_shows_the_four_signal_groups_as_the_api_reports_them() {
     // Findings show only as Security holds, not as a quality score.
     let groups = html.split_once("metrics-efficiency").unwrap().1;
     assert!(!groups.contains("Standards findings") && !groups.contains("Spec findings"));
+}
+
+#[test]
+fn metrics_page_heads_the_yield_group_without_a_bounded_window() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/metrics").text().unwrap();
+    assert!(html.contains("<h2 id=\"metrics-yield\">"), "{html}");
+    assert_eq!(
+        html.matches("<section").count(),
+        html.matches("</section>").count(),
+        "{html}"
+    );
+}
+
+#[test]
+fn metrics_page_heads_the_yield_group_when_unbounded() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for query in ["/metrics", "/metrics?window=all"] {
+        let html = console.get(query).text().unwrap();
+        assert!(
+            html.contains("<h2 id=\"metrics-yield\">Yield and pull-request survival</h2>"),
+            "{query}: {html}"
+        );
+        let main = html
+            .split_once("<main")
+            .unwrap()
+            .1
+            .split_once("</main>")
+            .unwrap()
+            .0;
+        assert_eq!(
+            main.matches("<section").count(),
+            main.matches("</section>").count(),
+            "{query}"
+        );
+    }
 }
