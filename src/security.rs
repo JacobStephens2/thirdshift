@@ -266,7 +266,7 @@ fn run_through(
             fixing_skipped,
             ..ended
         }),
-        outcome => outcome,
+        outcome @ (Outcome::Skipped(_) | Outcome::Fixed { .. }) => outcome,
     }
 }
 
