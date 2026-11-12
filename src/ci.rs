@@ -96,13 +96,13 @@ impl<'a> Watch<'a> {
     /// consumes its Check re-run before requesting it, unless a moved origin
     /// superseded its cancellations; later own failures on that head fail as
     /// the same Declined CI fix. Other heads are observed afresh.
-    /// `actionable` is borrowed only for this assessment and gates GitHub
-    /// observations before and after each read.
+    /// `actionable` is borrowed only for this assessment and gates each check
+    /// observation once, and every re-run immediately before requesting it.
     pub fn assess(
         &mut self,
         head: &str,
         base_commit: Option<&str>,
-        actionable: &mut dyn FnMut() -> Result<()>,
+        actionable: &mut dyn FnMut() -> Result<Option<String>>,
         head_moved: &mut dyn FnMut(&str) -> Result<bool>,
     ) -> Result<Ci> {
         self.assess_through(
@@ -177,13 +177,21 @@ impl<'a> Watch<'a> {
     }
 }
 
+/// The checks together with the PR head seen by their actionability gate.
+/// Keeping the observation intact lets either change reset a pending wait.
+#[derive(PartialEq, Eq)]
+struct CheckObservation {
+    head: Option<String>,
+    checks: Vec<Check>,
+}
+
 /// What the CI watch reads of GitHub and asks of it, how it waits, and
 /// where its progress lines go.
 trait Outside {
     /// A point the grace period ends at, from when it was started.
     type Deadline;
     /// The checks and statuses on the commit `sha`.
-    fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>>;
+    fn checks_on(&mut self, sha: &str) -> Result<CheckObservation>;
     /// Whether the Issue branch on origin no longer points at `sha`.
     fn head_moved(&mut self, sha: &str) -> Result<bool>;
     /// The GitHub Actions job whose check run is `check_run`, with its
@@ -195,7 +203,7 @@ trait Outside {
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()>;
     /// Wait one poll interval. Fails with `interrupted` as soon as the Run
     /// is interrupted.
-    fn pause(&mut self) -> Result<()>;
+    fn pause(&mut self, delay: Duration) -> Result<()>;
     /// Wait a check-read retry delay, interruptibly, without polling CI.
     fn retry_pause(&mut self, delay: Duration) -> Result<()>;
     /// Start a grace period: how long it is, for progress lines, and the
@@ -211,33 +219,29 @@ trait Outside {
 /// interval and grace period.
 struct OnGitHub<'a> {
     issue: &'a IssueUrl,
-    actionable: &'a mut dyn FnMut() -> Result<()>,
+    actionable: &'a mut dyn FnMut() -> Result<Option<String>>,
     head_moved: &'a mut dyn FnMut(&str) -> Result<bool>,
 }
 
 impl Outside for OnGitHub<'_> {
     type Deadline = Instant;
 
-    fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
-        (self.actionable)()?;
-        let checks = GitHub::new().checks_on(self.issue, sha)?;
-        (self.actionable)()?;
-        Ok(checks)
+    fn checks_on(&mut self, sha: &str) -> Result<CheckObservation> {
+        let head = (self.actionable)()?;
+        Ok(CheckObservation {
+            head,
+            checks: GitHub::new().checks_on(self.issue, sha)?,
+        })
     }
 
     fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>> {
-        (self.actionable)()?;
         let job_run = GitHub::new().job_run(self.issue, check_run);
         Interruption::Ordinary.check()?;
-        (self.actionable)()?;
         Ok(job_run)
     }
 
     fn head_moved(&mut self, sha: &str) -> Result<bool> {
-        (self.actionable)()?;
-        let moved = (self.head_moved)(sha)?;
-        (self.actionable)()?;
-        Ok(moved)
+        (self.head_moved)(sha)
     }
 
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
@@ -245,8 +249,8 @@ impl Outside for OnGitHub<'_> {
         GitHub::new().rerun_failed_jobs(self.issue, workflow_run)
     }
 
-    fn pause(&mut self) -> Result<()> {
-        poll::pause()
+    fn pause(&mut self, delay: Duration) -> Result<()> {
+        poll::sleep(delay)
     }
 
     fn retry_pause(&mut self, delay: Duration) -> Result<()> {
@@ -270,7 +274,7 @@ impl Outside for OnGitHub<'_> {
 /// A fresh, whole observation on the same full commit each time. Three total
 /// attempts, separated by one then two seconds; only transient failures retry.
 /// Successful observations alone can establish CI facts.
-fn read_checks(outside: &mut impl Outside, sha: &str) -> Result<Vec<Check>> {
+fn read_checks(outside: &mut impl Outside, sha: &str) -> Result<CheckObservation> {
     let mut failures = Vec::new();
     for attempt in 1..=3 {
         match outside.checks_on(sha) {
@@ -310,7 +314,8 @@ fn watch_through(outside: &mut impl Outside, sha: &str, base_commit: Option<&str
         grace.as_secs()
     ));
     let appeared = within(outside, deadline, |outside| {
-        Ok((!read_checks(outside, sha)?.is_empty()).then_some(()))
+        let observation = read_checks(outside, sha)?;
+        Ok(((!observation.checks.is_empty()).then_some(()), observation))
     })?;
     if appeared.is_none() {
         outside.step(format!(
@@ -408,7 +413,7 @@ fn request_reruns<'a>(
     let mut workflow_runs: Vec<u64> = failed.own.iter().filter_map(scoped_workflow_run).collect();
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
-    let before = read_checks(outside, sha)?;
+    let before = read_checks(outside, sha)?.checks;
     let previous_attempt: Vec<u64> = jobs_of(&before)
         .chain(jobs_of(&failed.own))
         .chain(jobs_of(&failed.inherited))
@@ -452,8 +457,13 @@ fn watch_new_attempts(
 ) -> Result<Option<Ci>> {
     let (grace, deadline) = outside.start_grace();
     let new_attempt = within(outside, deadline, |outside| {
-        let checks = read_checks(outside, sha)?;
-        Ok(rerun_checks.new_attempts_listed(&checks).then_some(()))
+        let observation = read_checks(outside, sha)?;
+        Ok((
+            rerun_checks
+                .new_attempts_listed(&observation.checks)
+                .then_some(()),
+            observation,
+        ))
     })?;
     if new_attempt.is_none() {
         outside.step(format!(
@@ -596,7 +606,7 @@ fn watch_to_end(
     // else running: they should follow soon after what they need finishes.
     let mut settle = None;
     let checks = until(outside, |outside| {
-        let checks = read_checks(outside, sha)?;
+        let CheckObservation { head, checks } = read_checks(outside, sha)?;
         ensure!(
             !checks.is_empty()
                 && rerun_checks
@@ -612,7 +622,7 @@ fn watch_to_end(
             rerun.awaiting_attempts(&checks)
         });
         if running + awaiting.total() == 0 {
-            return Ok(Some(checks));
+            return Ok((Some(checks), (head, Vec::new())));
         }
         if running > 0 {
             settle = None;
@@ -628,7 +638,7 @@ fn watch_to_end(
                 awaiting.absent == 0,
                 "re-run checks never reappeared on {short}; cannot verify CI"
             );
-            return Ok(Some(checks));
+            return Ok((Some(checks), (head, Vec::new())));
         }
         let pending = running + awaiting.old;
         if waiting_line.should_report((pending + awaiting.absent, checks.len())) {
@@ -641,7 +651,7 @@ fn watch_to_end(
                 checks.len()
             ));
         }
-        Ok(None)
+        Ok((None, (head, checks)))
     })?;
     let mut failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
@@ -662,6 +672,7 @@ fn watch_to_end(
     outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
         Some(base_commit) => read_checks(outside, base_commit)
+            .map(|observation| observation.checks)
             .with_context(|| format!("CI red on {sha}:\n{}", check_list(&failed)))?,
         None => Vec::new(),
     };
@@ -703,31 +714,37 @@ fn mark_abandoned_jobs(outside: &mut impl Outside, sha: &str, own: &mut [Check])
 
 /// Ask `probe` every poll interval of `outside` until it answers `Some`, and
 /// return the answer. Fails with `interrupted` as soon as the Run is
-/// interrupted. Unlike [`poll::until`], `probe` is lent `outside` on each
-/// ask.
-fn until<O: Outside, T>(
+/// interrupted. Each probe returns its answer and the observed state that
+/// resets the wait's backoff when it changes.
+fn until<O: Outside, T, S: PartialEq>(
     outside: &mut O,
-    mut probe: impl FnMut(&mut O) -> Result<Option<T>>,
+    mut probe: impl FnMut(&mut O) -> Result<(Option<T>, S)>,
 ) -> Result<T> {
+    let mut backoff = poll::Backoff::new();
     loop {
-        if let Some(answer) = probe(outside)? {
+        let (answer, state) = probe(outside)?;
+        if let Some(answer) = answer {
             return Ok(answer);
         }
-        outside.pause()?;
+        outside.pause(backoff.observe(state, Instant::now()))?;
     }
 }
 
 /// Like [`until`], but give up with `None` once `deadline`, a grace
 /// period's, has passed.
-fn within<O: Outside, T>(
+fn within<O: Outside, T, S: PartialEq>(
     outside: &mut O,
     deadline: O::Deadline,
-    mut probe: impl FnMut(&mut O) -> Result<Option<T>>,
+    mut probe: impl FnMut(&mut O) -> Result<(Option<T>, S)>,
 ) -> Result<Option<T>> {
-    until(outside, |outside| match probe(outside)? {
-        Some(answer) => Ok(Some(Some(answer))),
-        None if outside.passed(&deadline) => Ok(Some(None)),
-        None => Ok(None),
+    until(outside, |outside| {
+        let (answer, state) = probe(outside)?;
+        let answer = match answer {
+            Some(answer) => Some(Some(answer)),
+            None if outside.passed(&deadline) => Some(None),
+            None => None,
+        };
+        Ok((answer, state))
     })
 }
 
@@ -1003,7 +1020,7 @@ mod in_memory {
 
     use anyhow::{Result, anyhow, bail};
 
-    use super::Outside;
+    use super::{CheckObservation, Outside};
     use crate::github::{Check, Conclusion, JobRun};
 
     /// GitHub in memory: for each commit, a script of the check listings
@@ -1113,7 +1130,7 @@ mod in_memory {
         /// The number of pauses at which the grace period ends.
         type Deadline = usize;
 
-        fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
+        fn checks_on(&mut self, sha: &str) -> Result<CheckObservation> {
             let read = self.reads_of(sha);
             self.reads.push(sha.to_string());
             if let Some((_, _, message)) = self
@@ -1133,7 +1150,10 @@ mod in_memory {
                 .iter()
                 .find(|(commit, _)| commit == sha)
                 .and_then(|(_, listings)| listings.get(read).or(listings.last()));
-            Ok(listing.cloned().unwrap_or_default())
+            Ok(CheckObservation {
+                head: None,
+                checks: listing.cloned().unwrap_or_default(),
+            })
         }
 
         fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>> {
@@ -1163,7 +1183,7 @@ mod in_memory {
             Ok(())
         }
 
-        fn pause(&mut self) -> Result<()> {
+        fn pause(&mut self, _: Duration) -> Result<()> {
             self.pauses += 1;
             if self.interrupted_on == Some(self.pauses) {
                 bail!("interrupted");
@@ -1173,7 +1193,7 @@ mod in_memory {
 
         fn retry_pause(&mut self, delay: Duration) -> Result<()> {
             self.retry_delays.push(delay);
-            self.pause()
+            self.pause(delay)
         }
 
         fn start_grace(&mut self) -> (Duration, usize) {
