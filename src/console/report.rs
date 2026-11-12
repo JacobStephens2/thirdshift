@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::Scope;
 use super::fleet::WhoamiIdentity;
-use crate::args::MetricsArgs;
+use crate::args::{MetricsArgs, MetricsGrain};
 use crate::config::{UserConfig, console::report::Destination};
 use crate::logs::metrics::fleet::MetricsReport;
 use crate::resend_key::Credentials;
@@ -155,11 +155,12 @@ fn list(json: bool) -> Result<String> {
         .join("\n"))
 }
 
-/// Push this machine's summary of the view `asked` names to each report
-/// destination, or to the one `only` names. Each destination's outcome.
+/// Push this machine's summary of each view `views` names, in order, to each
+/// report destination, or to the one `only` names. Each destination's
+/// outcome: its first refusal, or success.
 fn push(
     config: &UserConfig,
-    asked: &MetricsArgs,
+    views: &[MetricsArgs],
     only: Option<&str>,
     timeout: Duration,
 ) -> Result<Vec<(String, Result<()>)>> {
@@ -179,13 +180,18 @@ fn push(
         return Ok(Vec::new());
     }
     let credentials = Credentials::read()?;
-    let mut report = MetricsReport::local(config, asked)?;
+    let mut reports = views
+        .iter()
+        .map(|asked| MetricsReport::local(config, asked))
+        .collect::<Result<Vec<_>>>()?;
     let client = client(timeout)?;
     Ok(destinations
         .into_iter()
         .map(|destination| {
-            report.machine = destination.holder.clone();
-            let sent = send(&client, &credentials, destination, &report);
+            let sent = reports.iter_mut().try_for_each(|report| {
+                report.machine = destination.holder.clone();
+                send(&client, &credentials, destination, report)
+            });
             (destination.name.clone(), sent)
         })
         .collect())
@@ -241,7 +247,7 @@ fn send(
 pub(crate) fn push_by_hand(asked: &MetricsArgs) -> Result<String> {
     let config = UserConfig::load()?;
     let only = asked.push_to.as_deref();
-    let pushed = push(&config, asked, only, BY_HAND)?;
+    let pushed = push(&config, std::slice::from_ref(asked), only, BY_HAND)?;
     ensure!(
         !pushed.is_empty(),
         "no report destinations; pair one with thirdshift console report add <name> <address>"
@@ -262,8 +268,9 @@ pub(crate) fn push_by_hand(asked: &MetricsArgs) -> Result<String> {
     Ok(text)
 }
 
-/// After a Command: push the default view to every report destination,
-/// each bounded by a short timeout. Never fails the Command: an offline or
+/// After a Command: push every report destination the whole history by day,
+/// which stands in for each window's view, then the default view, each send
+/// bounded by a short timeout. Never fails the Command: an offline or
 /// refusing Console only earns a warning.
 pub(crate) fn after_command() {
     let Ok(config) = UserConfig::load() else {
@@ -272,7 +279,16 @@ pub(crate) fn after_command() {
     if config.console.report.is_empty() {
         return;
     }
-    match push(&config, &MetricsArgs::default(), None, AFTER_COMMAND) {
+    let daily = MetricsArgs {
+        grain: Some(MetricsGrain::Day),
+        ..MetricsArgs::default()
+    };
+    match push(
+        &config,
+        &[daily, MetricsArgs::default()],
+        None,
+        AFTER_COMMAND,
+    ) {
         Ok(pushed) => {
             for (name, sent) in pushed {
                 if let Err(error) = sent {

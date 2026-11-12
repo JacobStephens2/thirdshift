@@ -86,6 +86,30 @@ pub(crate) struct SummaryCommand {
     pub(crate) account: Option<String>,
     pub(crate) started_at: String,
     pub(crate) selector: String,
+    /// Missing from snapshots saved before they carried it.
+    #[serde(default)]
+    pub(crate) repository: Option<String>,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
+}
+
+impl SummaryCommand {
+    /// Its pull request's or issue's link, and which it is. Only an `https`
+    /// one: a reporting machine's snapshot names it, so no `javascript:`.
+    pub(crate) fn link(&self) -> Option<(&str, &'static str)> {
+        let url = self
+            .url
+            .as_deref()
+            .filter(|url| url.starts_with("https://"))?;
+        Some((
+            url,
+            if url.contains("/pull/") {
+                "pull request"
+            } else {
+                "issue"
+            },
+        ))
+    }
 }
 
 /// Outcome stacks, preceding-window changes and Where runs failed across the

@@ -413,3 +413,25 @@ fn a_reported_snapshot_stands_in_for_everyone_and_a_newer_read_for_its_reader() 
     ));
     assert!(read_saved(&path(logs.path(), "here", Slot::Reported)).is_none());
 }
+
+#[test]
+fn a_reported_failure_links_only_to_an_https_page() {
+    let command = |url: &str| SummaryCommand {
+        name: "widgets#1".into(),
+        kind: "Ticket run".into(),
+        account: None,
+        started_at: String::new(),
+        selector: String::new(),
+        repository: Some("acme/widgets".into()),
+        url: Some(url.into()),
+    };
+    assert_eq!(
+        command("https://github.com/acme/widgets/pull/2").link(),
+        Some(("https://github.com/acme/widgets/pull/2", "pull request"))
+    );
+    assert_eq!(
+        command("https://github.com/acme/widgets/issues/1").link(),
+        Some(("https://github.com/acme/widgets/issues/1", "issue"))
+    );
+    assert_eq!(command("javascript:alert(1)").link(), None);
+}

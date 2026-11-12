@@ -2364,3 +2364,27 @@ fn where_runs_failed_groups_recorded_endings_and_falls_back_for_older_and_died_c
         (&json!("Self-merge"), &json!("held"))
     );
 }
+
+#[test]
+fn a_requeued_stop_is_a_stop_but_not_needs_you() {
+    let scenario = Scenario::new();
+    let stopped = write(
+        &scenario,
+        "3-fixture.command.json",
+        &finished(3, "interrupted", 1, 15.0, 0, 1.0),
+    );
+    fs::write(
+        stopped.with_extension("stop.json"),
+        r#"{"who": "jacob", "requeue": true}"#,
+    )
+    .unwrap();
+
+    let report = metrics(&scenario, &["metrics", "--json"]);
+
+    let line = group_line(&report, &["quality", "interventions"]);
+    assert_eq!(
+        line["window"],
+        json!({"commands": 1, "needs_you": 0, "stops": 1}),
+        "{line:#}"
+    );
+}

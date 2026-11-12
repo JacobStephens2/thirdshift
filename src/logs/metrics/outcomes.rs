@@ -116,6 +116,9 @@ pub(super) struct Fact<'a> {
     pub(super) command: &'a Command,
     /// A Stop was asked of this Command itself, not only of its owner.
     pub(super) stop_asked: bool,
+    /// Its Stop, or its owner's, put the issue back in line rather than
+    /// leaving it for the Day shift.
+    pub(super) requeued: bool,
 }
 
 /// Whether a Command is in the Succeeded stack. A Stop never makes one.
@@ -340,7 +343,7 @@ pub(super) fn facts<'a>(
     let mut facts = Vec::new();
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry {
-            visit(command, false, window, filters, serving, &mut facts);
+            visit(command, None, window, filters, serving, &mut facts);
         }
     }
     facts
@@ -402,9 +405,10 @@ fn compare(counted: &[&Counted], current: Span, prior: Span) -> Comparison {
     }
 }
 
+/// `owner_stop` is whether its owner's Stop, if any, requeued.
 fn visit<'a>(
     command: &'a Command,
-    owner_stopped: bool,
+    owner_stop: Option<bool>,
     window: &Window,
     filters: &Filters,
     serving: Option<&str>,
@@ -412,11 +416,16 @@ fn visit<'a>(
 ) {
     // A Stop of a Spec run stops its Ticket runs; they share its request, as a
     // dispatch shares its owner's record.
-    let stop_asked =
-        !owner_stopped && super::super::stop::requested(&command.record_path).is_some();
-    let stopped = owner_stopped || stop_asked;
+    let own = owner_stop
+        .is_none()
+        .then(|| super::super::stop::requested(&command.record_path))
+        .flatten()
+        .map(|request| request.requeue);
+    let stop_asked = own.is_some();
+    let stop = owner_stop.or(own);
+    let stopped = stop.is_some();
     for child in command.dispatched.iter().chain(&command.children) {
-        visit(child, stopped, window, filters, serving, facts);
+        visit(child, stop, window, filters, serving, facts);
     }
     let account = command.account.as_deref().or(serving);
     if !filters.admit(command, account) {
@@ -438,6 +447,7 @@ fn visit<'a>(
         },
         command,
         stop_asked,
+        requeued: stop == Some(true),
     });
 }
 

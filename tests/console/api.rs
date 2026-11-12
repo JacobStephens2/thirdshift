@@ -589,6 +589,10 @@ fn read_api_equals_cli_for_command_trees_stages_waterfall_and_logs() {
             vec!["metrics", "--window", "30d", "--json"],
         ),
         (
+            "/api/v1/metrics?version=0.30.0",
+            vec!["metrics", "--version", "0.30.0", "--json"],
+        ),
+        (
             "/api/v1/metrics?window=12w",
             vec!["metrics", "--window", "12w", "--json"],
         ),

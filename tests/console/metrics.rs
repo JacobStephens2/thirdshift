@@ -687,7 +687,10 @@ fn fleet_metrics_merge_paired_consoles_and_keep_an_offline_peer_cached() {
         html.contains("cached, offline</span> · last seen <time"),
         "{html}"
     );
-    assert!(html.contains("widgets#73 (cached) on remote"), "{html}");
+    assert!(
+        html.contains("widgets#73 (cached, acme/widgets, <a href=\"https://github.com/acme/widgets/issues/73\">issue</a>) on remote"),
+        "{html}"
+    );
     let text = metrics(local_home.path(), &["--fleet", "--window", "7d"]);
     assert!(text.status.success(), "{text:?}");
     assert!(String::from_utf8_lossy(&text.stdout).contains("status: cached"));

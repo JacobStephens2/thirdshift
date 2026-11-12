@@ -296,6 +296,7 @@ fn spark(name: &str, unit: Unit, values: &[(NaiveDate, Option<f64>)]) -> Spark {
             drawing = false;
             continue;
         };
+        let alone = !drawing && values.get(index + 1).is_none_or(|(_, next)| next.is_none());
         let x = if values.len() > 1 {
             index as f64 * step
         } else {
@@ -307,6 +308,11 @@ fn spark(name: &str, unit: Unit, values: &[(NaiveDate, Option<f64>)]) -> Spark {
             18.0
         };
         path.push(format!("{}{x:.2} {y:.2}", if drawing { "L" } else { "M" }));
+        // A lone point draws a zero-length line, which its round cap shows
+        // as a dot: a bare moveto draws nothing.
+        if alone {
+            path.push(format!("L{x:.2} {y:.2}"));
+        }
         drawing = true;
     }
     let readings = values
@@ -874,10 +880,12 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window, sources: &Sources<'_>) -
         Some((bucket, kind(fact), (key, origins)))
     });
     let interventions = facts.iter().map(|fact| {
-        let needs_you = matches!(
-            fact.counted.class,
-            Class::Failed | Class::Paused | Class::Stopped
-        ) || security(fact.command).is_some_and(|count| count > 0)
+        // A Stop that put its issue back in line leaves nothing to the Day shift.
+        let needs_you = match fact.counted.class {
+            Class::Failed | Class::Paused => true,
+            Class::Stopped => !fact.requeued,
+            Class::Succeeded | Class::Live => false,
+        } || security(fact.command).is_some_and(|count| count > 0)
             || fact.command.record.security_findings_waiting;
         (
             fact.counted.bucket,
@@ -1067,7 +1075,12 @@ mod tests {
             Unit::Fraction,
             &[(day(1), Some(0.5)), (day(2), None), (day(3), Some(0.25))],
         );
-        assert_eq!(drawn.path, "M0.00 2.00 M100.00 10.00");
+        assert_eq!(
+            drawn.path,
+            "M0.00 2.00 L0.00 2.00 M100.00 10.00 L100.00 10.00"
+        );
+        let one = spark("needs_you", Unit::Number, &[(day(1), Some(2.0))]);
+        assert_eq!(one.path, "M50.00 2.00 L50.00 2.00");
         assert_eq!(
             drawn.label,
             "wasted time share: 2026-11-01 50%, 2026-11-02 missing, 2026-11-03 25%"

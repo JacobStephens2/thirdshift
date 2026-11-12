@@ -231,5 +231,8 @@ fn a_cached_peer_snapshot_stays_with_the_person_who_read_it() {
     let page = get(&console, "/metrics?window=7d", &allowed)
         .text()
         .unwrap();
-    assert!(page.contains("widgets#73 (cached) on owner"), "{page}");
+    assert!(
+        page.contains("widgets#73 (cached, acme/widgets, "),
+        "{page}"
+    );
 }

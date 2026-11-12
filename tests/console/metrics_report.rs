@@ -236,6 +236,13 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
         fleet["where_runs_failed"]["rows"][0]["machines"][HOLDER], 1,
         "{fleet}"
     );
+    // Its failure carries context enough to follow up without its logs.
+    let failed = &fleet["where_runs_failed"]["rows"][0]["commands"][0];
+    assert_eq!(failed["repository"], "acme/widgets", "{fleet}");
+    assert_eq!(
+        failed["url"], "https://github.com/acme/widgets/issues/73",
+        "{fleet}"
+    );
     let one = api::cli(
         hub_home.path(),
         &["metrics", "--machine", HOLDER, "--window", "7d", "--json"],
@@ -255,7 +262,9 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
         );
         assert!(html.contains("(just now)"), "{html}");
         assert!(
-            html.contains(&format!("widgets#73 (reported) on {HOLDER}")),
+            html.contains(&format!(
+                "widgets#73 (reported, acme/widgets, <a href=\"https://github.com/acme/widgets/issues/73\">issue</a>) on {HOLDER}"
+            )),
             "{html}"
         );
         assert!(
@@ -367,5 +376,40 @@ fn a_report_from_this_hosts_own_name_is_refused_or_shown() {
         );
     } else {
         assert_eq!(saved.status(), 422);
+    }
+}
+
+#[test]
+fn an_automatic_push_shows_the_worker_in_daily_fleet_windows() {
+    let hub_home = tempfile::tempdir().unwrap();
+    configure(hub_home.path());
+    let hub = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), hub_home.path());
+    let token = tokens::create(hub_home.path(), HOLDER, &["--scopes", "report"]);
+    let scenario = support::Scenario::new();
+    scenario.user_config_is(&format!(
+        "[console]\nreport = [{{ name = \"hub\", address = \"{}\", holder = \"{HOLDER}\" }}]\n",
+        hub.address
+    ));
+    scenario.credentials_are(&format!("[report]\nhub = \"{token}\"\n"));
+    scenario.agent_does_for(
+        7,
+        "echo 7 > issue-7.txt\ngit add issue-7.txt\ngit commit -q -m 'Work on 7'\n\
+         gh pr create --base main --head issue-7 --title 'Work on 7' --body 'Closes #7'\n",
+    );
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for window in ["7d", "30d"] {
+        let fleet = api::cli(
+            hub_home.path(),
+            &["metrics", "--fleet", "--window", window, "--json"],
+        );
+        assert!(
+            fleet["outcomes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|bucket| bucket["machine"] == HOLDER && bucket["runs"] == 1),
+            "{window}: {fleet}"
+        );
     }
 }

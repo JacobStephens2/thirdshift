@@ -95,6 +95,10 @@ pub(crate) struct FailedCommand {
     pub(crate) started_at: String,
     /// `thirdshift show <selector>`, and the Console's Command details.
     pub(crate) selector: String,
+    pub(crate) repository: String,
+    /// Its pull request's, else its issue's: where to follow up when its
+    /// machine reports from afar and its details cannot be opened.
+    pub(crate) url: Option<String>,
 }
 
 pub(super) fn read(facts: &[Fact<'_>], window: &Window) -> WhereRunsFailed {
@@ -130,6 +134,11 @@ pub(super) fn read(facts: &[Fact<'_>], window: &Window) -> WhereRunsFailed {
                 account: fact.counted.account.clone(),
                 started_at: record.started_at.clone(),
                 selector: fact.counted.selector.clone(),
+                repository: record.repository.clone(),
+                url: record
+                    .pull_request
+                    .clone()
+                    .or_else(|| record.issue.as_ref().map(|issue| issue.url.clone())),
             });
     }
     breakdown.rows = rows
