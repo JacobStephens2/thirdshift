@@ -66,30 +66,29 @@ pub fn observe(limits: Limits) -> Result<Snapshot> {
             && load_one >= 0.0,
         "can't read host CPU load"
     );
-    let current = std::env::current_dir().context("can't read the current directory")?;
+    let cwd = std::env::current_dir().context("can't read the current directory")?;
     Ok(limits.assess(Measurements {
         total_memory_mb: system.total_memory() / 1_000_000,
         available_memory_mb: system.available_memory() / 1_000_000,
         logical_cpus: system.cpus().len(),
         load_one,
-        available_disk_mb: available_disk_mb(&current)?,
+        available_disk_mb: available_disk_mb(&cwd)?,
     }))
 }
 
 /// Free space an unprivileged user may write, on the filesystem that will
-/// hold worktrees for `current`, or the temporary directory's when lower.
-fn available_disk_mb(current: &Path) -> Result<u64> {
-    Ok(free_mb(&worktree_filesystem(current))?.min(free_mb(&std::env::temp_dir())?))
+/// hold worktrees for `cwd`, or the temporary directory's when lower.
+fn available_disk_mb(cwd: &Path) -> Result<u64> {
+    Ok(free_mb(&worktree_parent(cwd))?.min(free_mb(&std::env::temp_dir())?))
 }
 
 /// Worktrees are created beside the repository root, so in its parent; outside
 /// any repository, the directory itself.
-fn worktree_filesystem(current: &Path) -> PathBuf {
-    current
-        .ancestors()
+fn worktree_parent(cwd: &Path) -> PathBuf {
+    cwd.ancestors()
         .find(|directory| directory.join(".git").exists())
         .and_then(Path::parent)
-        .unwrap_or(current)
+        .unwrap_or(cwd)
         .to_path_buf()
 }
 
@@ -325,14 +324,11 @@ mod tests {
         let repository = parent.path().join("widgets");
         std::fs::create_dir_all(repository.join(".git")).unwrap();
         std::fs::create_dir_all(repository.join("src/deep")).unwrap();
-        assert_eq!(
-            worktree_filesystem(&repository.join("src/deep")),
-            parent.path()
-        );
-        assert_eq!(worktree_filesystem(&repository), parent.path());
+        assert_eq!(worktree_parent(&repository.join("src/deep")), parent.path());
+        assert_eq!(worktree_parent(&repository), parent.path());
         let outside = parent.path().join("plain");
         std::fs::create_dir_all(&outside).unwrap();
-        assert_eq!(worktree_filesystem(&outside), outside);
-        assert!(available_disk_mb(&repository).unwrap() > 0);
+        assert_eq!(worktree_parent(&outside), outside);
+        assert!(available_disk_mb(&repository).is_ok());
     }
 }

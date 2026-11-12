@@ -74,7 +74,7 @@ test('host admission stays below notifications and refreshes without reloading t
   assert.ok(indicator.x > hostname.x + hostname.width, 'host status is on the right');
   await page.screenshot({ path: '/tmp/thirdshift-1613-host-busy.png', fullPage: true });
 
-  await writeFile(join(home, '.thirdshift/config.toml'), `${settings}[resources]\nmin_available_memory_mb = 1\n`);
+  await writeFile(join(home, '.thirdshift/config.toml'), `${settings}[resources]\nmin_available_memory_mb = 1\nmin_available_disk_mb = 1\n`);
   await page.clock.fastForward(10000);
   await status.getByRole('link', { name: 'Host ready for another session', exact: true }).waitFor();
 
@@ -82,7 +82,7 @@ test('host admission stays below notifications and refreshes without reloading t
   await page.clock.fastForward(10000);
   await status.getByRole('link', { name: 'Host resources unavailable', exact: true }).waitFor();
   await page.unroute('**/resources/status');
-  await writeFile(join(home, '.thirdshift/config.toml'), settings);
+  await writeFile(join(home, '.thirdshift/config.toml'), `${settings}[resources]\nmin_available_disk_mb = 0\n`);
   await page.clock.fastForward(10000);
   await status.getByRole('link', { name: 'Host limits off', exact: true }).waitFor();
 

@@ -46,19 +46,14 @@ fn console_header_shows_host_admission_and_reloads_limits() {
     }
     fs::write(
         &config,
-        format!("{settings}\n[resources]\nmin_available_memory_mb = 1\n"),
+        format!(
+            "{settings}\n[resources]\nmin_available_memory_mb = 1\nmin_available_disk_mb = 1\n"
+        ),
     )
     .unwrap();
     let response = console.get("/resources/status");
     assert_eq!(response.status(), 200);
-    assert!(
-        response
-            .text()
-            .unwrap()
-            .contains("Host ready for another session")
-    );
-    fs::write(&config, &settings).unwrap();
-    let status = console.get("/resources/status").text().unwrap();
+    let status = response.text().unwrap();
     assert!(
         status.contains("Host ready for another session"),
         "{status}"
@@ -115,7 +110,11 @@ fn resources_page_shows_host_measurements_limits_and_admission_then_reloads_conf
     ] {
         assert!(html.contains(expected), "missing {expected}: {html}");
     }
-    fs::write(config, settings).unwrap();
+    fs::write(
+        config,
+        format!("{settings}\n[resources]\nmin_available_disk_mb = 1\n"),
+    )
+    .unwrap();
     assert!(
         console
             .get("/resources")

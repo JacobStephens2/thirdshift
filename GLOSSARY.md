@@ -48,7 +48,7 @@ The number of open issues the factory failed on, labelled `agent-failed`, at whi
 _Avoid_: Claim limit (former name), WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Commands in flight)
 
 **Command limit**:
-The number of live **Commands** on one repository on one machine at which a **Pass** there is skipped, set in the **User config**, one by default. Every live Command counts, a Ticket run started by hand on an **Issue URL** included, together with the Spec run or Ticket run each Pass dispatched, but only a Pass is ever skipped for it: a Command a person types always runs. Passes of different kinds may run side by side up to the limit, but never two **Architect runs** or two **Security runs** on one repository at once. It counts no other repository; load across a machine is the **User config**'s memory and load waits.
+The number of live **Commands** on one repository on one machine at which a **Pass** there is skipped, set in the **User config**, one by default. Every live Command counts, a Ticket run started by hand on an **Issue URL** included, together with the Spec run or Ticket run each Pass dispatched, but only a Pass is ever skipped for it: a Command a person types always runs. Passes of different kinds may run side by side up to the limit, but never two **Architect runs** or two **Security runs** on one repository at once. It counts no other repository; load across a machine is the **User config**'s memory, load and disk waits.
 An Experiment independently holds back every Pass of its OS account across the machine's repositories, including while it waits for live Runs to end.
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
