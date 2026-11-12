@@ -16,7 +16,7 @@ Before exploring, look up the issue's terms via `docs/agents/domain.md` and its 
 
 Use `rg -n` for terms/symbols, then bounded ranges (`sed -n '40,100p' file`), one large file per call, especially for `GLOSSARY.md`, `README.md`, `tests/fakes/gh.rs` and `tests/spec_run.rs`. For the fake-test layout, see `docs/code-navigation.md`; for site browser-test setup and runner, see `site/tests/README.md`.
 
-For final local validation, run `scripts/affected-tests <base>` (normally `main`); see `docs/testing.md` for selection, setup and CI responsibilities. This binary-only crate's targeted selectors are `cargo test --bin thirdshift <module>::tests` and `cargo test --test <file>`; it has no lib target.
+For sessions that modify repository files, run `scripts/affected-tests <base>` (normally `main`) for final local validation; see `docs/testing.md` for selection, setup and CI responsibilities. Read-only sessions such as Triage run tests only when needed to verify a bug claim. This binary-only crate's targeted selectors are `cargo test --bin thirdshift <module>::tests` and `cargo test --test <file>`; it has no lib target.
 
 ### Generated prompts
 
