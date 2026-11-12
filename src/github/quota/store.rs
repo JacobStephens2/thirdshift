@@ -66,12 +66,14 @@ impl Store {
             .read()?
             .waits
             .into_iter()
-            .filter(|wait| &wait.account == account && wait.quota.reset_at > now)
+            // A wait recorded with the reserve available, as after a
+            // window had already reset, is not a wait.
+            .filter(|wait| &wait.account == account && wait.quota.low(now))
             .collect())
     }
 
-    /// A successful quota observation supersedes the previous one, including
-    /// clearing a wait when the reserve is available again.
+    /// A quota observation supersedes the previous one: it records a wait
+    /// only while the quota is low, and otherwise clears any stored wait.
     pub fn observe(
         &self,
         account: &Account,
@@ -79,34 +81,12 @@ impl Store {
         quota: Quota,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        let waiting = quota.low(now);
-        self.record(account, resource, quota, waiting, now)
-    }
-
-    pub fn exhausted(
-        &self,
-        account: &Account,
-        resource: Resource,
-        quota: Quota,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
-        self.record(account, resource, quota, true, now)
-    }
-
-    fn record(
-        &self,
-        account: &Account,
-        resource: Resource,
-        quota: Quota,
-        waiting: bool,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
         self.update(|record| {
             record.waits.retain(|wait| {
                 wait.quota.reset_at > now
                     && !(&wait.account == account && wait.resource == resource)
             });
-            if waiting && quota.reset_at > now {
+            if quota.low(now) {
                 record.waits.push(QuotaWait {
                     account: account.clone(),
                     resource,

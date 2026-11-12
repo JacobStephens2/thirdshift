@@ -1299,6 +1299,7 @@ impl GitHub {
 
     fn output_with_input(&self, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
         let mut secondary_retries = 0;
+        let mut reset_retried = false;
         loop {
             let output = self.raw_output_with_input(args, input)?;
             if output.status.success() {
@@ -1306,11 +1307,23 @@ impl GitHub {
             }
             match quota::Limit::of(args, &output.stderr) {
                 Some(quota::Limit::Primary(resource)) => {
-                    let reset = self.record_quota_failure(args, resource);
-                    if !self.wait_for_quota
-                        || !quota::command::wait(reset, resource, self.interruption)?
-                    {
-                        return Ok(output);
+                    match self.record_quota_failure(args, resource) {
+                        Some(reset) => {
+                            if !self.wait_for_quota
+                                || !quota::command::wait(reset, resource, self.interruption)?
+                            {
+                                return Ok(output);
+                            }
+                        }
+                        // The window reset after the request failed: retry
+                        // once now rather than wait a whole window.
+                        None if self.wait_for_quota
+                            && quota::command::active()
+                            && !reset_retried =>
+                        {
+                            reset_retried = true;
+                        }
+                        None => return Ok(output),
                     }
                 }
                 Some(quota::Limit::Secondary)

@@ -16,6 +16,9 @@ pub(crate) mod wait;
 pub(crate) use store::QuotaWait;
 use store::Store;
 
+/// Passes and Commands leave this much of each resource for the Day shift.
+const RESERVE: u64 = 500;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Resource {
@@ -65,8 +68,12 @@ impl Quota {
         })
     }
 
+    fn reserve_available(&self) -> bool {
+        self.remaining >= RESERVE
+    }
+
     fn low(&self, now: DateTime<Utc>) -> bool {
-        self.remaining < 500 && self.reset_at > now
+        !self.reserve_available() && self.reset_at > now
     }
 
     fn pass_reason(&self, resource: Resource) -> String {
@@ -106,13 +113,8 @@ impl QuotaWait {
                     Resource::Graphql => "GraphQL points",
                     Resource::Core => "REST requests",
                 };
-                let reserve = if wait.remaining() < 500 {
-                    " (fewer than 500)"
-                } else {
-                    ""
-                };
                 format!(
-                    "{} {name} remaining{reserve}; Inbox reads paused until {}",
+                    "{} {name} remaining (fewer than {RESERVE}); Inbox reads paused until {}",
                     wait.remaining(),
                     wait.reset_at().to_rfc3339_opts(SecondsFormat::Secs, true),
                 )
@@ -202,7 +204,14 @@ impl GitHub {
         self.quota_waits()
     }
 
-    pub(super) fn record_quota_failure(&self, args: &[&str], resource: Resource) -> DateTime<Utc> {
+    /// The reset to wait for, or `None` when the probe shows the reserve
+    /// available: the window reset after the request failed, so no Quota
+    /// wait is recorded and any stored one is cleared.
+    pub(super) fn record_quota_failure(
+        &self,
+        args: &[&str],
+        resource: Resource,
+    ) -> Option<DateTime<Utc>> {
         let host = identity::host(args);
         let now = Utc::now();
         let resource_json = self
@@ -216,13 +225,18 @@ impl GitHub {
                 .and_then(|reset| DateTime::from_timestamp(reset, 0))
                 .unwrap_or(now + chrono::Duration::minutes(15)),
         };
-        let reset = quota.reset_at;
+        // A failed probe leaves no remaining count and so assumes exhaustion,
+        // observed as a wait until the fallback reset. Below the reserve the
+        // Command waits even for a reset just passed (to it plus the safety
+        // minute), though only a future reset is recorded as a Quota wait.
+        let reset = (!quota.reserve_available()).then_some(quota.reset_at);
+        let waiting = quota.low(now);
         let record = || -> Result<()> {
             let store = Store::machine()?;
             let account = identity::resolve(self, &store, &host)?;
-            store.exhausted(&account, resource, quota, now)
+            store.observe(&account, resource, quota, now)
         };
-        if record().is_err() {
+        if record().is_err() && waiting {
             // Recording failure must not prevent waiting or hide the original
             // GitHub diagnostic if the Command reaches its wait cap.
             crate::progress::step("warning: could not record GitHub Quota wait");
