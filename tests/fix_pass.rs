@@ -6,6 +6,159 @@ use serde_json::json;
 use support::Scenario;
 
 #[test]
+fn locally_occupied_head_skips_without_starting_a_fix_run() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("occupied", "main", &["Feature"]);
+    let url = scenario.github_has_pr("occupied", "main", "OPEN");
+    let head = scenario.origin_git(&["rev-parse", "occupied"]);
+    let mut state = scenario.gh_state();
+    state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+    scenario.write_gh_state(&state);
+    scenario.launch_git(&["fetch", "-q", "origin"]);
+    let occupied = scenario.path("retained review");
+    scenario.launch_git(&["worktree", "add", occupied.to_str().unwrap(), "occupied"]);
+
+    for _ in 0..2 {
+        let result = scenario.run(&["fix", "base", "main", "no-email"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(result.stderr.contains(&url), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(occupied.to_str().unwrap()),
+            "{}",
+            result.stderr
+        );
+    }
+    assert!(scenario.claude_calls().is_empty());
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands/fix")
+            .exists()
+    );
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert_eq!(activity.lines().count(), 1, "{activity}");
+    assert!(activity.contains(&url), "{activity}");
+    assert!(activity.contains(occupied.to_str().unwrap()), "{activity}");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert!(
+        scenario
+            .launch_git(&["ls-remote", "origin", "refs/thirdshift/reservations/*"])
+            .is_empty()
+    );
+    assert!(occupied.exists());
+}
+
+#[test]
+fn pass_repairs_the_next_candidate_when_the_first_head_is_checked_out_locally() {
+    for in_launch in [false, true] {
+        let scenario = Scenario::new();
+        for branch in ["occupied", "available"] {
+            scenario.origin_has_branch(branch, "main", &["Feature"]);
+            scenario.github_has_pr(branch, "main", "OPEN");
+        }
+        let mut state = scenario.gh_state();
+        for branch in ["occupied", "available"] {
+            let head = scenario.origin_git(&["rev-parse", branch]);
+            state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+        }
+        scenario.write_gh_state(&state);
+        scenario.launch_git(&["fetch", "-q", "origin"]);
+        let occupied = if in_launch {
+            scenario.launch_checks_out("occupied");
+            scenario.path("work/widgets")
+        } else {
+            let path = scenario.path("retained review");
+            scenario.launch_git(&["worktree", "add", path.to_str().unwrap(), "occupied"]);
+            path
+        };
+        // Selection must preserve edits in the checkout it passes over.
+        std::fs::write(occupied.join("retained.txt"), "unfinished work\n").unwrap();
+        let occupied_head = scenario.origin_git(&["rev-parse", "occupied"]);
+        scenario.agent_does(
+            r#"
+echo repaired > ci-fix.txt
+git add ci-fix.txt
+git commit -qm 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+        );
+
+        let result = scenario.run(&["fix", "base", "main", "no-email"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("passed over https://github.com/acme/widgets/pull/1"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains(occupied.to_str().unwrap()),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            result
+                .stderr
+                .contains("PR https://github.com/acme/widgets/pull/2 is ready for review"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.origin_file("available", "ci-fix.txt").as_deref(),
+            Some("repaired\n")
+        );
+        assert_eq!(
+            scenario.origin_git(&["rev-parse", "occupied"]),
+            occupied_head
+        );
+        assert_eq!(
+            std::fs::read_to_string(occupied.join("retained.txt")).unwrap(),
+            "unfinished work\n"
+        );
+        assert_eq!(scenario.claude_calls().len(), 1);
+        assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+        assert!(
+            scenario.gh_state()["prs"][0]["labels"]
+                .as_array()
+                .is_none_or(Vec::is_empty)
+        );
+        assert!(
+            scenario
+                .launch_git(&["ls-remote", "origin", "refs/thirdshift/reservations/*"])
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn explicit_target_still_fails_with_the_occupying_checkout_path() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("occupied", "main", &["Feature"]);
+    let url = scenario.github_has_pr("occupied", "main", "OPEN");
+    scenario.launch_checks_out("occupied");
+
+    let result = scenario.run(&["fix", &url, "no-email"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Occupied checkout"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains(scenario.path("work/widgets").to_str().unwrap()),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
 fn no_eligible_pull_request_skips_once_without_a_notification() {
     let scenario = Scenario::new();
     for _ in 0..2 {
