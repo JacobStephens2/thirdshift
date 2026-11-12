@@ -167,13 +167,9 @@ impl Worktree {
 
     /// Observe branch occupancy without granting cleanup authority. Even a
     /// missing checkout can retain work in its registration; leave it alone.
-    pub(crate) fn branch_checkout(launch: &Git, branch: &str) -> Result<Option<PathBuf>> {
+    pub(crate) fn occupying_checkout(launch: &Git, branch: &str) -> Result<Option<PathBuf>> {
         let _lock = lock_launch(launch)?;
-        let reference = format!("refs/heads/{branch}");
-        Ok(acquisition::registrations(launch)?
-            .into_iter()
-            .find(|entry| entry.branch.as_deref() == Some(&reference))
-            .map(|entry| entry.path))
+        Ok(acquisition::registration_on(launch, branch)?.map(|entry| entry.path))
     }
 
     /// Check out the existing `branch` from origin in a new worktree next to

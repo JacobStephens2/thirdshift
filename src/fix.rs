@@ -69,7 +69,7 @@ pub(crate) fn run(
                 else {
                     continue;
                 };
-                if let Some(path) = Worktree::branch_checkout(launch.directory.git(), &branch)? {
+                if let Some(path) = Worktree::occupying_checkout(launch.directory.git(), &branch)? {
                     let reason = format!(
                         "passed over {}: head branch {} is checked out at {}",
                         pr.url,
