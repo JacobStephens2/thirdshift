@@ -338,3 +338,34 @@ fn a_finished_command_reports_its_metrics_and_an_offline_console_only_warns() {
         result.stderr
     );
 }
+
+#[test]
+fn a_report_from_this_hosts_own_name_is_refused_or_shown() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let probe = tokens::create(home.path(), "probe", &[]);
+    let host = api::json(
+        tokens::request(&console, &probe, "/api/v1/whoami")
+            .send()
+            .unwrap(),
+    )["hostname"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let token = tokens::create(home.path(), &host, &["--scopes", "report"]);
+    let saved = post(&console, &token, "/api/v1/metrics/report", &report(&host));
+    if saved.status() == 200 {
+        let fleet = api::cli(home.path(), &["metrics", "--fleet", "--json"]);
+        assert!(
+            fleet["machines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["name"] == host.as_str() && m["status"] == "reported"),
+            "report accepted with 200 but never shown: {fleet}"
+        );
+    } else {
+        assert_eq!(saved.status(), 422);
+    }
+}

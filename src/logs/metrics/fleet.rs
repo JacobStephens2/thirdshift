@@ -254,15 +254,23 @@ enum Slot<'a> {
     Reported,
 }
 
-impl Slot<'_> {
+impl<'a> Slot<'a> {
+    /// Whose reads the slot keeps; a reported slot keeps no person's.
+    fn person(self) -> Option<&'a str> {
+        match self {
+            Self::Read(person) => person,
+            Self::Reported => None,
+        }
+    }
+
+    fn reported(self) -> bool {
+        matches!(self, Self::Reported)
+    }
+
     fn holds(self, saved: &Saved, name: &str) -> bool {
         saved.machine == name
-            && match self {
-                Self::Read(person) => {
-                    saved.pushed_at.is_none() && saved.person.as_deref() == person
-                }
-                Self::Reported => saved.pushed_at.is_some() && saved.person.is_none(),
-            }
+            && saved.pushed_at.is_some() == self.reported()
+            && saved.person.as_deref() == self.person()
     }
 }
 
@@ -270,7 +278,7 @@ impl Slot<'_> {
 /// `metrics` view, named for the machine the token was issued to.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Report {
+pub(crate) struct MetricsReport {
     pub(crate) version: u32,
     pub(crate) machine: String,
     /// The view's `metrics` query: its window and filters.
@@ -298,8 +306,10 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-impl Report {
-    /// This machine's summary of the view `asked` names, as `machine`.
+impl MetricsReport {
+    /// This machine's summary of the view `asked` names. Its `machine` is
+    /// left blank: the sender names, per destination, the holder that
+    /// destination issued its token to.
     pub(crate) fn local(config: &UserConfig, asked: &MetricsArgs) -> Result<Self> {
         let trends = super::trends(config, asked)?;
         let summary = serde_json::from_value(serde_json::to_value(&trends)?)?;
@@ -312,10 +322,23 @@ impl Report {
     }
 
     /// Save a report pushed under `holder`'s `report` token in `holder`'s
-    /// reported slot, and nowhere else.
-    pub(crate) fn receive(self, logs_dir: &Path, holder: &str, now: DateTime<Utc>) -> Result<()> {
+    /// reported slot, and nowhere else. `local` is this Console's own name,
+    /// which no report may take: it would never be shown.
+    pub(crate) fn receive(
+        self,
+        logs_dir: &Path,
+        holder: &str,
+        local: &str,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         if self.machine != holder {
             return Err(Refusal::Mismatch.into());
+        }
+        if holder == local {
+            return Err(Refusal::Invalid(format!(
+                "{holder} is this Console's own name; issue the report token to the machine's own Fleet name"
+            ))
+            .into());
         }
         if self.version != 1 {
             return Err(Refusal::Invalid(format!("unsupported version {}", self.version)).into());
@@ -332,19 +355,7 @@ impl Report {
 fn view_arguments(query: &str) -> Result<MetricsArgs> {
     let mut arguments = vec!["metrics".to_owned(), "--json".to_owned()];
     for (key, value) in serde_urlencoded::from_str::<Vec<(String, String)>>(query)? {
-        if !matches!(
-            key.as_str(),
-            "window"
-                | "grain"
-                | "from"
-                | "through"
-                | "repo"
-                | "kind"
-                | "harness"
-                | "model"
-                | "version"
-                | "account"
-        ) {
+        if !VIEW_KEYS.contains(&key.as_str()) {
             bail!("unknown metrics argument: {key}");
         }
         arguments.extend([format!("--{key}"), value]);
@@ -366,6 +377,12 @@ struct SavedView {
     weekly: Option<bool>,
     summary: Value,
 }
+
+/// The query keys that are `metrics` window and filters, each a `--<key>`
+/// flag: all a view's query may hold.
+pub(crate) const VIEW_KEYS: [&str; 10] = [
+    "window", "grain", "from", "through", "repo", "kind", "harness", "model", "version", "account",
+];
 
 /// What each machine is asked: the `metrics` query in a fixed order, so its
 /// saved snapshot is found again by the same text, and the parts that let a
@@ -889,22 +906,26 @@ fn save(
     let path = path(logs_dir, name, slot);
     let directory = path.parent().expect("cache file has a directory");
     std::fs::create_dir_all(directory)?;
-    let reported = matches!(slot, Slot::Reported);
+    // Hold the slot across its read and replacement, so two writes at once
+    // each keep their view.
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("lock"))?;
+    lock.lock()?;
     let mut saved = read_saved(&path)
         .filter(|saved| slot.holds(saved, name))
         .unwrap_or_else(|| Saved {
             version: 1,
             machine: name.to_owned(),
-            person: match slot {
-                Slot::Read(person) => person.map(str::to_owned),
-                Slot::Reported => None,
-            },
+            person: slot.person().map(str::to_owned),
             last_seen: at,
             pushed_at: None,
             views: BTreeMap::new(),
         });
     saved.last_seen = at;
-    if reported {
+    if slot.reported() {
         saved.pushed_at = Some(at);
     }
     saved.views.insert(

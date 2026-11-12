@@ -3,7 +3,6 @@
 //! for. Only shareable names and addresses; tokens live in Credentials.
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use toml_edit::{DocumentMut, Item, Table};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -26,7 +25,7 @@ pub(super) fn validate(destinations: &[Destination]) -> Result<()> {
             "duplicate console.report name {:?}",
             destination.name
         );
-        crate::console::fleet::pairing_address(&destination.address)?;
+        crate::console::report::address(&destination.address)?;
     }
     Ok(())
 }
@@ -46,23 +45,7 @@ fn change(name: &str, destination: Option<&Destination>) -> Result<()> {
         if let Some(destination) = destination {
             settings.report.push(destination.clone());
         }
-        if !document.contains_key("console") {
-            document["console"] = Item::Table(Table::new());
-        }
-        let table = document["console"]
-            .as_table_like_mut()
-            .expect("validated console table");
-        let value: DocumentMut = toml::to_string(&Report {
-            report: &settings.report,
-        })?
-        .parse()?;
-        table.insert("report", value["report"].clone());
-        Ok(())
+        super::write_entries(document, "report", &settings.report)
     })?;
     Ok(())
-}
-
-#[derive(Serialize)]
-struct Report<'a> {
-    report: &'a [Destination],
 }

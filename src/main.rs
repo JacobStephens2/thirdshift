@@ -210,13 +210,14 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | scopes ...  Manage tokens, Fleet or address scopes; CLI-only
+       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | report <add|list|remove> ... | scopes ...  Manage tokens, Fleet, report destinations or address scopes; CLI-only
        thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json] [--machine <name>]  Show a Command, its tree or a span
        thirdshift metrics [<command>] [--fleet | --machine <name>] [--window <7d|30d|12w|all>] [<filters>] [--json]  Show Run metrics, outcome stacks or trends, here or across the Fleet
+       thirdshift metrics --push [<destination>] [--window <7d|30d|12w|all>] [<filters>]  Send this machine's trends to its report destinations
        thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs

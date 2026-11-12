@@ -189,7 +189,7 @@ impl ConsoleSettings {
         self.address_scopes
             .get(email)
             .cloned()
-            .unwrap_or_else(|| Scope::ALL.to_vec())
+            .unwrap_or_else(|| Scope::PERSON.to_vec())
     }
 
     /// The HTTPS site's DNS name, accepted with or without `https://`.
@@ -362,6 +362,25 @@ fn edit(
         }
         Ok(())
     })
+}
+
+/// Replace the `[console]` list `key` with `entries`, adding the table if
+/// it is missing.
+fn write_entries<T: Serialize>(
+    document: &mut toml_edit::DocumentMut,
+    key: &str,
+    entries: &[T],
+) -> Result<()> {
+    if !document.contains_key("console") {
+        document["console"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let value: toml_edit::DocumentMut =
+        toml::to_string(&BTreeMap::from([(key, entries)]))?.parse()?;
+    document["console"]
+        .as_table_like_mut()
+        .expect("validated console table")
+        .insert(key, value[key].clone());
+    Ok(())
 }
 
 /// Serialize comment-preserving Console writes, including Fleet migration.

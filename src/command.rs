@@ -138,6 +138,11 @@ pub fn start(
 }
 
 impl Started {
+    /// Whether this is the top-level command, not a child Run it started.
+    fn top_level(&self) -> bool {
+        self.started.is_some()
+    }
+
     /// Take note that the command's sessions run on `harness`, which its Run
     /// notification names.
     pub fn built_with(&mut self, harness: &Choice) {
@@ -199,11 +204,12 @@ impl Started {
             eprintln!("{diagnostic}");
         }
         let code = account.show(elapsed);
+        let top_level = self.top_level();
         if let Some(notification) = self.notification {
             notification.finish(&account);
         }
         // Only the top-level Command reports, once its own record is written.
-        if self.started.is_some() {
+        if top_level {
             crate::console::report::after_command();
         }
         code

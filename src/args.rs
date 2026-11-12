@@ -228,6 +228,7 @@ pub struct MetricsArgs {
     /// `--push [<destination>]`: send this machine's trends to its report
     /// destinations, or the one named.
     pub push: bool,
+    /// The one report destination `--push` names, if it names one.
     pub push_to: Option<String>,
 }
 

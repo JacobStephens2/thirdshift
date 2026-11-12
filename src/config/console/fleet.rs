@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item};
 
 use crate::console::Scope;
 
@@ -86,21 +86,12 @@ fn change_entry(name: &str, entry: Option<&Entry>) -> Result<()> {
 }
 
 fn write_document(document: &mut DocumentMut, entries: &[Entry]) -> Result<()> {
-    if !document.contains_key("console") {
-        document["console"] = Item::Table(Table::new());
-    }
-    let table = document["console"]
+    super::write_entries(document, "fleet", entries)?;
+    document["console"]
         .as_table_like_mut()
-        .expect("validated console table");
-    table.remove("other_consoles");
-    let value: DocumentMut = toml::to_string(&Fleet { fleet: entries })?.parse()?;
-    table.insert("fleet", value["fleet"].clone());
+        .expect("written console table")
+        .remove("other_consoles");
     Ok(())
-}
-
-#[derive(Serialize)]
-struct Fleet<'a> {
-    fleet: &'a [Entry],
 }
 
 pub(crate) fn migrate_document(document: &mut DocumentMut, entries: &[Entry]) {

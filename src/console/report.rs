@@ -6,17 +6,18 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::Scope;
+use super::fleet::WhoamiIdentity;
 use crate::args::MetricsArgs;
 use crate::config::{UserConfig, console::report::Destination};
-use crate::logs::metrics::fleet::Report;
+use crate::logs::metrics::fleet::MetricsReport;
 use crate::resend_key::Credentials;
 
 /// How long a push after a Command may wait on each Console.
 const AFTER_COMMAND: Duration = Duration::from_secs(5);
-/// How long `metrics --push` and pairing may wait on each Console.
+/// How long `metrics --push` may wait on each Console.
 const BY_HAND: Duration = Duration::from_secs(10);
 
 pub(crate) enum Action {
@@ -31,7 +32,7 @@ impl Action {
         match args {
             [action, name, address] if action == "add" => {
                 crate::config::console::fleet::validate_name(name)?;
-                super::fleet::pairing_address(address)?;
+                self::address(address)?;
                 Ok(Self::Add {
                     name: name.clone(),
                     address: address.clone(),
@@ -86,55 +87,24 @@ impl Action {
     }
 }
 
-#[derive(Deserialize)]
-struct Whoami {
-    version: u8,
-    api_version: String,
-    identity: Identity,
-    scopes: Vec<Scope>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-enum Identity {
-    Token {
-        holder: String,
-    },
-    #[serde(other)]
-    Other,
-}
-
 /// The Fleet name the receiving Console issued `token` to, once it shows the
 /// token carries `report` alone.
 fn holder(address: &str, token: &str) -> Result<String> {
-    let response = client(BY_HAND)?
-        .get(format!("{}/api/v1/whoami", address.trim_end_matches('/')))
-        .bearer_auth(token)
-        .send()
-        .map_err(|_| anyhow::anyhow!("Console unreachable: {address}"))?;
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        bail!("Console too old: {address} has no /api/v1/whoami");
-    }
-    ensure!(
-        status.is_success(),
-        "report token refused by {address} (HTTP {status})"
-    );
-    let identity: Whoami = response
-        .json()
-        .map_err(|_| anyhow::anyhow!("Console too old or incompatible: invalid whoami response"))?;
-    ensure!(
-        identity.version == 1 && identity.api_version == "v1",
-        "Console too old or incompatible: unsupported whoami version"
-    );
+    let identity = super::fleet::whoami(address, token, "Report destination")?;
     ensure!(
         identity.scopes == [Scope::Report],
         "the token must carry the report scope alone; create it with thirdshift console token create <this machine> --scopes report"
     );
     match identity.identity {
-        Identity::Token { holder } => Ok(holder),
-        Identity::Other => bail!("Console did not name the report token's holder"),
+        WhoamiIdentity::Token { holder } => Ok(holder),
+        WhoamiIdentity::Other => bail!("Console did not name the report token's holder"),
     }
+}
+
+/// A report destination's address, checked as a Fleet pairing's is before a
+/// saved token is sent to it.
+pub(crate) fn address(address: &str) -> Result<reqwest::Url> {
+    super::fleet::token_address(address, "Report destination")
 }
 
 fn client(timeout: Duration) -> Result<reqwest::blocking::Client> {
@@ -209,7 +179,7 @@ fn push(
         return Ok(Vec::new());
     }
     let credentials = Credentials::read()?;
-    let mut report = Report::local(config, asked)?;
+    let mut report = MetricsReport::local(config, asked)?;
     let client = client(timeout)?;
     Ok(destinations
         .into_iter()
@@ -225,10 +195,10 @@ fn send(
     client: &reqwest::blocking::Client,
     credentials: &Credentials,
     destination: &Destination,
-    report: &Report,
+    report: &MetricsReport,
 ) -> Result<()> {
     // Revalidate a hand-edited address before transmitting the saved token.
-    super::fleet::pairing_address(&destination.address)?;
+    address(&destination.address)?;
     let token = credentials
         .report_token(&destination.name)
         .with_context(|| format!("no report token saved for {}", destination.name))?;

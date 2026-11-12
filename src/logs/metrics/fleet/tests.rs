@@ -227,10 +227,12 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
         cached_machine.error.as_deref(),
         Some("no saved snapshot for this view")
     );
-    // Only the snapshot file is left: every write was renamed into place.
+    // Only the snapshot file and its lock are left: every write was renamed
+    // into place.
     let files: Vec<_> = std::fs::read_dir(logs.path().join(CACHE))
         .unwrap()
-        .map(|entry| entry.unwrap().file_name())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_none_or(|extension| extension != "lock"))
         .collect();
     assert_eq!(files.len(), 1, "{files:?}");
 }
@@ -337,13 +339,15 @@ fn a_reported_snapshot_stands_in_for_everyone_and_a_newer_read_for_its_reader() 
         &window(),
     );
     let pushed = Utc::now();
-    let reported = Report {
+    let reported = MetricsReport {
         version: 1,
         machine: "laptop".into(),
         view: view.query.clone(),
         summary: summary("laptop", current, 1, 0),
     };
-    reported.receive(logs.path(), "laptop", pushed).unwrap();
+    reported
+        .receive(logs.path(), "laptop", "here", pushed)
+        .unwrap();
     let read = pushed + chrono::Duration::seconds(5);
     save(
         logs.path(),
@@ -367,18 +371,20 @@ fn a_reported_snapshot_stands_in_for_everyone_and_a_newer_read_for_its_reader() 
     assert_eq!(machine.pushed_at, Some(pushed));
 
     // A report naming another machine, or another kind of view, saves nothing.
-    let other = Report {
+    let other = MetricsReport {
         version: 1,
         machine: "elsewhere".into(),
         view: view.query.clone(),
         summary: summary("elsewhere", current, 1, 0),
     };
-    let refused = other.receive(logs.path(), "laptop", pushed).unwrap_err();
+    let refused = other
+        .receive(logs.path(), "laptop", "here", pushed)
+        .unwrap_err();
     assert!(matches!(
         refused.downcast_ref::<Refusal>(),
         Some(Refusal::Mismatch)
     ));
-    let fleet = Report {
+    let fleet = MetricsReport {
         version: 1,
         machine: "laptop".into(),
         view: "fleet=true".into(),
@@ -386,10 +392,24 @@ fn a_reported_snapshot_stands_in_for_everyone_and_a_newer_read_for_its_reader() 
     };
     assert!(matches!(
         fleet
-            .receive(logs.path(), "laptop", pushed)
+            .receive(logs.path(), "laptop", "here", pushed)
             .unwrap_err()
             .downcast_ref::<Refusal>(),
         Some(Refusal::Invalid(_))
     ));
     assert!(read_saved(&path(logs.path(), "elsewhere", Slot::Reported)).is_none());
+    // Nor does one under this Console's own name, which it never shows.
+    let own = MetricsReport {
+        version: 1,
+        machine: "here".into(),
+        view: view.query.clone(),
+        summary: summary("here", current, 1, 0),
+    };
+    assert!(matches!(
+        own.receive(logs.path(), "here", "here", pushed)
+            .unwrap_err()
+            .downcast_ref::<Refusal>(),
+        Some(Refusal::Invalid(_))
+    ));
+    assert!(read_saved(&path(logs.path(), "here", Slot::Reported)).is_none());
 }

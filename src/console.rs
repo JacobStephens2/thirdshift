@@ -133,7 +133,7 @@ pub(crate) enum Scope {
 
 impl Scope {
     /// The five scopes a person on the sign-in list can hold.
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const PERSON: [Self; 5] = [
         Self::Read,
         Self::Security,
         Self::Act,
@@ -164,7 +164,7 @@ impl Scope {
 
     /// A person's scopes, from a comma-separated list.
     pub(crate) fn parse(value: &str) -> Result<Vec<Self>> {
-        Self::parse_from(value, &Self::ALL)
+        Self::parse_from(value, &Self::PERSON)
     }
 
     /// A token's scopes: a person's, or `report` alone.

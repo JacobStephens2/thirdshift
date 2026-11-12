@@ -14,9 +14,7 @@ use crate::logs::metrics::fleet::{self, FailedCommand, Fleet};
 use crate::logs::metrics::{Bucket, Class, Ending, Stopped, Timeline, Trends};
 
 /// The query keys that are `metrics` filters and window, each a `--<key>` flag.
-const FILTERS: [&str; 10] = [
-    "window", "grain", "from", "through", "repo", "kind", "harness", "model", "version", "account",
-];
+const FILTERS: [&str; 10] = fleet::VIEW_KEYS;
 
 /// The keys a failure drilldown adds to the view's own filters: a Where runs
 /// failed row's stage and category, or a Failed bucket's day, kind and account.
@@ -456,7 +454,7 @@ pub(super) async fn receive(Extension(viewer): Extension<Viewer>, body: Bytes) -
     // Through a Value, as Fleet reads are: a flattened tally's rate cannot
     // be read straight from the bytes.
     let report = serde_json::from_slice::<serde_json::Value>(&body)
-        .and_then(serde_json::from_value::<fleet::Report>);
+        .and_then(serde_json::from_value::<fleet::MetricsReport>);
     let report = match report {
         Ok(report) => report,
         Err(error) => {
@@ -469,31 +467,27 @@ pub(super) async fn receive(Extension(viewer): Extension<Viewer>, body: Bytes) -
     let result = tokio::task::spawn_blocking(move || -> Result<_> {
         let config = UserConfig::load()?;
         let now = chrono::Utc::now();
-        report.receive(&config.logs_dir, &holder, now)?;
+        let local = super::fleet_control::local_name(&config);
+        report.receive(&config.logs_dir, &holder, &local, now)?;
         Ok(serde_json::json!({"machine": holder, "pushed_at": now}))
     })
     .await;
-    match result {
-        Ok(Ok(receipt)) => axum::Json(receipt).into_response(),
+    let error = match result {
+        Ok(Ok(receipt)) => return axum::Json(receipt).into_response(),
         Ok(Err(error)) => match error.downcast_ref::<fleet::Refusal>() {
             Some(refusal @ fleet::Refusal::Mismatch) => {
-                super::api::error(StatusCode::FORBIDDEN, refusal)
+                return super::api::error(StatusCode::FORBIDDEN, refusal);
             }
-            Some(refusal) => super::api::error(StatusCode::UNPROCESSABLE_ENTITY, refusal),
-            None => {
-                eprintln!("thirdshift Console: metrics report not saved: {error:?}");
-                super::api::error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Could not save the metrics report.",
-                )
+            Some(refusal) => {
+                return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, refusal);
             }
+            None => error,
         },
-        Err(error) => {
-            eprintln!("thirdshift Console: metrics report not saved: {error:?}");
-            super::api::error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not save the metrics report.",
-            )
-        }
-    }
+        Err(error) => error.into(),
+    };
+    eprintln!("thirdshift Console: metrics report not saved: {error:?}");
+    super::api::error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Could not save the metrics report.",
+    )
 }
