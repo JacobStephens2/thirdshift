@@ -9,6 +9,7 @@ use crate::args::ReviewArgs;
 use crate::github::review::ReviewPullRequest;
 use crate::review::{Mode, PullRequestUrl, Reservation};
 
+mod admission;
 mod conflicts;
 mod delivery;
 
@@ -43,10 +44,14 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
             let github = GitHub::new();
             let mut selected = None;
             for pr in github.waiting_review_pull_requests(&repo, &author, None)? {
+                if !admission::eligible(&launch, &github, &pr)? {
+                    continue;
+                }
                 if let Some(held) = Reservation::take(&launch, &github, &pr)?
                     && github
                         .waiting_review_pull_requests(&repo, &author, Some(pr.issue.number))?
                         .contains(&pr)
+                    && admission::eligible(&launch, &github, &pr)?
                     && conflicts::eligible(&launch, &github, &pr, &command.flags, &config)?
                 {
                     selected = Some((pr, Some(held)));
