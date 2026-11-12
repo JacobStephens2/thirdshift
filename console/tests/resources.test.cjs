@@ -42,7 +42,7 @@ test('Resources shows admission, reloads limits, supports keyboard navigation an
   assert.match(await page.locator('main').textContent(), /Waiting for host resources/);
   assert.match(await page.locator('main').textContent(), /9007199254740991 MB/);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await writeFile(join(home, '.thirdshift/config.toml'), settings);
+  await writeFile(join(home, '.thirdshift/config.toml'), `${settings}[resources]\nmin_available_disk_mb = 1\n`);
   await page.getByRole('link', { name: 'Reload', exact: true }).click();
   assert.match(await page.locator('main').textContent(), /Ready to start another session/);
   await page.goto(origin);
