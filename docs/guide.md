@@ -3394,6 +3394,11 @@ The Pass selects the first PR with a Merge conflict or CI red on its current
 head. It skips `in-progress` PRs, pending CI without a Merge conflict, and
 mergeable PRs with green or absent CI. It reserves and rechecks each candidate;
 if another machine reserved it first, it continues to the next candidate.
+Before and after reserving, it reads every linked closing issue and skips the
+PR if any carries an `in-progress` Claim, including a Spec or standalone Ticket run
+on another host. The skip names the PR and claimed issue on stderr. A later
+Pass can take the PR after the Claim ends; unreadable links or labels fail
+closed. Explicit PR targets keep their existing behavior.
 Before reserving a candidate, it also checks local worktree registrations,
 including the main checkout and retained worktrees. A checked-out head branch
 is passed over, with the PR URL and occupying path on stderr, so later
