@@ -73,8 +73,7 @@ impl Store {
     }
 
     /// A quota observation supersedes the previous one: it records a wait
-    /// only while the quota is low, and otherwise clears any stored wait. A
-    /// failed probe is observed as exhausted until its fallback reset.
+    /// only while the quota is low, and otherwise clears any stored wait.
     pub fn observe(
         &self,
         account: &Account,

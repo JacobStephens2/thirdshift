@@ -27,14 +27,20 @@ fn setup(scenario: &Scenario) {
     .unwrap();
 }
 
-fn expire_wait(scenario: &Scenario) {
+fn edit_quota_record(scenario: &Scenario, change: impl FnOnce(&mut serde_json::Value)) {
     let path = scenario.path("home/.thirdshift/github-quota.json");
     let mut record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    for wait in record["waits"].as_array_mut().unwrap() {
-        wait["reset_at"] = json!("2000-01-01T00:00:00Z");
-    }
+    change(&mut record);
     std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+}
+
+fn expire_wait(scenario: &Scenario) {
+    edit_quota_record(scenario, |record| {
+        for wait in record["waits"].as_array_mut().unwrap() {
+            wait["reset_at"] = json!("2000-01-01T00:00:00Z");
+        }
+    });
 }
 
 #[test]
@@ -314,28 +320,27 @@ fn a_stored_wait_with_the_reserve_available_does_not_skip_a_pass() {
     let scenario = Scenario::new();
     // A first Pass caches the account beside an empty wait list.
     assert_eq!(scenario.run(&["pickup"]).code, Some(0));
-    let path = scenario.path("home/.thirdshift/github-quota.json");
-    let mut record: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let account = record["identities"][0]["account"].clone();
     // A wait recorded after the window had already reset, as by v0.30.0.
-    record["waits"] = json!([{
-        "host": account["host"],
-        "login": account["login"],
-        "resource": "graphql",
-        "remaining": 4995,
-        "reset_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
-    }]);
-    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    edit_quota_record(&scenario, |record| {
+        let account = record["identities"][0]["account"].clone();
+        record["waits"] = json!([{
+            "host": account["host"],
+            "login": account["login"],
+            "resource": "graphql",
+            "remaining": 4995,
+            "reset_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        }]);
+    });
     let calls = scenario.gh_calls().len();
-    for args in [vec!["pickup"], vec!["status"]] {
+    // `status` reads only the stored record, so it goes first: Pickup's own
+    // probe would clear the wait.
+    for args in [vec!["status"], vec!["pickup"]] {
         let output = scenario.run(&args);
         assert_eq!(output.code, Some(0), "{args:?}: {}", output.stderr);
+        let shown = format!("{}{}", output.stdout, output.stderr);
         assert!(
-            !format!("{}{}", output.stdout, output.stderr).contains("GitHub Quota wait until"),
-            "{args:?}: {}{}",
-            output.stdout,
-            output.stderr
+            !shown.contains("GitHub Quota wait until") && !shown.contains("Inbox reads paused"),
+            "{args:?}: {shown}"
         );
     }
     assert!(

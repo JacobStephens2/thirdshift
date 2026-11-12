@@ -225,7 +225,10 @@ impl GitHub {
                 .and_then(|reset| DateTime::from_timestamp(reset, 0))
                 .unwrap_or(now + chrono::Duration::minutes(15)),
         };
-        // A failed probe leaves no remaining count and so assumes exhaustion.
+        // A failed probe leaves no remaining count and so assumes exhaustion,
+        // observed as a wait until the fallback reset. Below the reserve the
+        // Command waits even for a reset just passed (to it plus the safety
+        // minute), though only a future reset is recorded as a Quota wait.
         let reset = (!quota.reserve_available()).then_some(quota.reset_at);
         let waiting = quota.low(now);
         let record = || -> Result<()> {
