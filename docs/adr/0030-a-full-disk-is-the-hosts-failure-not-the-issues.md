@@ -6,7 +6,7 @@ When thirdshift.app's disk filled (#2091), every Run then on it failed: worktree
 
 So a Run whose failure's cause chain is the OS's error for no space left, or says `No space left on device` as the OS and git word it, ends its **Claim** by releasing it even with work on `origin`. `in-progress` comes off, `ready-for-agent` goes back if the Claim took it off, and no `agent-failed` or Recovery comment is added. Work already pushed stays on `origin` for the next Continuation. The Command log, stderr and Recovery lines say that the host ran out of disk space and that it needs freeing. A Security fix still gets `agent-failed`, since Pickup never takes it and it waits for the Day shift either way.
 
-Two causes never count, because their text is not the factory's own: a failed Harness Session's diagnostic, which the agent can write, and a Spec run's Tickets not done, whose causes can mix a full disk with real failures.
+Three causes never count, because their text is not the factory's own: a failed Harness Session's diagnostic, which the agent can write, a Spec run's Tickets not done, whose causes can mix a full disk with real failures, and a Base fix that ended without merging, whose cause the parent Run reads back as its child's words, which can carry the Base fix agent's diagnostic.
 
 ## Considered Options
 
@@ -16,4 +16,4 @@ Two causes never count, because their text is not the factory's own: a failed Ha
 ## Consequences
 
 - The Failure limit no longer brakes Pickup on a full disk. Instead, the Ready issue settling window delays the retake, and the disk limit from #2091, `resources.min_available_disk_mb`, holds each new session until space is free.
-- Only the text match is shared with the agent's world, and both agent-writable causes are excluded, so an agent cannot release its own failure by printing the message.
+- Only the text match is shared with the agent's world, and the agent-writable causes are excluded, so an agent cannot release its own failure by printing the message.

@@ -140,3 +140,48 @@ fn a_failure_that_is_not_out_of_disk_still_labels_agent_failed() {
         result.stderr
     );
 }
+
+#[test]
+fn a_base_fix_agent_saying_the_disk_is_full_does_not_release_the_run_that_waited_on_it() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    // #7's agent opens its PR with `test` red on its head and on main's tip,
+    // an Inherited failure, so the Run starts a Base fix on #8.
+    scenario.agent_does(
+        r#"
+echo "feature" > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
+gh fake checks "$(git rev-parse HEAD)" '[{"name": "test", "conclusion": "failure"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "failure"}]'
+"#,
+    );
+    // The Base fix's agent fails, its own message naming a full disk.
+    scenario.agent_does_for(
+        8,
+        "printf 'npm test failed: ENOSPC: No space left on device' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\nexit 3\n",
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("No space left on device"),
+        "stderr: {}",
+        result.stderr
+    );
+    // The agent's words are not the host's: the Run failed with work on
+    // origin, so its issue waits for the Day shift.
+    assert_eq!(
+        scenario.issue_labels(7),
+        ["agent-failed"],
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains(OUT_OF_DISK),
+        "stderr: {}",
+        result.stderr
+    );
+}

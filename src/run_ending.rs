@@ -307,6 +307,9 @@ pub struct Cause {
     triage_publication: Vec<crate::issue::IssueUrl>,
     /// Only title and link may leave the machine for a private Triage failure.
     private_triage_notification: Option<String>,
+    /// The host running out of disk space caused it, by its error's own
+    /// layers, not by words its agent can write.
+    out_of_disk: bool,
 }
 
 impl Cause {
@@ -323,6 +326,7 @@ impl Cause {
             private_triage_notification: error
                 .downcast_ref::<crate::triage::PrivateFindingTriage>()
                 .map(|triage| triage.notification.clone()),
+            out_of_disk: crate::failed_run::out_of_disk(error),
         }
     }
 
@@ -616,7 +620,7 @@ impl Shown {
         steps.extend(account.advice.iter().map(Advice::to_string));
         if let Err(cause) = &account.ended
             && account.pre_audit_failure.is_none()
-            && crate::failed_run::says_out_of_disk(cause.full())
+            && cause.out_of_disk
         {
             steps.push(crate::failed_run::OUT_OF_DISK.to_string());
         }

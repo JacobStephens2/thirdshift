@@ -91,12 +91,14 @@ pub const OUT_OF_DISK: &str =
 /// cause chain is the OS's error for no space left, or says so as the OS and
 /// git word it, as a failed `git` command's output does. Such a failure is
 /// the host's, not its issue's. A failed Harness Session's diagnostic is the
-/// agent's to write, and a Spec run's Tickets not done can mix causes, so a
-/// chain with either is never the host's.
+/// agent's to write, and a Spec run's Tickets not done can mix causes, as can
+/// a Base fix's ending, which can carry its agent's words, so a chain with
+/// any of them is never the host's.
 pub fn out_of_disk(error: &anyhow::Error) -> bool {
     let unowned = error.chain().any(|layer| {
         layer.is::<crate::harness::interpretation::SessionFailure>()
             || layer.is::<crate::spec_run::TicketsNotDone>()
+            || layer.is::<crate::base_fix::ChildEnded>()
     });
     !unowned
         && error.chain().any(|layer| {
@@ -109,7 +111,7 @@ pub fn out_of_disk(error: &anyhow::Error) -> bool {
 
 /// Whether the rendered cause `text` says the host ran out of disk space, as
 /// the OS and git word it.
-pub fn says_out_of_disk(text: &str) -> bool {
+fn says_out_of_disk(text: &str) -> bool {
     text.contains("No space left on device")
 }
 
