@@ -249,7 +249,11 @@ fn slow_step_two_wakes_the_inbox_at_the_minimum_overrun_without_file_changes() {
         .unwrap();
     let mut stream = BufReader::new(response);
     loop {
-        assert!(sse_event(&mut stream).contains("event: commands"));
+        let event = sse_event(&mut stream);
+        if event.starts_with(':') {
+            continue;
+        }
+        assert!(event.contains("event: commands"), "{event}");
         let page = console.get("/").text().unwrap();
         if page.contains("data-state=\"Slow\"") {
             assert!(page.contains("favicon-urgent.svg"), "{page}");
