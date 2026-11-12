@@ -44,7 +44,7 @@ pub fn run(
         base,
     } = match launch::start(base, config.command_limit, Sharing::UpToTheLimit)? {
         Start::Clear(launch) => launch,
-        Start::AlreadyRunning(running) => return Ok(skipped(&running.repo, &running)),
+        Start::NotAdmitted(running) => return Ok(skipped(&running.repo, &running)),
     };
     let failed = crate::pickup::failures(&mut LaunchAndGitHub {
         launch: directory.git(),
@@ -102,7 +102,13 @@ pub fn run(
             continue;
         }
         crate::progress::step(format!("triaging {}", issue.url));
-        logs::started(Work::TriageRun(&repo), harness);
+        logs::started(
+            Work::TriageRun {
+                repo: &repo,
+                issue: Some(issue),
+            },
+            harness,
+        );
         base.pull();
         let mut origin = Some(origin);
         let claim = if options.recommend_only {

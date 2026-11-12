@@ -1267,10 +1267,7 @@ impl InboxPage {
     }
 
     fn urgent(&self) -> bool {
-        self.inbox.sections[0]
-            .rows
-            .iter()
-            .any(|row| row.state != "Slow")
+        !self.inbox.sections[0].rows.is_empty()
     }
 
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {

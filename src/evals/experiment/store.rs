@@ -80,6 +80,12 @@ pub(crate) struct View {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Details {
     #[serde(default)]
+    pub waiting_for: Vec<String>,
+    #[serde(default)]
+    pub no_wait: bool,
+    #[serde(default)]
+    pub commands_at_start: usize,
+    #[serde(default)]
     pub baseline_ref: Option<String>,
     #[serde(default)]
     pub candidate_ref: Option<String>,
@@ -95,6 +101,18 @@ pub(crate) struct Details {
     pub command_log: Option<PathBuf>,
     #[serde(default)]
     pub release: bool,
+}
+
+impl Details {
+    pub(crate) fn contention(&self) -> Option<String> {
+        self.no_wait.then(|| {
+            format!(
+                "Started with --no-wait: {} other Command{} live at start",
+                self.commands_at_start,
+                if self.commands_at_start == 1 { "" } else { "s" }
+            )
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -526,6 +544,15 @@ impl Stored {
                 .verdict
                 .as_ref()
                 .map_or(String::new(), |verdict| verdict.selection_report());
+            if !view.details.waiting_for.is_empty() {
+                selection.push_str(&format!(
+                    "\nWaiting for Commands: {}",
+                    view.details.waiting_for.join(", ")
+                ));
+            }
+            if let Some(contention) = view.details.contention() {
+                selection.push_str(&format!("\n{contention}"));
+            }
             if self.description.baseline.process.is_some()
                 || self.description.candidate.process.is_some()
             {

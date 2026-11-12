@@ -265,6 +265,19 @@ fn slow_uses_the_repositorys_last_thirty_records_and_escalates_at_twice_the_top(
         let status = run.status();
         assert_eq!(status["health"]["state"], "slow", "{status}");
         assert_eq!(status["health"]["step"], step);
+        assert_eq!(
+            status["group"],
+            if step == 1 { "working" } else { "needs you" },
+            "{status}"
+        );
+        assert_eq!(
+            status["needs_you_kind"],
+            if step == 1 {
+                Value::Null
+            } else {
+                json!("slow")
+            }
+        );
         let shown = run.scenario.run(&["show", "widgets#7", "--json"]);
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
         let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
@@ -305,7 +318,7 @@ fn slow_leaves_out_suspended_time_without_resetting_work_before_wake() {
             assert_eq!(status["health"]["multiple"], multiple, "{status}");
             assert_eq!(
                 status["group"],
-                if health == "ok" {
+                if step != json!(2) {
                     if stage == "CI watch" {
                         "landing"
                     } else {

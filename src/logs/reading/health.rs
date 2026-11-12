@@ -9,6 +9,9 @@ use super::Command;
 use crate::logs::command_record::StageName;
 use crate::logs::usual_range::{UsualRange, UsualRanges};
 
+const SLOW_ESCALATION_MULTIPLE: f64 = 2.0;
+const SLOW_MINIMUM_OVERRUN_SECONDS: f64 = 5.0 * 60.0;
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub(in crate::logs) enum Health {
@@ -86,22 +89,22 @@ pub(super) fn observe(
                     .current_stage()
                     .map_or(0, |stage| stage.suspended_seconds),
             );
-            if let Some(range) = ranges.get(&command.record.repository, &stage.name) {
-                // The first Slow step starts strictly above the upper range;
-                // the second starts at twice that range, on sampled seconds.
-                for threshold in [
-                    range.upper_seconds.floor() as u64 + 1,
-                    (range.upper_seconds * 2.0).ceil() as u64,
-                ] {
+            if let Some(range) = command
+                .record
+                .current_stage()
+                .and_then(|underlying| ranges.get(&command.record.repository, &underlying.name))
+            {
+                // Step 2 requires both twice the upper range and five minutes
+                // past it. Use the same sampled-second boundary for health and waking.
+                let step_two = (range.upper_seconds * SLOW_ESCALATION_MULTIPLE)
+                    .max(range.upper_seconds + SLOW_MINIMUM_OVERRUN_SECONDS)
+                    .ceil() as u64;
+                for threshold in [range.upper_seconds.floor() as u64 + 1, step_two] {
                     schedule_transition(&mut next_change, now, threshold, age);
                 }
                 if age as f64 > range.upper_seconds {
                     command.health = Some(Health::Slow {
-                        step: if age as f64 >= range.upper_seconds * 2.0 {
-                            2
-                        } else {
-                            1
-                        },
+                        step: if age >= step_two { 2 } else { 1 },
                         usual_range: range,
                         multiple: (age as f64 / range.upper_seconds.max(1.0)).floor() as u64,
                     });

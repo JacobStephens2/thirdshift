@@ -357,7 +357,8 @@ impl<'a> Account<'a> {
                     .unwrap_or(match &reached.resolution {
                         crate::run::Resolution::NotReproduced { .. } => "bug not reproduced",
                         crate::run::Resolution::PullRequest { .. }
-                        | crate::run::Resolution::ArchitectureReview { .. } => "succeeded",
+                        | crate::run::Resolution::ArchitectureReview { .. }
+                        | crate::run::Resolution::BaseCiUnchanged { .. } => "succeeded",
                     }),
                 ended: Ok(match &reached.resolution {
                     crate::run::Resolution::PullRequest { url, goal } => {
@@ -368,6 +369,9 @@ impl<'a> Account<'a> {
                     }
                     crate::run::Resolution::ArchitectureReview { reason, .. } => {
                         format!("Architecture review ended: {reason}")
+                    }
+                    crate::run::Resolution::BaseCiUnchanged { base, commit, .. } => {
+                        format!("CI-fix found nothing to change on {base} at {commit}")
                     }
                 }),
                 interrupted: false,
@@ -385,7 +389,8 @@ impl<'a> Account<'a> {
                         dispatched: None,
                     }),
                     crate::run::Resolution::PullRequest { .. }
-                    | crate::run::Resolution::NotReproduced { .. } => None,
+                    | crate::run::Resolution::NotReproduced { .. }
+                    | crate::run::Resolution::BaseCiUnchanged { .. } => None,
                 },
                 security_findings: None,
                 security_findings_waiting: false,
@@ -586,10 +591,15 @@ impl Shown {
         match &account.ended {
             // Also on stderr, so the outcome shows even when stdout is captured.
             Ok(line) => steps.push(line.clone()),
-            Err(cause) => steps.push(cause.full().to_string()),
+            Err(cause) => steps.push(
+                account
+                    .pre_audit_failure
+                    .unwrap_or_else(|| cause.full())
+                    .to_string(),
+            ),
         }
         steps.extend(account.advice.iter().map(Advice::to_string));
-        if account.ended.is_err() {
+        if account.ended.is_err() && account.pre_audit_failure.is_none() {
             if let Some(log) = account.log {
                 steps.push(format!("{SESSION_LOG}{}", log.display()));
             }

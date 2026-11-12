@@ -49,6 +49,7 @@ _Avoid_: Claim limit (former name), WIP limit, concurrency (it counts issues wai
 
 **Command limit**:
 The number of live **Commands** on one repository on one machine at which a **Pass** there is skipped, set in the **User config**, one by default. Every live Command counts, a Ticket run started by hand on an **Issue URL** included, together with the Spec run or Ticket run each Pass dispatched, but only a Pass is ever skipped for it: a Command a person types always runs. Passes of different kinds may run side by side up to the limit, but never two **Architect runs** or two **Security runs** on one repository at once. It counts no other repository; load across a machine is the **User config**'s memory and load waits.
+An Experiment independently holds back every Pass of its OS account across the machine's repositories, including while it waits for live Runs to end.
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
@@ -107,6 +108,9 @@ _Avoid_: invocation, job
 A **Command** that stopped at a plan-limit warning or rejection, with outcome `paused`: an **Experiment** or **Scoring run**. Its **Command record** keeps the stopping Harness and window, utilization and reset time when reported, and the command that resumes it. It waits in **Needs you** as Paused until a later Command resumes the same work or the Day shift makes a **Dismissal**. Resuming continues the same work with finished Trials and Scores kept and nothing finished repeated. This is separate from interruption, is neither success nor failure, and does not resume automatically.
 _Avoid_: failed Command (for a plan-limit pause)
 
+**Quota wait**:
+The time until GitHub's quota for a GitHub user resets, during which **Passes** are skipped and running **Commands** wait instead of failing.
+
 **Ticket run**:
 One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, normally ending in one pull request ready for review, or a **Self-merge** when its command or the **User config** asks for one. A Ticket run on an issue labelled `bug` reproduces the bug before fixing it, in a fresh Ticket run or a **Continuation**, except for **Flaky-test Tickets**, Security fixes and **Base fixes**, which have their own flow. A Continuation whose **Issue branch** has commits beyond the **Base branch** reproduces at their merge base, then checks the fix on the branch; a fix already there still goes on to review and the pull request. If the bug is not reproduced, including when it is absent at that merge base, the Ticket run ends successfully with triage notes and `needs-info` on the issue, without opening or merging a pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, by a **Pickup run** for the **Ready issue** it took, or by a **Security run** for a **Security finding** it fixes. Every Ticket run carries out a **Process**: the **Built-in process** by default, or a **Custom process** selected by the Process that starts it. That Process owns its sequence of Steps. Dispatch chooses Spec or Ticket and makes any Claim before work starts; child Ticket runs inherit their Command's choices and limits.
 _Avoid_: Run, Merge run (former names), auto-merge (GitHub's own feature)
@@ -120,7 +124,7 @@ _Avoid_: batch run, spec implementation
 
 **Review run**:
 One invocation of the factory on an open pull request by a **Trusted account**, reviewing its change on the Standards and Spec axes against its own base in a **Worktree** on its head branch. With `--recommend-only`, it posts its findings without changing the branch, ends with a **Run notification** and waits in the **Inbox** under Ready for review until the pull request is merged or closed.
-Started with `--author`, it is a **Pass** taking that author's lowest-numbered eligible waiting pull request, skipping reviewed or pushed heads, `in-progress` pull requests and those based on another open pull request whose current head is unreviewed; every Review run reserves its pull request with `in-progress` until it ends.
+Started with `--author`, it is a **Pass** taking that author's lowest-numbered eligible waiting pull request, skipping reviewed or pushed heads, `in-progress` pull requests, those with a linked closing issue held by a **Claim** or a reservation, and those based on another open pull request whose current head is unreviewed; every Review run reserves its pull request with `in-progress` until it ends.
 _Avoid_: PR review (GitHub's feature), code review run
 
 **Fix run**:
@@ -144,7 +148,8 @@ One **Command** that investigates a **Report** or an existing open issue by a **
 _Avoid_: intake
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, a **Triage run** started with neither a **Report** nor an **Issue URL**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass. Every Pass is skipped while an **Experiment** is live on its machine, including one still waiting for live Runs to end.
+An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, a **Triage run** started with neither a **Report** nor an **Issue URL**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
+Every Pass is skipped while an **Experiment** is live on its machine for the same OS account, including one still waiting for live Runs to end. A Command started on an Issue URL still runs, with a warning that it competes with the Experiment's Trials.
 _Avoid_: tick, cycle
 
 **Process**:
@@ -295,14 +300,14 @@ The token counts and cost reported in one **Session trace**, grouped by observed
 A **Command**'s whole tree of work, its child **Ticket runs** and all of their **Session traces** included. Their shared identity keeps the tree together across sessions.
 
 **Command log**:
-Everything one **Ticket run**, **Spec run**, **Architect run**, **Pickup run**, **Security run** or **Custom process** printed, kept in a file of its own with its repository's other logs, stamped like its **Session traces**. The start stamp is for display and grouping; Commands with the same start time still have distinct storage ownership for their Command logs, Session traces and **Command records**. An Architect run's, Pickup run's, Security run's or Custom process's covers the Spec runs or Ticket runs it dispatched, and a Spec run's covers its **Ticket runs**, as a Ticket run's covers its **Base fix**: none of those keeps one of its own. It is kept once the command starts work: a Pickup run, Architect run or Security run skipped before doing any work keeps none, and neither does a Ticket run that fails before it starts work, such as on **Origin match**.
+Everything one **Ticket run**, **Spec run**, **Architect run**, **Pickup run**, **Security run** or **Custom process** printed, kept in a file of its own with its repository's other logs, stamped like its **Session traces**. The start stamp is for display and grouping; Commands with the same start time still have distinct storage ownership for their Command logs, Session traces and **Command records**. An Architect run's, Pickup run's, Security run's or Custom process's covers the Spec runs or Ticket runs it dispatched, and a Spec run's covers its **Ticket runs**, as a Ticket run's covers its **Base fix**: none of those keeps one of its own. It is kept once the command starts work, or earlier when a **Quota wait** needs a visible, stoppable Command record. Without such a wait, a Pickup run, Architect run or Security run skipped before doing any work keeps none, and neither does a Ticket run that fails before it starts work, such as on **Origin match**.
 _Avoid_: cron log, output log, run log (a **Ticket run** is one kind of command)
 
 **Log inventory**:
 The retained Command logs and Session traces available to list on a machine, each naming an exact file under the User config's log folder. A Command's referenced Session traces may include files outside that inventory.
 
 **Activity log**:
-One running record per repository of what the factory did there: a line when a **Ticket run**, **Spec run**, **Architect run**, **Pickup run**, **Security run**, **Triage run** or **Custom process** starts work, naming its **Command log**, a line when it is given a **Stop** or a **Dismissal**, or a Dismissal is taken back, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A Custom process's lines name it as Process `<name>`. A skipped Architect run, Pickup run, Security run or Triage Pass writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. A skipped Custom process started with no issue writes `Process <name> skipped: <reason>` when that is not already the last Process line. A warning about the **User config**, such as a setting it ignores, is written once per change. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
+One running record per repository of what the factory did there: a line when a **Ticket run**, **Spec run**, **Architect run**, **Pickup run**, **Security run**, **Triage run** or **Custom process** starts work, naming its **Command log**, a line when it is given a **Stop** or a **Dismissal**, or a Dismissal is taken back, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A Custom process's lines name it as Process `<name>`. A skipped Architect run, Pickup run, Security run or Triage Pass writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. A skipped Custom process started with no issue writes `Process <name> skipped: <reason>` when that is not already the last Process line. During a **Quota wait**, each named Custom process compares its own last reason instead, so alternating processes do not repeat an unchanged quota skip. A warning about the **User config**, such as a setting it ignores, is written once per change. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
 _Avoid_: cron log, pass log, history
 
 **Command record**:
@@ -327,7 +332,7 @@ A **Command** owned by another OS account on the same machine, included by choic
 _Avoid_: remote Command, shared Command
 
 **Fleet**:
-The machines one **Console** shows: its own, and each machine its **User config** lists that has given it access. From the Console, the **Day shift** can see and do on each of them whatever that machine's own Console offers. A machine listed without access is only a link to its Console.
+The machines one **Console** shows: its own, each machine its **User config** lists that has given it access, and any machine permitted to report to it. From the Console, the **Day shift** can see and do on each reachable machine whatever that machine's own Console offers, while a machine that only reports outward is read-only there and one listed without access is only a link to its Console.
 _Avoid_: cluster, network, hosts
 
 **Stop**:
@@ -347,7 +352,7 @@ The **Console**'s first page, and `thirdshift status`'s order: a machine's **Com
 _Avoid_: dashboard, feed, queue
 
 **Needs you**:
-The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** then **Slow** Ticket runs, and then the ended ones: a Command that died, one that failed, a **Paused Command**, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves once GitHub shows it settled: its issue closed or its pull request merged, or those of the Spec run or Ticket run it dispatched, or, for a Stop, `needs-triage` taken off, or, for findings, none still waiting. It also leaves when a later Command on the same issue or pull request starts on the machine, a **Fix run** included, even without a linked issue. Age clears only one GitHub can't speak for, such as a Command with no issue or pull request, once it is older than the period the **User config** sets. Any of them, live or ended, leaves on a **Dismissal**.
+The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** Ticket runs, then **Slow** ones that have run twice their **Usual range**, and then the ended ones: a Command that died, one that failed, a **Paused Command**, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves once GitHub shows it settled: its issue closed or its pull request merged, or those of the Spec run or Ticket run it dispatched, or, for a Stop, `needs-triage` taken off, or, for findings, none still waiting. It also leaves when a later Command on the same issue or pull request starts on the machine, a **Fix run** included, even without a linked issue. Age clears only one GitHub can't speak for, such as a Command with no issue or pull request, once it is older than the period the **User config** sets. Any of them, live or ended, leaves on a **Dismissal**.
 _Avoid_: alerts, attention, triage queue
 
 **Silent**:
@@ -355,7 +360,7 @@ A live **Ticket run** whose **Session trace** and **Command log** have both stop
 _Avoid_: stalled, stuck, hung
 
 **Slow**:
-A live **Ticket run** whose stage has gone past the top of that stage's **Usual range**, not counting **Suspended time**, while its logs keep growing. It is still working; it only needs a look, unlike a **Silent** one.
+A live **Ticket run** whose stage has gone past the top of that stage's **Usual range** while its logs keep growing. It is still working, so it shows on its row in Working or Landing; only once it reaches twice that top, and at least five minutes past it, does it enter **Needs you**.
 _Avoid_: late, overdue, stalled
 
 **Suspended time**:
@@ -429,7 +434,7 @@ What a **Grader** decides about one **Trial** against its **Eval task**'s succes
 _Avoid_: grade, rating, feedback
 
 **Experiment**:
-The **Command** that compares a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a **Bar** fixed before it starts, and ends in a **Verdict**. It shows whether the change makes the agents better or worse before it reaches production.
+The **Command** that compares a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a **Bar** fixed before it starts, and ends in a **Verdict**. It waits for the same OS account's other live Commands on its machine before starting Trials, including on resume; the Day shift can bypass the wait, with the number of competing Commands recorded beside the Verdict.
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
@@ -445,8 +450,8 @@ The weekly **Command** that evaluates production work. A **Grader** gives **Scor
 _Avoid_: grading run, tasting, production monitoring
 
 **Run metrics**:
-What a **Ticket run**'s **Command record** and **Session traces** show about how it went, such as its outcome, **Repairs**, CI rounds, **Unaddressed findings**, stage times, tokens and tool errors. Each is kept apart, never combined into one number.
-_Avoid_: Run score, KPI
+What a completed **Command**'s **Command record** and **Session traces** show about how it went, such as its outcome, **Repairs**, CI rounds, **Unaddressed findings**, stage times, tokens and tool errors. Each is kept apart, never combined into one number.
+_Avoid_: Run score, KPI, health score
 
 **Bug origin**:
 The pull request that introduced a bug, and the **Ticket run** that made it if a Ticket run did, as a session proposed it and the **Day shift** confirmed it.

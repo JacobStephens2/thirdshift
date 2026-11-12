@@ -20,6 +20,9 @@ Model names and Void causes) vary with the Experiment. Unknown measurements are
 `null`, never zero. Timestamps are RFC 3339 strings; paths are JSON strings local
 to the machine retaining the Experiment.
 
+Format 11 adds `waiting_for`, `no_wait` and `commands_at_start`: the live host
+wait and the number of other live Commands at a start using `--no-wait`.
+
 The private `experiment.json` already has `format: 1`. The CLI view projects its
 metadata and retained evidence; it is not a copy of that internal storage file.
 Older CLI builds without a `format` field predate this documented contract.
@@ -212,6 +215,13 @@ change in any state without changing the Experiment's identity, Bar or results.
 `release` records whether `--release` has run for this Experiment and remains
 true on later resumes. These fields do not participate in Experiment identity
 or the Bar.
+
+`waiting_for` lists the other live Commands this invocation is waiting for on
+the same machine and OS account; it is empty outside that wait. `no_wait` says
+whether the latest invocation bypassed the wait. `commands_at_start` counts its
+other live Commands at startup with `--no-wait`, zero otherwise. These facts
+are saved on each start or resume and displayed beside the Verdict; older
+Experiments default to an empty list, false and zero.
 
 `running_trials` gives active Trial IDs and start times. `sessions` inventories
 retained Trial Sessions: opaque Session ID, Trial ID, zero-based attempt index
@@ -467,6 +477,9 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "resume_command": "string?",
     "command_log": "string?",
     "release": "boolean",
+    "waiting_for": ["string"],
+    "no_wait": "boolean",
+    "commands_at_start": "integer",
     "created_at": "string",
     "tasks": [{"suite": "string", "name": "string"}],
     "running_trials": [{"id": "string", "started_at": "string"}],

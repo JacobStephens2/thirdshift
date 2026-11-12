@@ -21,6 +21,9 @@ mod recovery;
 #[path = "release/ancestry.rs"]
 mod ancestry;
 
+#[path = "release/checks.rs"]
+mod checks;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -230,7 +233,19 @@ impl Release {
         let cargo = release.bin().join("cargo");
         write_executable(
             &cargo,
-            "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$THIRDSHIFT_TEST_BINARY\" \"$@\"\n",
+            r#"#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+if [ "$1" = fix ]; then
+    printf '%s\n' "$*" >> "$FAKE_GH_STATE.fix-calls"
+    if [ -f "$FAKE_GH_STATE.fix" ]; then
+        exec bash "$FAKE_GH_STATE.fix" "$@"
+    fi
+    echo 'No simulated Fix repair configured' >&2
+    exit 1
+fi
+exec "$THIRDSHIFT_TEST_BINARY" "$@"
+"#,
         );
         fs::create_dir(root.join("home")).unwrap();
         fs::write(
@@ -918,6 +933,37 @@ fn a_failed_bump_merge_keeps_the_tag_and_finishes_publishing() {
     assert!(err.contains("release still stands"), "{err}");
     assert!(err.contains(pr["url"].as_str().unwrap()), "{err}");
     assert!(err.contains(&release_url()), "{err}");
+}
+
+/// The 0.29.0 recovery: the PR turned draft after its head was validated,
+/// so the merge after publication failed. The warning names that blocker.
+#[test]
+fn a_draft_bump_pr_after_publication_names_the_ready_step() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.gh(&[
+        "fake",
+        "on-merge",
+        "1",
+        "gh fake pr release-0.2.0 isDraft true",
+    ]);
+    release.gh(&[
+        "fake",
+        "refuse-merges",
+        "1",
+        "GraphQL: Pull Request is still a draft (mergePullRequest)",
+    ]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let pr = release.pr("release-0.2.0");
+    assert_eq!(pr["state"], "OPEN");
+    let url = pr["url"].as_str().unwrap();
+    let err = stderr(&output);
+    assert!(err.contains("release still stands"), "{err}");
+    assert!(err.contains(&format!("{url} is a draft")), "{err}");
+    assert!(err.contains(&format!("gh pr ready {url}")), "{err}");
 }
 
 #[test]
@@ -2309,7 +2355,14 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
     let pr = release.pr("release-0.2.0");
     assert_eq!(pr["state"], "MERGED");
-    assert_eq!(pr["body"], "Summary from the first run");
+    // A legacy PR without a notes-base marker gets a verified summary once.
+    assert!(pr["body"].as_str().unwrap().contains(AGENT_SUMMARY));
+    assert!(
+        pr["body"]
+            .as_str()
+            .unwrap()
+            .contains("release-content-base:")
+    );
     assert_eq!(release.pr_head("release-0.2.0"), head);
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);

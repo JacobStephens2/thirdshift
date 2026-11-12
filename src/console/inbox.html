@@ -63,6 +63,7 @@
       {% endif %}
     </section>
     {% endif %}
+    {% match inbox.github_quota_wait %}{% when Some with (wait) %}<p class="github-quota-wait" role="status">{{ wait }}</p>{% when None %}{% endmatch %}
     {% for section in inbox.sections %}
     <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.in_overview(section.group) %} data-overview{% endif %}{% if !self.shown(section.group) %} hidden{% endif %} open>
       <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>

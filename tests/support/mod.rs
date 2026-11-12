@@ -621,6 +621,18 @@ impl Scenario {
         self.run_from_until(&self.launch_dir(), args, env, started)
     }
 
+    /// Start a Command whose observable wait may precede any fake session.
+    pub fn start(&self, args: &[&str], env: &[(&str, &str)]) -> HeldRun {
+        let mut command = self.command(args);
+        command.envs(env.iter().copied());
+        HeldRun {
+            child: self
+                .runs
+                .spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped())),
+            exited: false,
+        }
+    }
+
     /// Hold a Run from another clone, sharing this scenario's origin and GitHub.
     pub fn run_from_until(
         &self,

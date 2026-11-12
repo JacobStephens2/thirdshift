@@ -2430,7 +2430,7 @@ dependencies = [
 
 [[package]]
 name = "thirdshift"
-version = "0.28.1"
+version = "0.29.2"
 dependencies = [
  "anyhow",
  "argon2",
