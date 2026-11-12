@@ -213,17 +213,24 @@ pub struct EarlierSteps<'a> {
     pub first: bool,
 }
 
-/// Remote-tracking ref for `base`. Fully qualified so revision parsing cannot
-/// prefer a local branch or tag named `origin/<base>` over the published base.
-fn origin_base_ref(base: &str) -> String {
-    format!("refs/remotes/origin/{base}")
+/// Revision that names the fixed point `base`. A Base branch becomes its
+/// remote-tracking ref, fully qualified so revision parsing cannot prefer a
+/// local branch or tag named `origin/<base>` over the published base. A full
+/// commit object ID (SHA-1 or SHA-256) is already a revision, so it is named
+/// as it is.
+fn fixed_point_revision(base: &str) -> String {
+    if matches!(base.len(), 40 | 64) && base.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        base.to_string()
+    } else {
+        format!("refs/remotes/origin/{base}")
+    }
 }
 
 /// The sentence a Continuation uses so the session builds on existing commits.
 fn continuing_work(branch: &str, base: &str) -> String {
     format!(
         "You are continuing work on branch {branch}, which already has commits (see git log {fixed}..HEAD). Build on them; don't start over.",
-        fixed = origin_base_ref(base),
+        fixed = fixed_point_revision(base),
     )
 }
 
@@ -385,7 +392,7 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
-        fixed = origin_base_ref(base),
+        fixed = fixed_point_revision(base),
         issue_file_instruction = issue_file_instruction(issue),
         number = issue.number,
         address_findings = review.address_findings(),
@@ -442,7 +449,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
-        fixed = origin_base_ref(base),
+        fixed = fixed_point_revision(base),
         continuing = continuing_work(branch, base),
         issue_file_instruction = issue_file_instruction(issue),
         number = issue.number,
@@ -520,7 +527,7 @@ pub fn pull_request_review(
         After addressing findings (after reviewing in --recommend-only), {validation}\n\
         {earlier_text}\n{HEADLESS}",
         url = pr.url,
-        fixed = origin_base_ref(base),
+        fixed = fixed_point_revision(base),
         validation = review_validation_instructions(commands),
         earlier_text = earlier_step_results(earlier)
     )
@@ -605,7 +612,7 @@ pub fn code_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
          {issue_file_instruction}\n\
          {HEADLESS}",
         url = issue.url,
-        fixed = origin_base_ref(base),
+        fixed = fixed_point_revision(base),
         issue_file_instruction = issue_file_instruction(issue),
     )
 }
@@ -636,7 +643,7 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = spec.url,
-        fixed = origin_base_ref(base),
+        fixed = fixed_point_revision(base),
         issue_file_instruction = issue_file_instruction(spec),
         number = spec.number,
         address_findings = review.address_findings(),
@@ -1149,6 +1156,38 @@ mod tests {
     }
 
     #[test]
+    fn commit_review_fixed_points_name_the_commit() {
+        let pr =
+            crate::review::PullRequestUrl::parse("https://github.com/acme/widgets/pull/8").unwrap();
+        for base in ["9ce638c7".repeat(5), "9ce638c7".repeat(8)] {
+            for mode in [
+                crate::review::Mode::Address,
+                crate::review::Mode::RecommendOnly,
+            ] {
+                let prompt = pull_request_review(
+                    &pr,
+                    &base,
+                    mode,
+                    &[],
+                    EarlierSteps {
+                        results: &[],
+                        first: true,
+                    },
+                );
+                assert!(
+                    prompt.starts_with(&format!("/thirdshift-code-review {base}\n")),
+                    "{prompt}"
+                );
+                assert!(
+                    prompt.contains(&format!("using {base} as the fixed point")),
+                    "{prompt}"
+                );
+                assert!(!prompt.contains("refs/remotes/origin/"), "{prompt}");
+            }
+        }
+    }
+
+    #[test]
     fn base_branch_review_fixed_points_use_origin() {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let pr =
@@ -1183,15 +1222,13 @@ mod tests {
             ] {
                 assert!(
                     prompt.contains(&format!(
-                        "using {} as the fixed point",
-                        origin_base_ref(base)
+                        "using refs/remotes/origin/{base} as the fixed point"
                     )),
                     "{prompt}"
                 );
                 if prompt.starts_with("/thirdshift-code-review ") {
                     assert!(prompt.starts_with(&format!(
-                        "/thirdshift-code-review {}",
-                        origin_base_ref(base)
+                        "/thirdshift-code-review refs/remotes/origin/{base}"
                     )));
                 }
             }
