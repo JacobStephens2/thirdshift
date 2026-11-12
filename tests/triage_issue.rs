@@ -436,7 +436,7 @@ fn issue_outcomes_preserve_the_target_body_and_publish_one_comment() {
         scenario.write_gh_state(&before);
         let mut recommendation: serde_json::Value = serde_json::from_str(RECOMMENDATION).unwrap();
         recommendation["state"] = json!(state);
-        if state == "needs-info" || state == "ready-for-human" {
+        if state == "needs-info" {
             recommendation["issues"][0]["questionnaire"] = json!("Which cache is affected?");
         }
         if state == "wontfix" {
@@ -456,7 +456,7 @@ fn issue_outcomes_preserve_the_target_body_and_publish_one_comment() {
             after["issues"]["7"],
             if state == "wontfix" { "CLOSED" } else { "OPEN" }
         );
-        if state == "needs-info" || state == "ready-for-human" {
+        if state == "needs-info" {
             let body = after["comments"]["7"][0].as_str().unwrap();
             assert!(
                 body.contains("## Questionnaire\n\nWhich cache is affected?"),

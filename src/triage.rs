@@ -230,6 +230,10 @@ fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
         INCOMPLETE
     );
     for issue in &mut recommendation.issues {
+        issue.questionnaire = issue
+            .questionnaire
+            .take()
+            .filter(|text| !text.trim().is_empty());
         ensure!(
             !issue.title.trim().is_empty()
                 && !issue.body.trim().is_empty()
@@ -251,7 +255,7 @@ fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
         } else {
             recommended
         };
-        let needs_answer = triaged == labels::NEEDS_INFO || triaged == labels::READY_FOR_HUMAN;
+        let needs_answer = triaged == labels::NEEDS_INFO;
         ensure!(
             if needs_answer {
                 issue
@@ -261,7 +265,7 @@ fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
             } else {
                 issue.questionnaire.is_none()
             },
-            "the Triage questionnaire is required only for needs-info or ready-for-human issues: {}",
+            "the Triage questionnaire is required only for needs-info issues: {}",
             issue.title
         );
         issue.triaged = Some(triaged);

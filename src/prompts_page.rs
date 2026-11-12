@@ -273,7 +273,7 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::triage_correction(
                 &prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
                 Some("Triage recommendation: <rejected JSON>"),
-                "the Triage questionnaire is required only for needs-info or ready-for-human issues: <issue title>",
+                "the Triage questionnaire is required only for needs-info issues: <issue title>",
             ),
         },
         Prompt {

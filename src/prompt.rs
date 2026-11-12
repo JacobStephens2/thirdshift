@@ -83,8 +83,8 @@ pub fn triage_issue(
         "{}\n{}\nInvestigate existing issue #{} in place against the selected Base branch. \
          This is existing-issue mode: recommendation.issues must have exactly one entry for this issue, \
          with a ## Agent Brief for ready-for-agent, an investigation summary and questionnaire for \
-         needs-info or ready-for-human, or a wontfix explanation. Propose a split through a \
-         ready-for-human questionnaire. For a duplicate, recommend wontfix here and optionally \
+         needs-info, an investigation summary for ready-for-human, or a wontfix explanation. \
+         Propose a split in a ready-for-human issue body. For a duplicate, recommend wontfix here and optionally \
          cross-reference the other open issue in recommendation.comments.\n\
          Available repository categories (JSON): {}\n",
         triage(
