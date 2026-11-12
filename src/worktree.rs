@@ -38,10 +38,30 @@ enum UntrackedFiles {
     Preserve,
     /// Only the Review run's named validation output, see [`validation_artifact`].
     DiscardNamedValidationArtifacts,
-    DiscardValidationArtifacts,
+    DiscardAllUntracked,
 }
 
-/// Review validation instructions name these root entries for disposable logs.
+impl UntrackedFiles {
+    fn status_flag(self) -> &'static str {
+        match self {
+            Self::Preserve | Self::DiscardNamedValidationArtifacts => "--untracked-files=all",
+            Self::DiscardAllUntracked => "--untracked-files=no",
+        }
+    }
+
+    /// Whether one `git status --porcelain -z` field is work cleanup must keep.
+    fn keeps(self, entry: &str) -> bool {
+        match self {
+            Self::DiscardNamedValidationArtifacts => {
+                !entry.strip_prefix("?? ").is_some_and(validation_artifact)
+            }
+            Self::Preserve | Self::DiscardAllUntracked => true,
+        }
+    }
+}
+
+/// Review validation instructions name `.review-logs/`; root `.validation-*`
+/// entries are the other disposable name sessions use (#2049).
 fn validation_artifact(path: &str) -> bool {
     let root = path.split('/').next().unwrap_or_default();
     root == ".review-logs" || root.starts_with(".validation-")
@@ -460,22 +480,14 @@ fn uncommitted_changes(
         "status",
         "--porcelain",
         "-z",
-        match untracked {
-            UntrackedFiles::Preserve | UntrackedFiles::DiscardNamedValidationArtifacts => {
-                "--untracked-files=all"
-            }
-            UntrackedFiles::DiscardValidationArtifacts => "--untracked-files=no",
-        },
+        untracked.status_flag(),
         "--ignore-submodules=none",
     ])?;
     // A rename's source path is its own field; its entry already counts as work.
     Ok(status
         .split('\0')
         .filter(|entry| !entry.is_empty())
-        .any(|entry| {
-            !matches!(untracked, UntrackedFiles::DiscardNamedValidationArtifacts)
-                || !entry.strip_prefix("?? ").is_some_and(validation_artifact)
-        }))
+        .any(|entry| untracked.keeps(entry)))
 }
 
 /// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.

@@ -338,7 +338,7 @@ fn verify_retained(
     }
     if super::super::uncommitted_changes(
         |args| git.run(&without_repository_programs(args)),
-        super::super::UntrackedFiles::DiscardValidationArtifacts,
+        super::super::UntrackedFiles::DiscardAllUntracked,
     )? {
         bail!("retained Review worktree has uncommitted tracked changes");
     }

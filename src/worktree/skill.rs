@@ -109,7 +109,7 @@ impl SkillWorktree {
     /// Cleanup still preserves tracked edits and unpushed commits, and verifies
     /// ownership under the disposal locks before removing the acquired checkout.
     pub fn discard_validation_artifacts(&mut self) {
-        self.untracked = UntrackedFiles::DiscardValidationArtifacts;
+        self.untracked = UntrackedFiles::DiscardAllUntracked;
     }
 
     /// Observe only the acquired checkout, even if an agent replaced its path.
