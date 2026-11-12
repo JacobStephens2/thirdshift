@@ -10,9 +10,9 @@
 <ul>{% for machine in inventory.machines %}<li><strong>{{ machine.name }}</strong>: {{ machine.status }}{% if let Some(address) = machine.address %} · <a href="{{ address }}">Open Console</a>{% endif %}{% if machine.empty %} · No thirdshift cron jobs in this account's crontab.{% endif %}{% if let Some(error) = machine.error %}<p>{{ error }}</p>{% endif %}</li>{% endfor %}</ul>
 </section>
 {% for repository in inventory.repositories %}<section class="cron-repository" aria-label="{{ repository.heading() }} Fleet schedules">
-<h2>{{ repository.heading() }}</h2>
+<details><summary><h2>{{ repository.heading() }}</h2></summary>
 {% for machine in repository.machines %}<h3>{{ machine.name }}</h3>
 {% for job in machine.jobs %}<p>{% if let Some(kind) = job.command_kind %}{{ kind }}{% else %}Unknown Command kind{% endif %}</p>
 <pre class="crontab" tabindex="0" role="region" aria-label="{{ repository.heading() }} on {{ machine.name }} crontab entry"><code><bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi></code></pre>
-{% endfor %}{% endfor %}</section>{% endfor %}
+{% endfor %}{% endfor %}</details></section>{% endfor %}
 </main>{% include "console/chrome.html" %}</body></html>

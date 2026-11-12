@@ -61,7 +61,7 @@ after(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
-test('Fleet schedules show repository, machine and Command kind on desktop and phone', async t => {
+test('Fleet schedules fold repositories independently on every load on desktop and phone', async t => {
   for (const javaScriptEnabled of [true, false]) {
     for (const width of [1440, 390]) {
       await t.test(`${width}px, JavaScript ${javaScriptEnabled}`, async t => {
@@ -72,20 +72,57 @@ test('Fleet schedules show repository, machine and Command kind on desktop and p
         await page.getByRole('link', { name: 'Fleet schedules', exact: true }).click();
         await page.getByRole('heading', { name: 'Fleet schedules', exact: true }).waitFor();
         assert.deepEqual(await page.locator('main h2').allTextContents(), ['Machines', 'acme/tools', 'acme/widgets', 'Other']);
+        const repositories = page.locator('.cron-repository');
+        for (const repository of await repositories.all()) {
+          await repository.locator('h2').waitFor();
+          await repository.locator('h3').first().waitFor({ state: 'hidden' });
+          await repository.locator('.crontab').first().waitFor({ state: 'hidden' });
+        }
+        const status = page.getByRole('region', { name: 'Fleet inventory status', exact: true });
+        await status.waitFor();
+        assert.match(await status.textContent(), /ok/);
+        const tools = page.getByRole('region', { name: 'acme/tools Fleet schedules', exact: true });
         const widgets = page.getByRole('region', { name: 'acme/widgets Fleet schedules', exact: true });
+        await tools.locator('summary').click();
+        await tools.locator('h3').waitFor();
+        await widgets.locator('h3').first().waitFor({ state: 'hidden' });
+        await widgets.locator('summary').focus();
+        await page.keyboard.press('Enter');
+        await widgets.getByRole('heading', { name: remoteName, exact: true }).waitFor();
+        await tools.locator('h3').waitFor();
+        await page.keyboard.press('Space');
+        await widgets.locator('h3').first().waitFor({ state: 'hidden' });
+        await tools.locator('h3').waitFor();
+        await page.keyboard.press('Enter');
         assert.equal(await widgets.locator('h3').count(), 2);
         await widgets.getByRole('heading', { name: remoteName, exact: true }).waitFor();
         assert.match(await widgets.textContent(), /Pickup run/);
         const commands = await widgets.locator('.cron-command').allTextContents();
-        assert.ok(commands.includes(widgetsCommand));
-        assert.ok(commands.includes(remoteCommand));
+        assert.deepEqual(commands.toSorted(), [widgetsCommand, widgetsCommand, remoteCommand].toSorted());
         const other = page.getByRole('region', { name: 'Other Fleet schedules', exact: true });
+        await other.locator('summary').click();
+        await other.locator('.crontab').waitFor();
         assert.match(await other.textContent(), /Security run/);
         assert.match(await other.textContent(), /<script>unsafe\(\)<\/script>/);
         assert.equal(await page.locator('main script').count(), 0);
         assert.equal(await page.getByRole('heading', { name: 'Last fired by repository' }).count(), 0);
         assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        const longCommand = widgets.locator('.crontab').filter({ hasText: widgetsCommand }).first();
+        assert.equal(await longCommand.evaluate(el => getComputedStyle(el).whiteSpace), 'pre');
+        assert.equal(await longCommand.evaluate(el => el.scrollWidth > el.clientWidth), true);
+        await longCommand.evaluate(el => { el.scrollLeft = el.scrollWidth; });
+        assert.equal(await longCommand.evaluate(el => el.scrollLeft > 0), true);
+        await tools.locator('summary').click();
+        await tools.locator('h3').waitFor({ state: 'hidden' });
+        await widgets.getByRole('heading', { name: remoteName, exact: true }).waitFor();
+        await page.reload();
+        for (const repository of await repositories.all()) {
+          await repository.locator('h2').waitFor();
+          await repository.locator('h3').first().waitFor({ state: 'hidden' });
+          await repository.locator('.crontab').first().waitFor({ state: 'hidden' });
+        }
+        await status.waitFor();
         await page.getByRole('link', { name: "This machine's Cron jobs", exact: true }).click();
         await page.getByRole('heading', { name: 'Cron jobs', exact: true }).waitFor();
       });
