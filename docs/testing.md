@@ -207,7 +207,7 @@ Descendants outlive their Run as they do in production, until the `Scenario` is
 dropped by normal completion or assertion unwinding. Dropping it closes the
 lease every guardian polls. Each guardian then SIGKILLs and reaps what it owns,
 including commands that trap INT and TERM, and the drop waits up to the shared
-120-second bound for them and directory cleanup. The lease also closes
+120-second bound for them before waiting for directory cleanup. The lease also closes
 when the harness dies by any signal. So after SIGKILL of the harness alone, or of
 its whole process group, the Run and its descendants end within milliseconds.
 
@@ -218,7 +218,8 @@ Run guardian hold writers; EOF means the harness has released ownership and
 every Run guardian has finished reaping its descendants. Only then does the
 directory guardian remove the root. This also works after harness-only or
 process-group SIGKILL, when `TempDir` cannot run its destructor. Normal completion
-and assertion unwinding wait for this guardian to finish. Concurrent Scenarios
+and assertion unwinding wait up to the same 120-second bound for this guardian
+to finish. Concurrent Scenarios
 have separate pipes and roots; no temporary-directory scanning or historical
 cleanup is performed.
 
