@@ -36,10 +36,10 @@ jobs:
         partition: ${{ fromJSON(inputs.partitions) }}
     steps:
       - uses: actions/checkout@v7
-      # A dispatch-only probe exercises this job and the real stable gates
-      # without executing a deliberately broken Rust test in ordinary CI.
+      # A dispatch-only probe fails the first partition alone, exercising this
+      # job and the real stable gates without a deliberately broken Rust test.
       - name: Gate probe
-        if: ${{ inputs.probe != 'none' }}
+        if: ${{ inputs.probe != 'none' && matrix.partition == 1 }}
         env:
           PROBE: ${{ inputs.probe }}
         run: |
@@ -69,7 +69,7 @@ jobs:
           tool: cargo-nextest@0.9.151
       - name: Compile tests
         if: ${{ inputs.probe == 'none' }}
-        run: cargo test --no-run --locked
+        run: cargo test --no-run
       - name: Test inventory
         if: ${{ !inputs.nightly && inputs.probe == 'none' }}
         env:

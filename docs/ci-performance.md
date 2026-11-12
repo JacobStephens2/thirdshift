@@ -57,11 +57,17 @@ and nightly [40503051764](https://github.com/JacobStephens2/thirdshift/actions/r
 | --- | --- | --- |
 | `console-test` | 98–182 | 15 |
 | `site-test` | 59–102 | 10 |
-| `test` (nextest and nightly cargo test) | 725–983 | 60 |
-| `test-linux-arm` | Not yet measured on hosted CI | 60 |
+| `rust-x86 / run (n)` (per partition, or nightly cargo test) | 388–544 | 60 |
+| `rust-arm / run (n)` (per partition, or nightly cargo test) | 420–476 | 60 |
+| `rust-x86 / complete`, `rust-arm / complete` (coverage check) | 7–8 | 5 |
+| `test`, `test-linux-arm` (stable gates) | 2–3 | 5 |
 
-The ARM Linux job retains the x86_64 suite's 60-minute budget pending its own
-hosted measurements. Removed macOS jobs are excluded from these active bounds.
+The `test` row's earlier 725–983 seconds came from the unsharded job above.
+Partition, coverage and gate rows come from four-way [PR CI 43069335799](https://github.com/JacobStephens2/thirdshift/actions/runs/43069335799)
+(#2031). Each partition job keeps the former whole-suite 60-minute bound, so
+nightly's single `cargo test` worker keeps its existing budget; the gates only
+read their architecture's result. Removed macOS jobs are excluded from these
+active bounds.
 
 Release samples: PR runs [40614474450](https://github.com/JacobStephens2/thirdshift/actions/runs/40614474450),
 [40613734215](https://github.com/JacobStephens2/thirdshift/actions/runs/40613734215),
@@ -144,10 +150,12 @@ the cancelled run stay on the same head as cancelled check runs, which the
 factory's CI watch reads as failed (#925). The label stays on the PR, so later
 pushes also run the full ARM suite.
 
-The job runs the same clippy command and test runner as x86_64 Linux:
-`cargo clippy --all-targets -- -D warnings`, then `cargo nextest run`, or
-`cargo test` on the nightly schedule. It has the same 60-minute bound and a
-separate architecture-specific Rust cache. The runner class stays
+The ARM work runs the same `rust-tests.yml` jobs as x86_64 Linux: the first
+partition runs `cargo clippy --all-targets -- -D warnings`, and each of four
+partitions runs `cargo nextest run --profile ci --partition hash:m/4`, followed
+by the exact coverage check; nightly runs one `cargo test` worker instead. Each
+worker has the same 60-minute bound and a separate architecture-specific Rust
+cache. The runner class stays
 `ubuntu-24.04-arm`; x86_64 uses `ubuntu-24.04`.
 
 Releases also build `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm` and
@@ -236,7 +244,8 @@ transfer. API timestamps have one-second resolution. Repeat the dispatch at
 the same revision to observe variance and distinguish cache-hit/miss reports;
 one sample, especially a small difference, cannot establish an improvement.
 
-The manual `probe=failure` and `probe=skipped` inputs deliberately produce red
+The manual `probe=failure` input fails only the first of the four partitions;
+`probe=skipped` skips all partition work. Both deliberately produce red
 architecture gates without running tests. They are diagnostics, never a way
 to report green coverage. The default `probe=none` executes all required work.
 The workflow's normal PR, main and nightly policies and Release dependencies

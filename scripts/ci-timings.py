@@ -68,21 +68,34 @@ def verify(directories, count):
         raise ValueError("empty unsharded inventory")
     assigned = Counter()
     work = []
+    if not revision:
+        raise ValueError(f"empty source revision: {directories[0]}")
     for directory in directories:
-        if not revision or (directory / "revision.txt").read_text().strip() != revision:
+        if (directory / "revision.txt").read_text().strip() != revision:
             raise ValueError(f"source revisions differ: {directory}")
         if selected(directory / "full.json") != full:
             raise ValueError(f"unsharded inventories differ: {directory}")
         partition = selected(directory / "partition.json")
         assigned.update(partition)
-        executed = [(binary, name) for binary, name, _ in cases(directory / "junit.xml")]
-        if Counter(executed) != Counter(partition):
+        executed = cases(directory / "junit.xml")
+        if Counter((binary, name) for binary, name, _ in executed) != Counter(partition):
             raise ValueError(f"execution differs from selected inventory: {directory}")
-        work.append(sum(seconds for _, _, seconds in cases(directory / "junit.xml")))
+        work.append(sum(seconds for _, _, seconds in executed))
     if set(assigned) != full or any(number != 1 for number in assigned.values()):
         raise ValueError("partition union must assign every selected test exactly once")
     print(f"Coverage: {len(full)} selected tests assigned and executed exactly once across {count} partitions.")
     print("Partition test-seconds: " + ", ".join(f"{seconds:.3f}" for seconds in work))
+
+
+# rust-tests.yml step names; an unlisted step counts as setup.
+PHASES = {
+    "Compile tests": "compilation", "Test inventory": "inventory",
+    "Nextest execution": "test_execution", "Summarize timings": "reporting",
+    "Run Swatinem/rust-cache@v2": "cache_transfer",
+    "Run actions/upload-artifact@v4": "report_transfer",
+    "Run actions/download-artifact@v4": "report_transfer",
+    "Tooling checks": "checks", "Clippy": "checks",
+}
 
 
 def benchmark(directory):
@@ -101,16 +114,8 @@ def benchmark(directory):
                  for step in job["steps"]
                  if step.get("started_at") and step.get("completed_at")}
         phases = Counter()
-        phase_names = {
-            "Compile tests": "compilation", "Test inventory": "inventory",
-            "Nextest execution": "test_execution", "Summarize timings": "reporting",
-            "Run Swatinem/rust-cache@v2": "cache_transfer",
-            "Run actions/upload-artifact@v4": "report_transfer",
-            "Run actions/download-artifact@v4": "report_transfer",
-            "Tooling checks": "checks", "Clippy": "checks",
-        }
         for name, seconds in steps.items():
-            phase = "cleanup" if name.startswith("Post ") else phase_names.get(name, "setup")
+            phase = "cleanup" if name.startswith("Post ") else PHASES.get(name, "setup")
             phases[phase] += seconds
         group["jobs"].append({
             "name": job["name"], "conclusion": job["conclusion"],

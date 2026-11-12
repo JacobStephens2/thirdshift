@@ -152,7 +152,7 @@ jobs:
         run: |
           mkdir benchmark-report
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > benchmark-report/run.json
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.[].jobs[]]' > benchmark-report/jobs.json
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[]' | jq -s . > benchmark-report/jobs.json
           python3 scripts/ci-timings.py benchmark benchmark-report >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}

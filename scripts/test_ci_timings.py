@@ -56,6 +56,36 @@ class CiTimings(unittest.TestCase):
             self.assertEqual([job["start_delay_seconds"] for job in group["jobs"]], [10, 20])
             self.assertEqual(group["jobs"][1]["phases"]["test_execution"], 120)
 
+    def test_benchmark_phases_follow_the_actual_workflow_step_names(self):
+        from test_workflow_timeouts import ROOT, job_blocks
+
+        workflow = ROOT / ".github/workflows/rust-tests.yml"
+        blocks = job_blocks(workflow)
+        names = [name for block in blocks.values()
+                 for name in re.findall(r"^      - name: (.+)$", block, re.M)]
+        names += [f"Run {action}" for block in blocks.values()
+                  for action in re.findall(r"^      - uses: (\S+)$", block, re.M)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "run.json").write_text(json.dumps({
+                "head_sha": "same-revision", "created_at": "2026-11-11T00:00:00Z"}))
+            (root / "jobs.json").write_text(json.dumps([{
+                "name": "benchmark (ubuntu-24.04, [1]) / run (1)",
+                "conclusion": "success", "runner_name": "Hosted Agent",
+                "started_at": "2026-11-11T00:00:00Z", "completed_at": "2026-11-11T00:01:00Z",
+                "steps": [{"name": name, "started_at": "2026-11-11T00:00:00Z",
+                           "completed_at": "2026-11-11T00:00:01Z"} for name in names],
+            }]))
+            result = subprocess.run(["python3", str(SCRIPT), "benchmark", str(root)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            phases = json.loads((root / "benchmark.json").read_text())[
+                "groups"]["benchmark (ubuntu-24.04, [1])"]["jobs"][0]["phases"]
+        for phase in ["compilation", "inventory", "test_execution", "reporting",
+                      "cache_transfer", "report_transfer", "checks"]:
+            with self.subTest(phase=phase):
+                self.assertIn(phase, phases, "a renamed step would fall into setup")
+
     def test_actual_workflow_gates_reject_failed_cancelled_skipped_or_missing_work(self):
         from test_workflow_timeouts import ROOT, job_blocks
 
@@ -97,7 +127,8 @@ class CiTimings(unittest.TestCase):
                     ["python3", str(SCRIPT), "verify", "--count", "2", *map(str, paths)],
                     capture_output=True, text=True, timeout=10)
 
-            self.assertEqual(run().returncode, 0, run().stderr)
+            passed = run()
+            self.assertEqual(passed.returncode, 0, passed.stderr)
             self.assertNotEqual(run(shards[:1]).returncode, 0)
             (shards[1] / "partition.json").write_text((shards[0] / "partition.json").read_text())
             original_junit = (shards[1] / "junit.xml").read_text()
