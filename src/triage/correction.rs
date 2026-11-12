@@ -1,23 +1,19 @@
 //! Correct invalid session output once; GitHub checks and publication stay outside this loop.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result};
 
-use super::{
-    Recommendation, existing, issue_category, read_recommendation, resolve_recommendation,
-};
-use crate::issue::IssueUrl;
+use super::recommendation::{Context, Recommendation};
 use crate::prompt;
 use crate::session::{Kind, Purpose, Sessions};
 
-pub(super) fn recommendation(
+pub(super) fn recommendation<'a>(
     sessions: &Sessions<'_>,
     instructions: &str,
-    target: Option<&IssueUrl>,
-    categories: &[String],
-) -> Result<Recommendation> {
+    context: &Context<'a>,
+) -> Result<Recommendation<'a>> {
     // An execution failure is not invalid recommendation output.
     let message = sessions.run_to_final_message(Purpose::Ordinary, Kind::Triage, instructions)?;
-    let error = match validate(message.as_deref(), target, categories) {
+    let error = match Recommendation::interpret(message.as_deref(), context) {
         Ok(recommendation) => return Ok(recommendation),
         Err(error) => error,
     };
@@ -33,7 +29,7 @@ pub(super) fn recommendation(
     let corrected = sessions
         .run_to_final_message(Purpose::Ordinary, Kind::TriageCorrection, &correction)
         .with_context(|| format!("Triage correction could not complete. {retained}"))?;
-    validate(corrected.as_deref(), target, categories).with_context(|| {
+    Recommendation::interpret(corrected.as_deref(), context).with_context(|| {
         let correction_trace = sessions
             .last_log_of(Kind::TriageCorrection)
             .map(|path| path.display().to_string())
@@ -42,27 +38,4 @@ pub(super) fn recommendation(
             "Triage recommendation invalid after one correction. {retained}\nCorrection Session trace: {correction_trace}"
         )
     })
-}
-
-fn validate(
-    message: Option<&str>,
-    target: Option<&IssueUrl>,
-    categories: &[String],
-) -> Result<Recommendation> {
-    let mut recommendation = read_recommendation(message)?;
-    // An invalid category is reported with any other error, so one
-    // correction turn hears about both.
-    let category = recommendation
-        .issues
-        .iter()
-        .find_map(|issue| issue_category(categories, &recommendation, issue).err());
-    let checked = resolve_recommendation(&mut recommendation).and_then(|()| match target {
-        Some(target) => existing::check_recommendation(&mut recommendation, target),
-        None => Ok(()),
-    });
-    match (checked, category) {
-        (Ok(()), None) => Ok(recommendation),
-        (Err(error), None) | (Ok(()), Some(error)) => Err(error),
-        (Err(error), Some(category)) => bail!("{error:#}; {category:#}"),
-    }
 }
