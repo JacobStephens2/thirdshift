@@ -1,7 +1,9 @@
 # Grilling: #1516, Grow the code-review suite to 20 discriminating Eval tasks
 
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1516
-Related: #1434 (closed; its A/A `83721fbb…`), #1477, #1478, #1480, #1481, #1494, #1498, #1484 and its host Ticket #1887 (a process-task suite mined from the same thirdshift pull requests), #1876, #1531
+Related: #1434 (closed; its A/A `83721fbb…`), #1477, #1478, #1480, #1481, #1494, #1498, #1484 and its host Ticket #1887 (a process-task suite mined from the same thirdshift pull requests), #1876, #1531, #1979 (the `factory` Experiment host), #2106
+
+**Resuming this grill elsewhere:** Round 1 is open and unanswered. Before writing Round 2, re-run the host survey (every host in `scripts/update-hosts.conf`, now including `factory`) and re-check the issues named above, since several closed while Round 1 waited. Detailed counts with repository names are in the private survey file on `thirdshift.app`.
 Research: the private pool survey at `~/.thirdshift/evals/notes/1516-pool-survey.md` on the `thirdshift` host (it names private repositories, so only counts appear here)
 
 The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 and Q1.11 were added on 2026-11-09 from newer issues), adjusted by what the three other hosts showed (see "Research results"). Q8 of the triage comment is answered by a fact and is not asked: voice-agent is personal work.
@@ -21,7 +23,7 @@ The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 a
 - (a) Start now, in parallel with #1481. Do #1481's code-review half (record and park) first, since it takes minutes, and its Spec-review A/A independently.
 - (b) Wait until all of #1481 is done, Spec review's ~180-Trial A/A included, as the issue body says.
 
-*Recommended:* (a). Only the Spec-review A/A in #1481 takes hours, and #1516 doesn't depend on it. The two A/As must not run on the host at the same time (Q1.5's load concern).
+*Recommended:* (a). Only the Spec-review A/A in #1481 takes hours, and #1516 doesn't depend on it. The two A/As must not run on the same host at the same time.
 
 *Answer:* 
 
@@ -41,12 +43,11 @@ The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 a
 
 *Answer:* 
 
-**Q1.5 - Write the host procedure into the issue's steps?** Two open bugs can spoil an A/A on a host that also runs the factory: #1494 (scheduled Passes start Runs during an Experiment, so Trials time out) and #1498 (`thirdshift update` mid-Experiment stops it). And #1434 found that `experiment` refuses a PR URL in `[trial] issue_url` that `prepare` accepts. *Revised 2026-11-09:* #1494's stopgap, `pickup.limit = 1`, no longer works. 0.24.0 ignores `pickup.limit` with a warning, and its replacement, `pickup.failure_limit`, counts issues the factory failed on, not Runs at once. If Q1.10 keeps the A/A on a factory host, the steps would say:
-- pause scheduled Passes for the A/A by disabling their crontab lines, and restore them after (#1494);
-- no `thirdshift update` while it runs (#1498);
-- `[trial] issue_url` is an `/issues/N` URL.
+**Q1.5 - Write the host procedure into the issue's steps?** *Revised 2026-11-12:* the two bugs this question was about are fixed. #1494 (PR #1982) makes scheduled Passes skip while an Experiment is live, and makes a starting Experiment wait for live Runs unless given `--no-wait`. #1498 (PR #1985) keeps Trial launches working across `thirdshift update`. Both are in 0.30.0, which `thirdshift.app` and the factory host now run. What's left is #1434's finding that `experiment` refuses a PR URL in `[trial] issue_url` that `prepare` accepts. The options:
+- (a) The steps say only: `[trial] issue_url` is an `/issues/N` URL, and the host runs 0.30.0 or later.
+- (b) Also keep a manual pause of the crontab, as a belt-and-braces step.
 
-*Recommended:* yes, all three, each removable once its bug is fixed. On a dedicated Experiment host (Q1.10 (a)), only the last two apply.
+*Recommended:* (a). The Pass skip was verified live on the factory host (#1979's closing comment).
 
 *Answer:* 
 
@@ -58,13 +59,15 @@ The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 a
 
 *Answer:* 
 
-**Q1.7 - Leave employer repositories out of the first round?** What the hosts show (see "Research results"): the three employer hosts have no Eval data and no Bug origins at all, because no Scoring run has ever run there, so there is no ready pool on the employer side. But it is the busiest source of Ticket runs outside thirdshift: about 180 Runs that opened a PR on the employer's main repository since mid-October, and about 47 of its 300+ PRs merged since then have fix-like titles. Its pool is real but would have to be mined from scratch. Putting employer code on `thirdshift.app`, a personal host, is a data question for your employer, not just an Eval question. The options:
+**Q1.7 - Leave employer repositories out of the first round?** What the hosts show (see "Research results"): the three employer hosts have no Eval data and no Bug origins at all, because no Scoring run has ever run there, so there is no ready pool on the employer side. But it is the busiest source of Ticket runs outside thirdshift: about 180 Runs that opened a PR on the employer's main repository since mid-October, and about 47 of its 300+ PRs merged since then have fix-like titles. Its pool is real but would have to be mined from scratch. Putting employer code on `thirdshift.app`, a personal host, is a data question for your employer, not just an Eval question.
+
+*Revised 2026-11-12:* the new Experiment host from #1979, `factory`, is employer infrastructure: the employer's DigitalOcean account and domain, and its config in the employer's `orchestration` repository. It already clones and runs factory work on two employer repositories. So if Q1.10 moves `code-review` there, employer tasks can sit in the same suite without copying employer code anywhere new. The reverse question then arises: personal repositories' code on an employer host. thirdshift and most of the personal sources are public; two of the personal repositories with Bug origins are private. The options:
 - (a) Not in round 1. Mine the personal pool first; decide on employer code only if round 1 leaves a gap.
 - (b) Allow it now, cloning the employer repositories onto `thirdshift.app`.
-- (c) Allow it, but build and run employer tasks on an employer host (`dev` or `orchestrate`) in a suite there, never copying the code to `thirdshift.app`.
+- (c) Allow it now, on `factory` only, in the same `code-review` suite (needs Q1.10 (a)).
 - (d) Never.
 
-*Recommended:* (a). The personal pool's estimate is 9–12 of 13 needed, so round 1 is worth running anyway, and its yield tells us how big the gap really is. If one is left, (c) avoids the data question, though it means a second suite on another host, which Q2 would have to square with "the `code-review` suite has 20".
+*Recommended:* (c) if Q1.10 is (a), otherwise (a). On `factory` the data question is already settled by where the code lives, and employer tasks are the biggest untapped source. Keep private personal repositories off `factory` unless you say otherwise; their few Bug origins aren't worth it.
 
 *Answer:* 
 
@@ -84,12 +87,12 @@ The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 a
 
 *Answer:* 
 
-**Q1.10 - Which host runs this suite's A/A?** *Added 2026-11-09.* #1484's grill (Q1.8) settled that a new, bigger host runs the process suite's Experiments, so they don't compete with the factory, and that the Lima VM builds and screens its first tasks until that host exists. #1887 then moves that suite to the new host. `code-review` still lives on `thirdshift.app`, the shared factory host where #1494's contention spoiled Trials in #1434's A/A. The options:
-- (a) Move `code-review` (and its staging suite) to the new Experiment host with the process suite, after a backup, and run this A/A there. Proposing and screening can start on `thirdshift.app` now.
-- (b) Keep it on `thirdshift.app`, with Q1.5's procedure.
-- (c) Run it on the Lima VM until the new host exists.
+**Q1.10 - Which host runs this suite's A/A?** *Added 2026-11-09, revised 2026-11-12.* #1484's grill (Q1.8) and `docs/grill-with-docs/run-capacity.md` put Experiments on a new host, and #1979 has now provisioned it: `factory`, 8 dedicated vCPU / 32 GB, Ubuntu 24.04, 0.30.0, with Passes that skip during a live Experiment. Its `~/.thirdshift/evals/suites` is empty so far; #1887 will put the process suite there. It runs factory work too, for thirdshift and two employer repositories, and it's in `scripts/update-hosts.conf`. `code-review` still lives on `thirdshift.app` (4 vCPU / 8 GB), where #1494's contention spoiled Trials in #1434's A/A. #2106 (open) may move `factory` to Ubuntu 26.04, which would matter mid-batch. The options:
+- (a) Move `code-review` (and its staging suite) to `factory`, after a backup, and run all its Experiments there, including releases'. Clone the personal source repositories there as needed (see Q1.7).
+- (b) Keep it on `thirdshift.app`, now that 0.30.0 skips Passes there too.
+- (c) Build and screen on `thirdshift.app`, where the Bug origins are, and run only the A/As on `factory`.
 
-*Recommended:* (a), and (b) only if the new host is weeks away. One Experiment host keeps every suite's Difficulty measured under the same conditions, and it makes Q1.5's crontab step unnecessary. The Lima VM is 4 CPUs and 8 GiB, no bigger than `thirdshift.app`, and is already earmarked for screening process tasks.
+*Recommended:* (a). One Experiment host keeps every suite's Difficulty measured under the same conditions, and it has twice the cores. Bug origins are written by Scoring runs on `thirdshift.app`, so proposing still reads them there; copy each proposed task across. Don't start an A/A batch while #2106's OS move is pending on `factory`.
 
 *Answer:* 
 
@@ -98,7 +101,7 @@ The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 a
 - (b) One pass that screens each fix for both suites at once.
 - (c) Fully independent.
 
-*Recommended:* (a). The two suites are built at different times and on different hosts, and their screens share little, so a joint pass would only slow the first suite to reach 20. A shared list costs nothing and stops two people reading the same fix twice.
+*Recommended:* (a). The two suites are built at different times, and their screens share little, so a joint pass would only slow the first suite to reach 20. A shared list costs nothing and stops two people reading the same fix twice.
 
 *Answer:* 
 
@@ -134,5 +137,12 @@ Details, with repository names, are appended to the private survey file on the `
 
 - `pickup.limit` is ignored in 0.24.0, with a User config warning; `pickup.failure_limit` (default 3) counts open issues the factory failed on. Confirmed by source (`src/config.rs`) and the warning in a host's `activity.log`.
 - #1484's grill (Q1.8, Q4.3) put process-suite Experiments on a new, bigger host, with the Lima VM building and screening first; #1887 (opened today) is its host Ticket and mines recent merged thirdshift pull requests. #1876 adds a command that drafts process tasks from merged pull requests. Confirmed by `docs/grill-with-docs/done/1484-implement-suite.md` on `main` and `gh issue view`.
-- The new Experiment host isn't in `scripts/update-hosts.conf` yet, so it may not exist. Not confirmed further.
+- (Superseded on 2026-11-12: the host exists; see below.)
 - #1531 (open) would split the code review out of the implement Step. It changes the Ticket run, not the code-review session this suite runs, so it doesn't change this issue. Confirmed by reading #1531.
+
+## Research results (2026-11-12)
+
+- **`factory` exists** (#1979, closed): `factory.etadventures.com`, 8 vCPU / 32 GB, Ubuntu 24.04.5, thirdshift 0.30.0, weekly backups, Console in the Lima VM's Fleet, and in `scripts/update-hosts.conf`. It has `~/.thirdshift/evals/` with no suites and no Scoring files yet, clones thirdshift and two employer repositories, and runs Passes for them from cron. Its config lives in the employer's `orchestration` repository. Confirmed by ssh, `crontab -l` and #1979's closing comment.
+- **#1494 and #1498 are fixed** (PRs #1982 and #1985), released in 0.29.2 / 0.30.0. Passes skip while an Experiment is live, verified on `factory` with an Activity log line. Confirmed by `gh` and `git tag --contains`.
+- **`thirdshift.app`** runs 0.30.0. Its `code-review` suite is unchanged (21 tasks), and it still has the only Scoring files (3). Confirmed by ssh.
+- **#2106** (open) proposes moving `factory` to Ubuntu 26.04, which its own text flags as a risk to A/A comparability mid-batch. #1481 and #1887 are still open. Confirmed by `gh issue view`.
