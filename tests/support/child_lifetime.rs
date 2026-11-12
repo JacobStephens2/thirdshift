@@ -249,7 +249,9 @@ pub struct OwnedRuns {
     /// Write end each guardian inherits and holds until it exits, so drop
     /// can wait for cleanup to finish.
     done: Option<OwnedFd>,
-    done_reader: File,
+    /// Removes the captured root once this owner and all Run guardians
+    /// have closed `done`, even if the harness cannot run destructors.
+    root_guardian: Child,
 }
 
 /// A thirdshift process started by [`OwnedRuns::spawn`]. Its guardian keeps
@@ -265,15 +267,32 @@ pub struct OwnedRun {
 }
 
 impl OwnedRuns {
-    pub fn new() -> Self {
+    pub fn new(root: &std::path::Path) -> Self {
         let (lease_reader, lease) = pipe();
         let (done_reader, done) = pipe();
+        let root_guardian = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "support::child_lifetime::scenario_root_guardian",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("THIRDSHIFT_SCENARIO_ROOT", root)
+            .process_group(0)
+            .stdin(Stdio::from(done_reader))
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("could not start Scenario root guardian");
         Self {
             lease: Some(lease),
             lease_reader,
             done: Some(done),
-            done_reader: File::from(done_reader),
+            root_guardian,
         }
+    }
+
+    pub fn root_guardian_id(&self) -> u32 {
+        self.root_guardian.id()
     }
 
     /// Spawn `command` with its stdio as configured, under a new guardian.
@@ -315,25 +334,41 @@ impl Drop for OwnedRuns {
     fn drop(&mut self) {
         drop(self.lease.take());
         drop(self.done.take());
-        // Guardians write nothing: the pipe reads EOF once every one has
-        // reaped what it owned and exited.
-        let mut done = libc::pollfd {
-            fd: self.done_reader.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
         let deadline = Instant::now() + super::WAIT_BOUND;
-        // SAFETY: poll inspects only this owner's done pipe.
-        while unsafe { libc::poll(&mut done, 1, 10) } < 1 || done.revents == 0 {
+        loop {
+            if let Some(status) = self.root_guardian.try_wait().unwrap() {
+                assert!(status.success(), "Scenario root guardian failed: {status}");
+                return;
+            }
             if Instant::now() >= deadline {
                 assert!(
                     thread::panicking(),
-                    "a Scenario's Run guardians were still cleaning up after {:?}",
+                    "a Scenario's guardians were still cleaning up after {:?}",
                     super::WAIT_BOUND
                 );
                 return;
             }
+            thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+/// Unlike the forked Run guardians, this process execs, so filesystem
+/// cleanup may allocate and lock. Its private pipe has a writer in the
+/// harness and every Run guardian: EOF means all owned descendants ended.
+#[test]
+#[ignore = "subprocess entry point for Scenario directory cleanup"]
+fn scenario_root_guardian() {
+    let root = std::path::PathBuf::from(std::env::var_os("THIRDSHIFT_SCENARIO_ROOT").unwrap());
+    // SAFETY: this dedicated process owns no unrelated work.
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+        unsafe { libc::signal(signal, libc::SIG_IGN) };
+    }
+    std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()).unwrap();
+    match fs::remove_dir_all(root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("could not remove Scenario root: {error}"),
     }
 }
 

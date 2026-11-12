@@ -127,9 +127,9 @@ pub mod check;
 pub mod child_lifetime;
 
 pub struct Scenario {
-    /// Ends what the scenario's Runs started, before the temp root goes.
+    /// Ends what the scenario's Runs started, then removes the temp root.
     runs: child_lifetime::OwnedRuns,
-    /// Deletes the temp root when the scenario is dropped.
+    /// Fallback cleanup if starting the root guardian fails.
     _temp_dir: TempDir,
     /// The temp root's path with symlinks resolved, as git reports it: on
     /// macOS the temp directory is under `/var`, a symlink to `/private/var`.
@@ -437,7 +437,7 @@ impl Scenario {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().canonicalize().unwrap();
         let scenario = Scenario {
-            runs: child_lifetime::OwnedRuns::new(),
+            runs: child_lifetime::OwnedRuns::new(&root),
             _temp_dir: temp_dir,
             root,
         };
@@ -481,6 +481,12 @@ impl Scenario {
 
     pub fn path(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
+    }
+
+    /// The directory owner, for supervisors that reap a killed fixture's
+    /// exact orphaned processes.
+    pub fn root_guardian_id(&self) -> u32 {
+        self.runs.root_guardian_id()
     }
 
     pub fn launch_dir(&self) -> PathBuf {
