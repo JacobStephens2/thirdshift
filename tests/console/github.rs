@@ -446,10 +446,15 @@ fn history_freezes_do_not_wake_an_unchanged_inbox() {
     hold_first_read(&scenario);
     let console = start(&scenario);
     wait_until(|| scenario.path("gh-state.json.started").exists());
-    let before = console.get("/").text().unwrap();
+    // The header carries live host measurements, so compare what follows it.
+    let inbox = || {
+        let page = console.get("/").text().unwrap();
+        page.split_once("</header>").unwrap().1.to_string()
+    };
+    let before = inbox();
     assert!(!before.contains("acme/widgets#80"));
     assert_idle_events(&console, Duration::from_secs(3));
-    assert_eq!(console.get("/").text().unwrap(), before);
+    assert_eq!(inbox(), before);
     assert!(scenario.gh_calls_of("api", "graphql").len() >= 2);
 }
 
