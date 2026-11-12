@@ -322,9 +322,13 @@ thirdshift logs 'widgets#7' --session repair --follow
 
 `show` includes the Ticket runs, stage history with start times and Usual ranges, outcomes, and paths to Command logs and Session traces. Each live Ticket run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session trace. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session traces leave the event unavailable.
 
+Every Command measures **Suspended time** by comparing wall-clock time with host uptime at least every 30 seconds. A gap of at least one minute counts; smaller clock corrections are ignored. Each suspension adds one Command log line and updates the current stage's `suspended_seconds` in the Command record while the stage is live. Older stages without that field read as zero. `show`, timed stages in `status`, and the Console's Command details, Lanes and Stages keep the full wall-clock stage time and add its Suspended time beside it, such as `10 hr 6 min · 9 hr 40 min suspended`. Nothing extra appears for a stage without Suspended time. `show --json` includes `seconds` and `time` for each stage, plus `suspended_seconds` when nonzero; `time` carries the same annotation. `status --json` includes nonzero `suspended_seconds` in its current `stage` observation too. Run metrics keep wall-clock stage times.
+
 `status` and `show` describe live work as **Silent** when neither its Session trace nor its Command log has grown for `inbox.silent_minutes` (10 by default). Silence starts no earlier than the current stage. A dispatch stage is never Silent or Slow and has no Usual range: the dispatched Ticket run or Spec run carries its own. At three times the threshold, the words escalate: `silent 45 min · past 30`. A fresh line in either log keeps the Ticket run from being Silent. Missing logs use the stage's start time.
 
-A stage's **Usual range** is its 25th–75th percentile time over the repository's last 30 Command records on this machine. Completed stages supply times, with the next stage's start or the Command's end marking completion; an unfinished stage supplies none. The range appears once there are at least three stage times. Quartiles interpolate between sorted times. A live Ticket run past the top of the range is **Slow**: `slower than usual (12–17 min), still working`. This first step stays on its row in Working or Landing and does not count toward Needs you or browser notifications. Step 2 starts only when the stage reaches both twice the top and at least five minutes past it. Then the run enters Needs you and adds the multiple, such as `2× usual` or `3× usual`. These thresholds are fixed. A Spec run or Pass enters Needs you for a Slow child only at step 2. Every Needs you row is urgent, including step-2 Slow: it uses the urgent favicon and counts toward notifications. Silent takes precedence over Slow.
+Slow compares the stage's age minus its Suspended time with the top of its Usual range, including the step 2 multiple. Silent leaves out suspensions recorded since the logs last grew. Time worked before suspension still counts; waking starts no fresh grace period. This also applies to CI watch, so a CI watch the host was suspended through turns Slow later. `status` and the Console's Inbox and Needs you share these rules. A suspension creates no row, Inbox note or Dismissal target of its own.
+
+A stage's **Usual range** is its 25th–75th percentile time over the repository's last 30 Command records on this machine. Completed stages without recorded Suspended time supply times, with the next stage's start or the Command's end marking completion; an unfinished or suspended stage supplies none. Other stages in the same Command still count, including older stages without a `suspended_seconds` field. The range appears once there are at least three qualifying stage times; only suspended samples leave it unavailable. Quartiles interpolate between sorted times. A live Ticket run past the top of the range is **Slow**: `slower than usual (12–17 min), still working`. This first step stays on its row in Working or Landing and does not count toward Needs you or browser notifications. Step 2 starts only when the stage's age minus its Suspended time reaches both twice the top and at least five minutes past it. Then the run enters Needs you and adds the multiple, such as `2× usual` or `3× usual`. These thresholds are fixed. A Spec run or Pass enters Needs you for a Slow child only at step 2. Every Needs you row is urgent, including step-2 Slow: it uses the urgent favicon and counts toward notifications. Silent takes precedence over Slow.
 
 Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"slow","step":1,"usual_range":{"lower_seconds":720.0,"upper_seconds":1020.0},"multiple":1}`, or `{"state":"silent","step":2,"seconds":2700,"threshold_seconds":600}`. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. The `usual_ranges` map gives each stage's current range by name, for example `{"implement":{"lower_seconds":720.0,"upper_seconds":1020.0}}`; a stage is omitted until enough times exist. Health and this map are reader observations.
 
@@ -1831,7 +1835,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 11`.
+[Experiment results format](experiment-results.md), identified by `format: 12`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1850,6 +1854,10 @@ evidence is absent. Reported Session cost wins, including zero; otherwise each
 Model's reported cost replaces its call-cost sum, retaining costs the total omits.
 Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm's minutes.
+Trials spanning Suspended time are marked suspended. Their time is left out of
+Arm summaries and time comparisons, including time ceilings; their outcomes and
+costs still count, and no Trial is rerun for suspension. Reports show how many
+Trials were left out of timing when any were. Process evals follow the same rule.
 Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.
 

@@ -51,6 +51,12 @@ pub(crate) struct TrialResult {
 }
 
 impl TrialResult {
+    pub fn suspended(&self) -> bool {
+        self.attempts
+            .iter()
+            .any(|attempt| attempt.timings.suspended_seconds > 0)
+    }
+
     pub fn key(&self) -> String {
         trial_key(&self.suite, &self.task, self.arm, self.trial)
     }

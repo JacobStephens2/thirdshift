@@ -448,6 +448,50 @@ fn change_record(scenario: &Scenario, number: u32, change: impl FnOnce(&mut Valu
 }
 
 #[test]
+fn usual_ranges_leave_out_suspended_stages_and_keep_legacy_and_zero_samples() {
+    let scenario = Scenario::new();
+    for (number, seconds) in [(1, 60), (2, 180), (3, 300), (4, 600)] {
+        let began = chrono::Local::now() - chrono::Duration::hours(number as i64);
+        let ci = began + chrono::Duration::seconds(seconds);
+        let repair = ci + chrono::Duration::seconds(if number == 4 { 240 } else { 60 });
+        let ended = repair + chrono::Duration::seconds(120);
+        write_record(
+            &scenario,
+            number,
+            &began.to_rfc3339(),
+            Some(&ended.to_rfc3339()),
+        );
+        change_record(&scenario, number, |record| {
+            record["stages"] = serde_json::json!([
+                {"name": "implement", "began_at": began.to_rfc3339()},
+                {"name": "CI watch", "began_at": ci.to_rfc3339()},
+                {"name": "Repair", "began_at": repair.to_rfc3339(), "suspended_seconds": 60}
+            ]);
+            if number == 2 {
+                record["stages"][0]["suspended_seconds"] = 0.into();
+            } else if number == 4 {
+                // Any recorded Suspended time disqualifies only this stage.
+                record["stages"][0]["suspended_seconds"] = 1.into();
+            }
+        });
+    }
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 4, "{status}");
+    for command in commands {
+        assert_eq!(
+            command["usual_ranges"],
+            serde_json::json!({
+                "implement": {"lower_seconds": 120.0, "upper_seconds": 240.0},
+                "CI watch": {"lower_seconds": 60.0, "upper_seconds": 105.0}
+            })
+        );
+    }
+}
+
+#[test]
 fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
     let scenario = Scenario::new();
     let now = chrono::Local::now();

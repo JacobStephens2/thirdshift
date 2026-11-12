@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local};
@@ -23,6 +25,8 @@ pub(super) struct Tail {
 }
 
 pub(super) trait Outside: owner::Files {
+    /// Keep the wake explanation without treating it as working log activity.
+    fn suspension_line(&mut self, writer: &mut Self::CommandLog, line: &str) -> io::Result<()>;
     fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>>;
     fn session_signals(&mut self, log: &Path) -> Option<super::session_signals::SessionSignals>;
     fn command_records(
@@ -30,6 +34,8 @@ pub(super) trait Outside: owner::Files {
         root: &Path,
     ) -> Result<BTreeMap<PathBuf, super::command_record::CommandTree>>;
     fn now(&mut self) -> DateTime<FixedOffset>;
+    /// Elapsed host uptime, excluding suspension, from an arbitrary origin.
+    fn monotonic(&mut self) -> Duration;
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()>;
     fn activity_tail(&mut self, path: &Path, limit: u64) -> Result<Tail>;
     fn append_activity(&mut self, path: &Path, line: &str) -> Result<()>;
@@ -50,6 +56,12 @@ impl owner::Files for OnMachine {
 }
 
 impl Outside for OnMachine {
+    fn suspension_line(&mut self, writer: &mut File, line: &str) -> io::Result<()> {
+        let modified = writer.metadata()?.modified()?;
+        writeln!(writer, "{line}")?;
+        writer.set_modified(modified)
+    }
+
     fn session_signals(&mut self, log: &Path) -> Option<super::session_signals::SessionSignals> {
         super::session_signals::read(log).ok().flatten()
     }
@@ -90,6 +102,11 @@ impl Outside for OnMachine {
 
     fn now(&mut self) -> DateTime<FixedOffset> {
         Local::now().fixed_offset()
+    }
+
+    fn monotonic(&mut self) -> Duration {
+        static ORIGIN: LazyLock<Instant> = LazyLock::new(Instant::now);
+        ORIGIN.elapsed()
     }
 
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()> {

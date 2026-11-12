@@ -48,6 +48,10 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn observed_at(&self) -> DateTime<Local> {
+        self.now
+    }
+
     /// Merge opted-in accounts, isolating another account's read failures.
     pub(super) fn for_user(
         config: &crate::config::UserConfig,
@@ -423,6 +427,12 @@ pub(super) struct CurrentStage {
     pub(super) name: String,
     pub(super) began_at: String,
     pub(super) age_seconds: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) suspended_seconds: u64,
+}
+
+fn is_zero(seconds: &u64) -> bool {
+    *seconds == 0
 }
 
 impl Command {
@@ -483,12 +493,14 @@ impl Command {
                 age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
                     .map(|began| now.signed_duration_since(began).num_seconds().max(0))
                     .unwrap_or(0),
+                suspended_seconds: stage.suspended_seconds,
             })
             .or_else(|| {
                 record.quota_wait_until.as_ref().map(|until| CurrentStage {
                     name: format!("Quota wait until {until}"),
                     began_at: record.started_at.clone(),
                     age_seconds: 0,
+                    suspended_seconds: 0,
                 })
             });
         Self {

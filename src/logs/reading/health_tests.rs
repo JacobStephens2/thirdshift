@@ -18,17 +18,30 @@ fn history(root: &Path, stage: &str, seconds: [i64; 3]) {
 #[test]
 fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
     for stage in ["implement", "CI watch", "Self-merge"] {
-        for (samples, lower, upper, threshold) in [
-            ([2, 4, 20], 3, 12, 312),
-            ([600, 840, 1200], 720, 1020, 2040),
+        for (samples, lower, upper, threshold, suspended, quota_wait) in [
+            ([2, 4, 20], 3, 12, 312, 0, false),
+            ([2, 4, 20], 3, 12, 312, 1800, false),
+            ([2, 4, 20], 3, 12, 312, 1800, true),
+            ([2, 4, 20], 3, 12, 312, 3600, false),
+            ([600, 840, 1200], 720, 1020, 2040, 0, false),
+            ([600, 840, 1200], 720, 1020, 2040, 1800, false),
+            ([600, 840, 1200], 720, 1020, 2040, 1800, true),
+            ([600, 840, 1200], 720, 1020, 2040, 3600, false),
         ] {
             let dir = tempfile::tempdir().unwrap();
             history(dir.path(), stage, samples);
             let began = now() - chrono::Duration::hours(1);
             let mut live = record(7);
             live["started_at"] = began.to_rfc3339().into();
-            live["stages"] =
-                json!([{"name": stage, "began_at": began.to_rfc3339(), "session_log": null}]);
+            live["stages"] = json!([{
+                "name": stage,
+                "began_at": began.to_rfc3339(),
+                "session_log": null,
+                "suspended_seconds": suspended,
+            }]);
+            if quota_wait {
+                live["quota_wait_until"] = "2026-10-19T12:01:37-04:00".into();
+            }
             let path = write(dir.path(), "7-live.command.json", &live);
             fs::write(path.with_file_name("7-live.log"), "still working\n").unwrap();
             let original = fs::read(&path).unwrap();
@@ -37,7 +50,7 @@ fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
                 ages.push(60);
             }
             for age in ages {
-                let at = began + chrono::Duration::seconds(age);
+                let at = began + chrono::Duration::seconds(age + suspended);
                 let snapshot =
                     Snapshot::load_with_silence(dir.path(), at, Duration::from_secs(3600)).unwrap();
                 let selected = snapshot.resolve("widgets#7").unwrap();
@@ -63,11 +76,9 @@ fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
                         command.next_health_change,
                         Some(
                             began
-                                + chrono::Duration::seconds(if age == upper {
-                                    upper + 1
-                                } else {
-                                    threshold
-                                })
+                                + chrono::Duration::seconds(
+                                    suspended + if age == upper { upper + 1 } else { threshold },
+                                )
                         )
                     );
                 }
@@ -85,7 +96,7 @@ fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
                     row["group"],
                     if age == threshold {
                         "needs you"
-                    } else if stage == "implement" {
+                    } else if stage == "implement" || quota_wait {
                         "working"
                     } else {
                         "landing"

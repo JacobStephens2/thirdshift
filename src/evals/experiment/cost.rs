@@ -65,22 +65,26 @@ type History = BTreeMap<(String, String), TrialMeasurements>;
 struct TrialMeasurements {
     total_minutes: f64,
     trials: usize,
+    timed_trials: usize,
     cost_usd: f64,
     priced_trials: usize,
 }
 
 impl TrialMeasurements {
-    fn add(&mut self, minutes: f64, cost_usd: Option<f64>) {
-        self.total_minutes += minutes;
+    fn add(&mut self, minutes: Option<f64>, cost_usd: Option<f64>) {
         self.trials += 1;
+        if let Some(minutes) = minutes {
+            self.total_minutes += minutes;
+            self.timed_trials += 1;
+        }
         if let Some(cost) = cost_usd {
             self.cost_usd += cost;
             self.priced_trials += 1;
         }
     }
 
-    fn minutes_per_trial(self) -> f64 {
-        self.total_minutes / self.trials as f64
+    fn minutes_per_trial(self) -> Option<f64> {
+        (self.timed_trials > 0).then(|| self.total_minutes / self.timed_trials as f64)
     }
 }
 
@@ -105,12 +109,15 @@ fn history(files: &impl Files, experiments: &Path, current: &str) -> History {
             continue;
         };
         for result in results.iter().map(trial_results::Terminal::result) {
-            if let Some(minutes) = completed_minutes(result) {
+            if result.outcome != Outcome::Void {
                 let setup = stored.description.setup(result.arm);
                 history
                     .entry(history_key(&result.suite, setup))
                     .or_default()
-                    .add(minutes, super::accounting::trial_total(result).cost_usd);
+                    .add(
+                        completed_minutes(result),
+                        super::accounting::trial_total(result).cost_usd,
+                    );
             }
         }
     }
@@ -127,7 +134,7 @@ fn history_key(suite: &str, setup: &super::Setup) -> (String, String) {
 /// Every attempt's minutes of a Trial that completed, not void, as the
 /// Experiment's own Arm minutes count them.
 fn completed_minutes(result: &TrialResult) -> Option<f64> {
-    (result.outcome != Outcome::Void).then(|| {
+    (result.outcome != Outcome::Void && !result.suspended()).then(|| {
         result
             .attempts
             .iter()
@@ -245,7 +252,7 @@ impl Plan {
                         trials,
                         mean: history
                             .get(&history_key(suite, setup))
-                            .map(|measurements| measurements.minutes_per_trial()),
+                            .and_then(|measurements| measurements.minutes_per_trial()),
                         mean_cost: history
                             .get(&history_key(suite, setup))
                             .filter(|past| past.priced_trials == past.trials)
