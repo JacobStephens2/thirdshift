@@ -137,7 +137,7 @@ impl Delivery<'_> {
                 .assess(
                     &expected.head,
                     Some(&base),
-                    &mut || unchanged(github, pr, &expected),
+                    &mut || unchanged(github, pr, &expected).map(|()| Some(expected.head.clone())),
                     &mut |_| Ok(false),
                 )
                 .with_context(|| format!("CI watch on {} failed", expected.head))?;

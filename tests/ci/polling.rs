@@ -78,3 +78,58 @@ fn a_pending_ci_poll_observes_the_pr_once() {
         .count();
     assert_eq!(observations, 1, "PR observations between pending CI reads");
 }
+
+#[test]
+fn an_observed_head_move_resets_the_pending_ci_pause() {
+    let scenario = Scenario::new();
+    fs::create_dir(scenario.path("fake")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("fake/gh")).unwrap();
+    super::support::write_executable(
+        &scenario.path("bin/gh"),
+        r#"#!/bin/bash
+set -eu
+if [[ ${1-} == pr && ${2-} == view && -f "$POLL_READS" && ! -f "$POLL_MOVED" ]]; then
+    reads=$(wc -l < "$POLL_READS")
+    if (( reads >= 14 )); then
+        "$POLL_GH" fake pr issue-7 headRefOid '"1111111111111111111111111111111111111111"'
+        echo "$reads" > "$POLL_MOVED"
+    fi
+fi
+if [[ " $* " == *' .check_runs[] '* ]]; then
+    echo "${EPOCHREALTIME/./}" >> "$POLL_READS"
+fi
+exec "$POLL_GH" "$@"
+"#,
+    );
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        super::checks_on_head(r#"[{"name":"test","conclusion":"success","pending_polls":20}]"#)
+    ));
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[
+            ("POLL_READS", scenario.path("poll-reads").to_str().unwrap()),
+            ("POLL_MOVED", scenario.path("poll-moved").to_str().unwrap()),
+            ("POLL_GH", scenario.path("fake/gh").to_str().unwrap()),
+            // The maximum pause is 1.5s; a head change should reset it to 250ms.
+            ("THIRDSHIFT_POLL_MS", "250"),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let before_move: usize = fs::read_to_string(scenario.path("poll-moved"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let reads: Vec<u64> = fs::read_to_string(scenario.path("poll-reads"))
+        .unwrap()
+        .lines()
+        .map(|line| line.parse().unwrap())
+        .collect();
+    // The first check read after the changed PR observation has this index.
+    let after_move_gap = reads[before_move + 1] - reads[before_move];
+    assert!(
+        after_move_gap < 1_000_000,
+        "head move was observed, but the next CI poll waited {after_move_gap}us; expected the 250ms shortest step"
+    );
+}

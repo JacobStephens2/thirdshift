@@ -337,10 +337,19 @@ impl<A: Adapter> PullRequest<A> {
     /// session has produced a PR, absence is allowed; a captured PR may not
     /// disappear. Drafts are allowed only before initial readiness.
     pub fn ensure_actionable(&mut self, ready: bool) -> Result<()> {
+        self.actionable_head(ready).map(|_| ())
+    }
+
+    /// The head seen by the same actionability observation, for waits that
+    /// must reset their cadence when another writer moves the PR.
+    pub fn actionable_head(&mut self, ready: bool) -> Result<Option<String>> {
         let captured = self.identified.is_some();
         match self.observe(false)? {
-            Some(snapshot) => self.validate(&snapshot, ready),
-            None if !captured => Ok(()),
+            Some(snapshot) => {
+                self.validate(&snapshot, ready)?;
+                Ok(Some(snapshot.head_commit))
+            }
+            None if !captured => Ok(None),
             None => bail!("no PR found"),
         }
     }

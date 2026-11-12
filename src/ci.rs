@@ -102,7 +102,7 @@ impl<'a> Watch<'a> {
         &mut self,
         head: &str,
         base_commit: Option<&str>,
-        actionable: &mut dyn FnMut() -> Result<()>,
+        actionable: &mut dyn FnMut() -> Result<Option<String>>,
         head_moved: &mut dyn FnMut(&str) -> Result<bool>,
     ) -> Result<Ci> {
         self.assess_through(
@@ -177,13 +177,21 @@ impl<'a> Watch<'a> {
     }
 }
 
+/// The checks together with the PR head seen by their actionability gate.
+/// Keeping the observation intact lets either change reset a pending wait.
+#[derive(PartialEq, Eq)]
+struct CheckObservation {
+    head: Option<String>,
+    checks: Vec<Check>,
+}
+
 /// What the CI watch reads of GitHub and asks of it, how it waits, and
 /// where its progress lines go.
 trait Outside {
     /// A point the grace period ends at, from when it was started.
     type Deadline;
     /// The checks and statuses on the commit `sha`.
-    fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>>;
+    fn checks_on(&mut self, sha: &str) -> Result<CheckObservation>;
     /// Whether the Issue branch on origin no longer points at `sha`.
     fn head_moved(&mut self, sha: &str) -> Result<bool>;
     /// The GitHub Actions job whose check run is `check_run`, with its
@@ -211,16 +219,19 @@ trait Outside {
 /// interval and grace period.
 struct OnGitHub<'a> {
     issue: &'a IssueUrl,
-    actionable: &'a mut dyn FnMut() -> Result<()>,
+    actionable: &'a mut dyn FnMut() -> Result<Option<String>>,
     head_moved: &'a mut dyn FnMut(&str) -> Result<bool>,
 }
 
 impl Outside for OnGitHub<'_> {
     type Deadline = Instant;
 
-    fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
-        (self.actionable)()?;
-        GitHub::new().checks_on(self.issue, sha)
+    fn checks_on(&mut self, sha: &str) -> Result<CheckObservation> {
+        let head = (self.actionable)()?;
+        Ok(CheckObservation {
+            head,
+            checks: GitHub::new().checks_on(self.issue, sha)?,
+        })
     }
 
     fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>> {
@@ -263,7 +274,7 @@ impl Outside for OnGitHub<'_> {
 /// A fresh, whole observation on the same full commit each time. Three total
 /// attempts, separated by one then two seconds; only transient failures retry.
 /// Successful observations alone can establish CI facts.
-fn read_checks(outside: &mut impl Outside, sha: &str) -> Result<Vec<Check>> {
+fn read_checks(outside: &mut impl Outside, sha: &str) -> Result<CheckObservation> {
     let mut failures = Vec::new();
     for attempt in 1..=3 {
         match outside.checks_on(sha) {
@@ -303,8 +314,8 @@ fn watch_through(outside: &mut impl Outside, sha: &str, base_commit: Option<&str
         grace.as_secs()
     ));
     let appeared = within(outside, deadline, |outside| {
-        let checks = read_checks(outside, sha)?;
-        Ok(((!checks.is_empty()).then_some(()), checks))
+        let observation = read_checks(outside, sha)?;
+        Ok(((!observation.checks.is_empty()).then_some(()), observation))
     })?;
     if appeared.is_none() {
         outside.step(format!(
@@ -402,7 +413,7 @@ fn request_reruns<'a>(
     let mut workflow_runs: Vec<u64> = failed.own.iter().filter_map(scoped_workflow_run).collect();
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
-    let before = read_checks(outside, sha)?;
+    let before = read_checks(outside, sha)?.checks;
     let previous_attempt: Vec<u64> = jobs_of(&before)
         .chain(jobs_of(&failed.own))
         .chain(jobs_of(&failed.inherited))
@@ -444,10 +455,12 @@ fn watch_new_attempts(
 ) -> Result<Option<Ci>> {
     let (grace, deadline) = outside.start_grace();
     let new_attempt = within(outside, deadline, |outside| {
-        let checks = read_checks(outside, sha)?;
+        let observation = read_checks(outside, sha)?;
         Ok((
-            rerun_checks.new_attempts_listed(&checks).then_some(()),
-            checks,
+            rerun_checks
+                .new_attempts_listed(&observation.checks)
+                .then_some(()),
+            observation,
         ))
     })?;
     if new_attempt.is_none() {
@@ -524,14 +537,14 @@ fn watch_to_end(
     let short = short(sha);
     let mut waiting_line = poll::WaitingLine::new();
     let checks = until(outside, |outside| {
-        let checks = read_checks(outside, sha)?;
+        let CheckObservation { head, checks } = read_checks(outside, sha)?;
         ensure!(
             !checks.is_empty() && rerun_checks.is_none_or(|rerun| rerun.listed_in(&checks)),
             "CI checks disappeared on {short}; cannot verify CI"
         );
         let pending = count(&checks, Reading::Pending);
         if pending == 0 {
-            return Ok((Some(checks), Vec::new()));
+            return Ok((Some(checks), (head, Vec::new())));
         }
         let counts = (pending, checks.len());
         if waiting_line.should_report(counts) {
@@ -540,7 +553,7 @@ fn watch_to_end(
                 checks.len()
             ));
         }
-        Ok((None, checks))
+        Ok((None, (head, checks)))
     })?;
     let mut failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
@@ -561,6 +574,7 @@ fn watch_to_end(
     outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
         Some(base_commit) => read_checks(outside, base_commit)
+            .map(|observation| observation.checks)
             .with_context(|| format!("CI red on {sha}:\n{}", check_list(&failed)))?,
         None => Vec::new(),
     };
@@ -1021,7 +1035,7 @@ mod in_memory {
         /// The number of pauses at which the grace period ends.
         type Deadline = usize;
 
-        fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>> {
+        fn checks_on(&mut self, sha: &str) -> Result<CheckObservation> {
             let read = self.reads_of(sha);
             self.reads.push(sha.to_string());
             if let Some((_, _, message)) = self
@@ -1041,7 +1055,10 @@ mod in_memory {
                 .iter()
                 .find(|(commit, _)| commit == sha)
                 .and_then(|(_, listings)| listings.get(read).or(listings.last()));
-            Ok(listing.cloned().unwrap_or_default())
+            Ok(CheckObservation {
+                head: None,
+                checks: listing.cloned().unwrap_or_default(),
+            })
         }
 
         fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>> {
