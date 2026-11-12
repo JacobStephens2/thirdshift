@@ -5,7 +5,7 @@
 //! under a `report` token: it is saved in that machine's reported slot and
 //! shown read-only (#2036 Q4.2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -30,6 +30,8 @@ const VIEWS: usize = 16;
 /// and all a saved peer snapshot keeps.
 #[derive(Serialize, Deserialize)]
 struct Summary {
+    #[serde(default)]
+    unavailable_accounts: BTreeSet<String>,
     outcomes: Vec<SummaryBucket>,
     #[serde(default)]
     comparison: Option<SummaryComparison>,
@@ -133,6 +135,8 @@ pub(crate) struct Machine {
     pub(crate) address: Option<String>,
     pub(crate) local: bool,
     pub(crate) status: Status,
+    /// Configured Other-account Commands omitted from this summary.
+    pub(crate) unavailable_accounts: BTreeSet<String>,
     /// When this machine's metrics were last read: now when live, the saved
     /// snapshot's time when cached.
     pub(crate) last_seen: Option<DateTime<Utc>>,
@@ -606,6 +610,7 @@ impl<'a> Capture<'a> {
                     address: None,
                     local: true,
                     status: Status::Ok,
+                    unavailable_accounts: BTreeSet::new(),
                     last_seen: Some(now),
                     pushed_at: None,
                     error: None,
@@ -651,6 +656,7 @@ impl<'a> Capture<'a> {
                 address: None,
                 local: false,
                 status: Status::Cached,
+                unavailable_accounts: BTreeSet::new(),
                 last_seen: None,
                 pushed_at: None,
                 error: None,
@@ -685,6 +691,7 @@ fn remote(
         address: Some(entry.address.clone()),
         local: false,
         status: Status::Ok,
+        unavailable_accounts: BTreeSet::new(),
         last_seen: None,
         pushed_at: None,
         error: None,
@@ -832,6 +839,7 @@ fn merge(
     let mut machines = Vec::new();
     for (mut machine, summary) in sources {
         if let Some(summary) = summary {
+            machine.unavailable_accounts = summary.unavailable_accounts;
             let name = machine.name.clone();
             // A cached snapshot may predate today's window; show only its
             // buckets that are still in it.

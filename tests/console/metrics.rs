@@ -785,6 +785,132 @@ fn spec_runs(fleet: &Value) -> &Value {
 }
 
 #[test]
+fn fleet_metrics_accept_older_peer_and_saved_summaries_without_unreadable_accounts() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let listener = metrics_listener();
+    metrics_peer(
+        home.path(),
+        &format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let live = std::thread::scope(|threads| {
+        let result = threads.spawn(|| {
+            api::cli(
+                home.path(),
+                &[
+                    "metrics",
+                    "--machine",
+                    "capture-peer",
+                    "--window",
+                    "7d",
+                    "--json",
+                ],
+            )
+        });
+        metrics_reply(metrics_request(&listener), 200, r#"{"outcomes":[]}"#);
+        result.join().unwrap()
+    });
+    assert_eq!(live["machines"][0]["status"], "ok");
+    assert_eq!(live["machines"][0]["unavailable_accounts"], json!([]));
+    drop(listener);
+    // Replace the newly saved summary with an older snapshot missing the field.
+    saved_slot(
+        home.path(),
+        "capture-peer",
+        false,
+        &chrono::Utc::now().to_rfc3339(),
+        "window=7d",
+    );
+    let cached = api::cli(
+        home.path(),
+        &[
+            "metrics",
+            "--machine",
+            "capture-peer",
+            "--window",
+            "7d",
+            "--json",
+        ],
+    );
+    assert_eq!(cached["machines"][0]["status"], "cached");
+    assert_eq!(cached["machines"][0]["unavailable_accounts"], json!([]));
+}
+
+#[test]
+fn fleet_metrics_keep_unreadable_accounts_per_machine() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    for (home, accounts) in [
+        (local_home.path(), "['thirdshift-missing-local']"),
+        (
+            remote_home.path(),
+            "['thirdshift-missing-b', 'thirdshift-missing-a']",
+        ),
+    ] {
+        configure(home);
+        let path = home.join(".thirdshift/config.toml");
+        let config = fs::read_to_string(&path).unwrap();
+        fs::write(path, format!("{config}other_accounts = {accounts}\n")).unwrap();
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let mut remote = Some(Console::start(binary, remote_home.path()));
+    let local = Console::start(binary, local_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(
+        local_home.path(),
+        "remote",
+        &remote.as_ref().unwrap().address,
+        &token,
+    );
+    assert!(paired.status.success(), "{paired:?}");
+    let expected = json!(["thirdshift-missing-a", "thirdshift-missing-b"]);
+    let own = api::cli(remote_home.path(), &["metrics", "--json"]);
+    assert_eq!(own["unavailable_accounts"], expected);
+
+    for status in ["ok", "cached"] {
+        if status == "cached" {
+            drop(remote.take());
+        }
+        let fleet = api::cli(local_home.path(), &["metrics", "--fleet", "--json"]);
+        let machines = fleet["machines"].as_array().unwrap();
+        assert_eq!(
+            machines[0]["unavailable_accounts"],
+            json!(["thirdshift-missing-local"])
+        );
+        let peer = machines.iter().find(|m| m["name"] == "remote").unwrap();
+        assert_eq!(peer["status"], status);
+        assert_eq!(peer["unavailable_accounts"], expected);
+        let one = api::cli(
+            local_home.path(),
+            &["metrics", "--machine", "remote", "--json"],
+        );
+        assert_eq!(one["machines"][0]["unavailable_accounts"], expected);
+        let text = metrics(local_home.path(), &["--fleet"]);
+        assert!(text.status.success(), "{text:?}");
+        let text = String::from_utf8_lossy(&text.stdout);
+        assert!(text.contains("unavailable_accounts:"), "{text}");
+        assert!(text.contains("thirdshift-missing-a"), "{text}");
+        assert!(text.contains("thirdshift-missing-b"), "{text}");
+        let html = local.get("/metrics").text().unwrap();
+        let machines = html
+            .split("class=\"metrics-machines\"")
+            .nth(1)
+            .unwrap()
+            .split("</ul>")
+            .next()
+            .unwrap();
+        assert!(
+            machines.contains("unreadable accounts: thirdshift-missing-local"),
+            "{machines}"
+        );
+        assert!(
+            machines.contains("unreadable accounts: thirdshift-missing-a, thirdshift-missing-b"),
+            "{machines}"
+        );
+    }
+}
+
+#[test]
 fn fleet_metrics_merge_paired_consoles_and_keep_an_offline_peer_cached() {
     let local_home = tempfile::tempdir().unwrap();
     let remote_home = tempfile::tempdir().unwrap();

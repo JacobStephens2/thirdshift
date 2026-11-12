@@ -187,6 +187,13 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
     let worker_home = tempfile::tempdir().unwrap();
     configure(hub_home.path());
     configure(worker_home.path());
+    let config_path = worker_home.path().join(".thirdshift/config.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        config_path,
+        format!("{config}other_accounts = ['thirdshift-missing-b', 'thirdshift-missing-a']\n"),
+    )
+    .unwrap();
     let mut failed = record(worker_home.path(), 73, Some("failed"), 0);
     failed["name"] = json!("widgets#73");
     write_record(worker_home.path(), 73, &failed);
@@ -230,6 +237,8 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
     );
     let reported = machine(&fleet, HOLDER);
     assert_eq!(reported["status"], "reported", "{fleet}");
+    let unreadable = json!(["thirdshift-missing-a", "thirdshift-missing-b"]);
+    assert_eq!(reported["unavailable_accounts"], unreadable);
     assert!(reported["address"].is_null());
     assert!(chrono::DateTime::parse_from_rfc3339(reported["pushed_at"].as_str().unwrap()).is_ok());
     assert_eq!(
@@ -248,7 +257,14 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
         &["metrics", "--machine", HOLDER, "--window", "7d", "--json"],
     );
     assert_eq!(one["machine"], HOLDER);
+    assert_eq!(one["machines"][0]["unavailable_accounts"], unreadable);
     assert_eq!(one["where_runs_failed"]["failed"], 1, "{one}");
+    let text = thirdshift(hub_home.path(), &["metrics", "--machine", HOLDER]);
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("unavailable_accounts:"), "{text}");
+    assert!(text.contains("thirdshift-missing-a"), "{text}");
+    assert!(text.contains("thirdshift-missing-b"), "{text}");
 
     // The page shows it read-only with its age, its failures without links.
     for route in [
@@ -256,6 +272,10 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
         &format!("/metrics?machine={HOLDER}&window=7d"),
     ] {
         let html = hub.get(route).text().unwrap();
+        assert!(
+            html.contains("unreadable accounts: thirdshift-missing-a, thirdshift-missing-b"),
+            "{html}"
+        );
         assert!(
             html.contains("reported, read-only</span> · pushed <time"),
             "{html}"
