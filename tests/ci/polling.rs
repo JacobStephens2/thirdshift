@@ -111,8 +111,9 @@ exec "$POLL_GH" "$@"
             ("POLL_READS", scenario.path("poll-reads").to_str().unwrap()),
             ("POLL_MOVED", scenario.path("poll-moved").to_str().unwrap()),
             ("POLL_GH", scenario.path("fake/gh").to_str().unwrap()),
-            // The maximum pause is 1.5s; a head change should reset it to 250ms.
-            ("THIRDSHIFT_POLL_MS", "250"),
+            // Six-second maximum versus a one-second reset leaves several
+            // seconds for process work under the four-second assertion below.
+            ("THIRDSHIFT_POLL_MS", "1000"),
         ],
     );
     assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -129,7 +130,7 @@ exec "$POLL_GH" "$@"
     // The first check read after the changed PR observation has this index.
     let after_move_gap = reads[before_move + 1] - reads[before_move];
     assert!(
-        after_move_gap < 1_000_000,
-        "head move was observed, but the next CI poll waited {after_move_gap}us; expected the 250ms shortest step"
+        after_move_gap < 4_000_000,
+        "head move was observed, but the next CI poll waited {after_move_gap}us; expected the one-second shortest step"
     );
 }
