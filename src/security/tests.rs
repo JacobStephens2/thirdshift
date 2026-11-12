@@ -298,7 +298,7 @@ fn issues_turned_off_skip_fixing_and_audit_instead() {
         };
         assert_eq!(
             reason,
-            "acme/widgets has issues turned off, so no Security fix Ticket can be filed"
+            "Security fixing skipped: acme/widgets has issues turned off, so no Security fix Ticket can be filed"
         );
         assert_eq!(
             outside.calls[..8],
@@ -307,7 +307,7 @@ fn issues_turned_off_skip_fixing_and_audit_instead() {
                 Call::AdvisoryList,
                 Call::HasIssues,
                 Call::AuditHistory,
-                Call::Step(format!("Security fixing skipped: {reason}")),
+                Call::Step(reason.clone()),
                 Call::HarnessCheck,
                 Call::NodeCheck,
                 Call::Started(None),

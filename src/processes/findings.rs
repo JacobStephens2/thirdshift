@@ -28,10 +28,7 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
     let base = launch::checked_out_base()?;
     let github = GitHub::new();
     if !github.has_issues(&repo.slug())? {
-        let message = format!(
-            "Security fixing skipped: {}",
-            crate::security::issues_turned_off(&repo)
-        );
+        let message = crate::security::issues_turned_off(&repo);
         progress::step(&message);
         return Ok(message);
     }

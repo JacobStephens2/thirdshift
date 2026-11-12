@@ -146,7 +146,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 Ok(recorded) => Account {
                     outcome: "findings recorded",
                     ended: Ok(match &audited.fixing_skipped {
-                        Some(reason) => format!("{recorded}; Security fixing skipped: {reason}"),
+                        Some(reason) => format!("{recorded}; {reason}"),
                         None => recorded.to_string(),
                     }),
                     interrupted: false,

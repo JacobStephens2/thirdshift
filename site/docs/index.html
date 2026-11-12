@@ -2091,7 +2091,8 @@ Effort and limits. Its Command limit, the lock of its kind and Ready-issue,
 failed-fix and unchanged-Base skip gates stay before the file. The first two
 Steps skip when an earlier
 reproduced finding awaits an allowed fix, unless the repository has issues
-turned off; fixing and closing retain their permission gates. The Security run fixes at most one finding per invocation,
+turned off; fixing and closing retain their permission gates. The Security
+run fixes at most one finding per invocation,
 and closes only that finding after its fix merges and its proof passes.
 Inspect it with <code>thirdshift process show security-run</code> or validate it with
 <code>thirdshift process check security-run</code>. A copy under a new Custom process
@@ -2540,7 +2541,8 @@ the worktree kind, and it gets the usual one Resume with or without an issue.</p
 reproduced finding still awaiting a fix, in severity order. <code>no-security-fix</code>
 overrides the setting. Unreproduced findings and findings with an existing
 fix are skipped. In a repository with issues turned off, the Step fixes
-nothing, starts no session and says so: no fix Ticket can be filed there. The Step uses the Security run&#39;s private publication checks:
+nothing, starts no session and says so: no fix Ticket can be filed there.
+The Step uses the Security run&#39;s private publication checks:
 a public fix issue contains only the proposed change and a private-record
 link. It links the fix, starts a Ticket run or Spec run, and records its
 ending privately. A failed fix stops the Step and stays with the Day shift.

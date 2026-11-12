@@ -248,7 +248,7 @@ fn run_through(
         }
     }
     if let Some(reason) = &fixing_skipped {
-        outside.step(format!("Security fixing skipped: {reason}"));
+        outside.step(reason.clone());
     }
     let outcome = crate::processes::security::run(
         outside,
@@ -270,10 +270,10 @@ fn run_through(
     }
 }
 
-/// Why fixing is skipped in `repo`, whose issues are turned off.
+/// That fixing is skipped in `repo`, whose issues are turned off, and why.
 pub(crate) fn issues_turned_off(repo: &Repo) -> String {
     format!(
-        "{} has issues turned off, so no Security fix Ticket can be filed",
+        "Security fixing skipped: {} has issues turned off, so no Security fix Ticket can be filed",
         repo.slug()
     )
 }
