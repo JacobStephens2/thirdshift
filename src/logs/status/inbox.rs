@@ -535,6 +535,13 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         findings: facts.security_findings,
         sessions: Vec::new(),
     };
+    // Compact Inbox rows hide nested runs. Keep each Slow descendant's
+    // stage and health visible on the row that represents its work.
+    for child in row.children.iter().filter(|child| child.slow) {
+        row.now_line
+            .push_str(&format!(" · {}: {}", child.subject, child.now_line));
+        row.slow = true;
+    }
     // Compact Inbox rows hide nested runs. Carry the dispatched Spec's
     // recorded accounting onto its Pass without counting child attempts.
     if row.ticket_progress.is_none() {
