@@ -478,7 +478,7 @@ impl CommandRecord {
                 .recovery
                 .and_then(|recovery| recovery.stage().recorded())
                 .map(|stage| stage.name().to_owned())
-                .or_else(|| self.last_stage().map(str::to_owned))
+                .or_else(|| self.stopped_stage().map(str::to_owned))
         });
         self.failure_category = failure.map(|cause| cause.category(account.interrupted));
         self.pull_request = account.pr_url.map(String::from);
@@ -589,9 +589,15 @@ impl CommandRecord {
         }
     }
 
-    /// The stage entered last, by its persisted name, known or not.
-    pub fn last_stage(&self) -> Option<&str> {
-        self.stages.last().map(|stage| stage.name.as_str())
+    /// Where a failure stopped when nothing recorded it: the stage entered
+    /// last, by its persisted name, known or not. A Worktree dropped while the
+    /// failure unwinds enters cleanup after the stage that failed, so trailing
+    /// cleanup is passed over unless it is the only stage.
+    pub fn stopped_stage(&self) -> Option<&str> {
+        let names = || self.stages.iter().rev().map(|stage| stage.name.as_str());
+        names()
+            .find(|name| *name != StageName::Cleanup.name())
+            .or_else(|| names().next())
     }
 
     /// Unknown stages are deliberately not used to interpret a newer record.

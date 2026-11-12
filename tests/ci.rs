@@ -10,7 +10,7 @@ mod support;
 #[path = "ci/polling.rs"]
 mod polling;
 
-use support::Scenario;
+use support::{RunResult, Scenario};
 
 /// The agent adds feature.txt and opens a PR.
 const AGENT_OPENS_PR: &str = r#"
@@ -1046,6 +1046,72 @@ fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
         result.stderr
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn a_check_re_run_watches_a_dependent_job_to_its_new_success() {
+    let (scenario, result) = re_run_with_dependent_job_concluding("success");
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_one_repair(&scenario, &result);
+    assert_eq!(rerun_requests(&scenario), ["900"]);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert!(
+        !result.stderr.contains("no re-run appeared"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_check_re_run_watches_a_dependent_job_to_its_new_failure() {
+    let (scenario, result) = re_run_with_dependent_job_concluding("failure");
+
+    let watched = assert_declined_ci_fix(&scenario, &result, &["900"]);
+    assert!(
+        result
+            .stderr
+            .contains(&format!("CI failed on {}: verified\n", &watched[..7])),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("no re-run appeared"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+/// A Ticket run whose Check re-run covers editors and verified, which needs
+/// it: only editors has a new attempt during the start grace, and
+/// verified's appears after editors passes, ending with `conclusion`.
+fn re_run_with_dependent_job_concluding(conclusion: &str) -> (Scenario, RunResult) {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}{}",
+        checks_on_head(&format!(
+            "[{}, {}]",
+            actions_failure(
+                "editors",
+                900,
+                1,
+                r#"{"conclusion": "success", "pending_polls": 6}"#
+            ),
+            actions_failure(
+                "verified",
+                900,
+                2,
+                &format!(
+                    r#"{{"conclusion": "{conclusion}", "stale_polls": 8, "pending_polls": 1}}"#
+                )
+            )
+        )),
+        scoped_runs_on("HEAD", &[900])
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    (scenario, result)
 }
 
 #[test]
