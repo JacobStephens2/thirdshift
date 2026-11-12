@@ -129,7 +129,7 @@ fn add_details(
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
     let report = if reads_fleet(&config, asked) {
-        let report = serde_json::to_value(fleet::load(&config, asked, None)?)?;
+        let report = serde_json::to_value(fleet::Capture::new(&config, None).load(asked)?)?;
         if asked.json {
             report
         } else {
