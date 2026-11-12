@@ -259,7 +259,12 @@ fn run_through(
     }
     // Fixes, and a private repository's findings, are filed as issues, so a
     // repository that takes none fails here, before any session is paid for.
-    match outside.issues_enabled() {
+    // A private repository's fallback has already read the answer.
+    let issues_enabled = match records.issues_enabled() {
+        Some(known) => Ok(known),
+        None => outside.issues_enabled(),
+    };
+    match issues_enabled {
         Ok(true) => {}
         Ok(false) => {
             return Outcome::Audited(anyhow::Error::new(IssuesOff { repo: repo.slug() }).into());

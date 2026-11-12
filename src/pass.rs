@@ -605,8 +605,8 @@ mod in_memory {
         advisories: Vec<Value>,
         finding_issues: Option<Vec<Value>>,
         unchanged_base: bool,
-        /// Whether the repository has Issues turned off.
-        issues_off: bool,
+        /// Whether the repository has Issues turned on.
+        issues_enabled: bool,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
@@ -644,7 +644,7 @@ mod in_memory {
                 advisories: Vec::new(),
                 finding_issues: None,
                 unchanged_base: false,
-                issues_off: false,
+                issues_enabled: true,
                 review: Ok(None),
                 session_log: None,
                 ending: None,
@@ -762,7 +762,7 @@ mod in_memory {
 
         /// Turn the repository's Issues off.
         pub fn issues_off(mut self) -> Self {
-            self.issues_off = true;
+            self.issues_enabled = false;
             self
         }
 
@@ -998,7 +998,7 @@ mod in_memory {
 
         fn issues_enabled(&mut self) -> Result<bool> {
             self.calls.push(Call::IssuesCheck);
-            Ok(!self.issues_off)
+            Ok(self.issues_enabled)
         }
 
         fn create_security_record(

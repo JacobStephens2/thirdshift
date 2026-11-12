@@ -610,14 +610,18 @@ impl GitHub {
         )?))
     }
 
-    /// Whether the repository `repo`, an `owner/repo`, has Issues turned on,
-    /// as its `has_issues` says.
-    pub fn issues_enabled(&self, repo: &str) -> Result<bool> {
+    /// The repository `repo`, an `owner/repo`, as the REST API describes it.
+    fn repository(&self, repo: &str) -> Result<Value> {
         if !valid_repo_slug(repo) {
             bail!("invalid repository name");
         }
-        let repository = self.gh_json(&["api", &format!("repos/{repo}")])?;
-        repository["has_issues"]
+        self.gh_json(&["api", &format!("repos/{repo}")])
+    }
+
+    /// Whether the repository `repo`, an `owner/repo`, has Issues turned on,
+    /// as its `has_issues` says.
+    pub fn issues_enabled(&self, repo: &str) -> Result<bool> {
+        self.repository(repo)?["has_issues"]
             .as_bool()
             .context(CommandFailure::InvalidResponse(
                 "gh api output has no has_issues".into(),

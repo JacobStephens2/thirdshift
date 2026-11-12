@@ -2792,6 +2792,34 @@ fn a_repository_with_issues_on_audits_as_before() {
 }
 
 #[test]
+fn a_private_fallback_reads_the_repository_once_before_failing_on_issues_off() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["private"] = json!(true);
+    github["has_issues"] = json!(false);
+    github["advisory_error"] = json!("gh: Not Found (HTTP 404)");
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("acme/widgets has Issues turned off"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    let repository_reads = scenario
+        .gh_calls()
+        .into_iter()
+        .filter(|call| call == &["api".to_string(), "repos/acme/widgets".to_string()])
+        .count();
+    assert_eq!(
+        repository_reads, 1,
+        "the 404 fallback already read the repository"
+    );
+}
+
+#[test]
 fn reads_the_package_from_an_npm_manifest() {
     let scenario = Scenario::new();
     scenario.origin_has_commit(

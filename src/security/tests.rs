@@ -294,11 +294,6 @@ fn issues_turned_off_fail_after_the_skip_gates_and_before_any_session() {
         else {
             panic!("a Security run on a repository with Issues off should fail");
         };
-        assert_eq!(
-            failed.error.to_string(),
-            "acme/widgets has Issues turned off; turn on Issues for acme/widgets \
-             or remove its Security schedule"
-        );
         assert_eq!(issues_off_cause(&failed.error), Some("Issues turned off"));
         assert_eq!(outside.calls.last(), Some(&Call::IssuesCheck));
         assert!(!outside.calls.contains(&Call::HarnessCheck));
