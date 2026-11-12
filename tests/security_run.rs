@@ -1442,6 +1442,23 @@ fn a_dispatched_fix_holds_off_no_audit_and_is_not_dispatched_again() {
     assert_eq!(scenario.gh_state()["issues"], issues);
 }
 
+/// Unreadable repository metadata is never taken for issues turned off.
+#[test]
+fn malformed_issues_metadata_fails_before_the_audit() {
+    let scenario = with_reproduced_findings(&["critical"]);
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!("unknown");
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("no has_issues setting"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
 #[test]
 fn reproduced_findings_without_permission_are_not_fixed_and_hold_off_no_audit() {
     for config in ["", "[security]\nfix = false\n", "[security]\nfix = true\n"] {
@@ -2741,6 +2758,82 @@ fn advisory_errors_never_record_findings_in_a_public_repository_or_on_non_404_fa
         assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
         assert!(!result.stderr.contains("Private candidate write-up."));
     }
+}
+
+#[test]
+fn a_repository_with_issues_off_fails_before_any_session_and_says_so() {
+    for fixing in [false, true] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["has_issues"] = json!(false);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let mut args = vec!["secure", "email", "me@example.com"];
+        if fixing {
+            args.push("security-fix");
+        }
+        let result = scenario.run_with_env(&args, &resend_env(&resend));
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(
+                "acme/widgets has Issues turned off; turn on Issues for acme/widgets \
+                 or remove its Security schedule"
+            ),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(scenario.codex_calls().is_empty());
+        assert!(scenario.gh_calls_of("issue", "create").is_empty());
+        let (subject, text) = the_one_notification(&resend);
+        assert_eq!(
+            subject,
+            "[thirdshift] acme/widgets Security run: pre-audit failed"
+        );
+        assert!(text.contains("Audit:        not started"), "{text}");
+        assert!(text.contains("Cause:        Issues turned off"), "{text}");
+    }
+}
+
+#[test]
+fn a_repository_with_issues_on_audits_as_before() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["has_issues"] = json!(true);
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_private_fallback_reads_the_repository_once_before_failing_on_issues_off() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["private"] = json!(true);
+    github["has_issues"] = json!(false);
+    github["advisory_error"] = json!("gh: Not Found (HTTP 404)");
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("acme/widgets has Issues turned off"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    let repository_reads = scenario
+        .gh_calls()
+        .into_iter()
+        .filter(|call| call == &["api".to_string(), "repos/acme/widgets".to_string()])
+        .count();
+    assert_eq!(
+        repository_reads, 1,
+        "the 404 fallback already read the repository"
+    );
 }
 
 #[test]

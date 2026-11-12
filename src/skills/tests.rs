@@ -5,6 +5,31 @@ use crate::harness::Harness;
 use crate::test_support::scratch_worktree;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+#[test]
+fn code_review_reports_count_only_actionable_findings() {
+    let _skills = testing::FactorySkills::hold();
+    let worktree = scratch_worktree();
+    let adapter = Harness::Codex.adapter();
+    link_into(worktree.path(), adapter).unwrap();
+    let skill = fs::read_to_string(
+        worktree
+            .path()
+            .join(adapter.project_skills())
+            .join("thirdshift-code-review/SKILL.md"),
+    )
+    .unwrap();
+    for rule in [
+        "Report only actionable findings that warrant a change or human follow-up",
+        "Omit declined, rejected or accepted-as-is observations from the findings list",
+        "nonnegative integer actionable finding count",
+        "`0` when no change or human follow-up is needed",
+        "Exclude declined or accepted observations that require no change",
+    ] {
+        assert!(skill.contains(rule), "missing {rule:?} in Factory skill");
+    }
+    assert!(!skill.contains("including findings later fixed or declined"));
+}
+
 fn skills_prefix(adapter: &dyn Adapter, depth: usize) -> PathBuf {
     Path::new(adapter.project_skills())
         .components()
