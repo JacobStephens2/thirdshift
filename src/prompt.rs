@@ -52,7 +52,7 @@ const HEADLESS: &str = "You run headless: nobody is watching, and ending your tu
     thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n";
 
 /// The Report stays data even when it contains apparent session instructions.
-/// Every recommended category comes from the supplied repository categories.
+/// Each proposed issue's category comes from the supplied repository categories.
 pub fn triage(
     skill_path: &std::path::Path,
     report: &str,

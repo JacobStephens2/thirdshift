@@ -127,7 +127,7 @@ struct ProposedIssue {
     #[serde(skip_serializing_if = "Option::is_none")]
     questionnaire: Option<String>,
     /// The state the issue is filed with before readiness permission,
-    /// resolved once by [`parse_recommendation`].
+    /// resolved once by [`resolve_recommendation`].
     #[serde(skip)]
     triaged: Option<Label>,
 }
@@ -206,9 +206,9 @@ fn investigation_text(text: &str) -> String {
 
 const INCOMPLETE: &str = "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments";
 
-/// Read and check the session's final recommendation line. The session's
-/// prose stays out of the machine-readable stdout contract.
-fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
+/// Read the session's final recommendation line. The session's prose stays
+/// out of the machine-readable stdout contract.
+fn read_recommendation(message: Option<&str>) -> Result<Recommendation> {
     let json = message
         .and_then(|message| {
             message
@@ -217,8 +217,11 @@ fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
                 .find_map(|line| line.strip_prefix("Triage recommendation: "))
         })
         .context("the Triage session ended without its final Triage recommendation: JSON line")?;
-    let mut recommendation: Recommendation = serde_json::from_str(json)
-        .context("the Triage recommendation is not valid recommendation JSON")?;
+    serde_json::from_str(json).context("the Triage recommendation is not valid recommendation JSON")
+}
+
+/// Check a read recommendation is complete and resolve each proposed issue's state.
+fn resolve_recommendation(recommendation: &mut Recommendation) -> Result<()> {
     let overall = state_label(&recommendation.state);
     ensure!(
         !recommendation.category.trim().is_empty()
@@ -266,7 +269,7 @@ fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
         );
         issue.triaged = Some(triaged);
     }
-    Ok(recommendation)
+    Ok(())
 }
 
 fn state_label(state: &str) -> Option<Label> {
@@ -291,10 +294,26 @@ fn is_factory_label(name: &str) -> bool {
 const CATEGORY_ERROR: &str = "the Triage category must be a repository category label, not a triage state or another factory label";
 
 /// The repository's own spelling of a recommended category, matched case-insensitively.
-fn repository_category<'a>(categories: &'a [String], wanted: &str) -> Option<&'a String> {
+fn repository_category<'a>(categories: &'a [String], wanted: &str) -> Result<&'a String> {
     categories
         .iter()
         .find(|name| name.eq_ignore_ascii_case(wanted))
+        .context(CATEGORY_ERROR)
+}
+
+/// A proposed issue's own category, or the recommendation's overall one.
+fn issue_category<'a>(
+    categories: &'a [String],
+    recommendation: &Recommendation,
+    issue: &ProposedIssue,
+) -> Result<&'a String> {
+    repository_category(
+        categories,
+        issue
+            .category
+            .as_deref()
+            .unwrap_or(&recommendation.category),
+    )
 }
 
 /// Guidance, correction and publication share the same usable repository categories.
@@ -406,11 +425,7 @@ fn check_publication(
         .issues
         .iter()
         .map(|issue| {
-            let wanted = issue
-                .category
-                .as_deref()
-                .unwrap_or(&recommendation.category);
-            let category = repository_category(categories, wanted).context(CATEGORY_ERROR)?;
+            let category = issue_category(categories, recommendation, issue)?;
             let triaged = issue
                 .triaged
                 .expect("parse_recommendation resolves every proposed issue's state");

@@ -339,7 +339,14 @@ fn correction_execution_failure_stops_and_retains_the_original_analysis() {
 
 #[test]
 fn successful_recommendations_and_execution_or_github_failures_do_not_get_corrected() {
-    for outcome in ["valid", "harness", "comment", "github", "publication"] {
+    for outcome in [
+        "valid",
+        "harness",
+        "comment",
+        "github",
+        "lookup",
+        "publication",
+    ] {
         let scenario = Scenario::new();
         scenario.repo_has_labels(&["bug"]);
         let mut recommendation = complete(&scenario);
@@ -349,6 +356,7 @@ fn successful_recommendations_and_execution_or_github_failures_do_not_get_correc
                     json!("https://github.com/other/repo/issues/7")
             }
             "github" => scenario.gh_fails("label list"),
+            "lookup" => scenario.gh_fails("issue view"),
             "publication" => scenario.gh_fails("issue create"),
             _ => {}
         }
@@ -570,4 +578,49 @@ fn a_factory_or_unknown_category_gets_one_correction_in_both_modes() {
             assert_eq!(output["category"], "bug", "{invalid}");
         }
     }
+}
+
+#[test]
+fn a_bad_category_is_reported_alongside_another_validation_error() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    let corrected = json!({
+        "category": "bug", "state": "needs-triage",
+        "investigation": "The empty cache read panics.",
+        "issues": [{"title": "Handle an empty cache", "body": "Reproduced an empty read."}]
+    });
+    let mut rejected = corrected.clone();
+    rejected["category"] = json!("security-finding");
+    rejected["issues"][0]["questionnaire"] = json!("Which cache failed?");
+    respond(&scenario, 1, &rejected);
+    respond(&scenario, 2, &corrected);
+    let result = scenario.run_with_input(&["triage", "--recommend-only"], REPORT);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    let evidence: serde_json::Value =
+        serde_json::from_str(calls[1]["prompt"].as_str().unwrap().lines().last().unwrap()).unwrap();
+    assert!(evidence["validation_error"].as_str().unwrap().contains(
+        "the Triage category must be a repository category label, not a triage state or another factory label"));
+}
+
+#[test]
+fn a_proposed_issue_category_override_gets_one_correction() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug", "security-finding"]);
+    scenario.issue_is(7, "OPEN");
+    let corrected = complete(&scenario);
+    let mut rejected = corrected.clone();
+    rejected["issues"][0]["category"] = json!("security-finding");
+    respond(&scenario, 1, &rejected);
+    respond(&scenario, 2, &corrected);
+    let result = scenario.run_with_input(&["triage", "--recommend-only"], REPORT);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    let evidence: serde_json::Value =
+        serde_json::from_str(calls[1]["prompt"].as_str().unwrap().lines().last().unwrap()).unwrap();
+    assert_eq!(
+        evidence["validation_error"],
+        "the Triage category must be a repository category label, not a triage state or another factory label"
+    );
 }

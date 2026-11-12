@@ -1,8 +1,10 @@
 //! Correct invalid session output once; GitHub checks and publication stay outside this loop.
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail};
 
-use super::{CATEGORY_ERROR, Recommendation, existing, parse_recommendation, repository_category};
+use super::{
+    Recommendation, existing, issue_category, read_recommendation, resolve_recommendation,
+};
 use crate::issue::IssueUrl;
 use crate::prompt;
 use crate::session::{Kind, Purpose, Sessions};
@@ -47,22 +49,20 @@ fn validate(
     target: Option<&IssueUrl>,
     categories: &[String],
 ) -> Result<Recommendation> {
-    let mut recommendation = parse_recommendation(message)?;
-    if let Some(target) = target {
-        existing::check_recommendation(&mut recommendation, target)?;
+    let mut recommendation = read_recommendation(message)?;
+    // An invalid category is reported with any other error, so one
+    // correction turn hears about both.
+    let category = recommendation
+        .issues
+        .iter()
+        .find_map(|issue| issue_category(categories, &recommendation, issue).err());
+    let checked = resolve_recommendation(&mut recommendation).and_then(|()| match target {
+        Some(target) => existing::check_recommendation(&mut recommendation, target),
+        None => Ok(()),
+    });
+    match (checked, category) {
+        (Ok(()), None) => Ok(recommendation),
+        (Err(error), None) | (Ok(()), Some(error)) => Err(error),
+        (Err(error), Some(category)) => bail!("{error:#}; {category:#}"),
     }
-    for issue in &recommendation.issues {
-        ensure!(
-            repository_category(
-                categories,
-                issue
-                    .category
-                    .as_deref()
-                    .unwrap_or(&recommendation.category)
-            )
-            .is_some(),
-            CATEGORY_ERROR
-        );
-    }
-    Ok(recommendation)
 }
