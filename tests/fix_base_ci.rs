@@ -211,6 +211,115 @@ git commit -qm 'Fix base CI'
 "#;
 
 #[test]
+fn unchanged_base_ci_fix_publishes_nothing_and_is_not_repeated() {
+    let scenario = Scenario::new();
+    let head = failed_base(&scenario, 2);
+    scenario.agent_does("true");
+    let result = scenario.run(PASS);
+    assert!(
+        scenario.gh_calls_of("pr", "create").is_empty(),
+        "A CI-fix session that committed nothing tried to open a PR: {}",
+        result.stderr
+    );
+    let branch = format!("fix-main-{}", &head[..7]);
+    assert!(
+        scenario
+            .launch_git(&["ls-remote", "origin", &format!("refs/heads/{branch}")])
+            .is_empty(),
+        "An unchanged repair branch was pushed"
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let reason = format!("CI-fix found nothing to change on main at {head}");
+    assert!(result.stderr.contains(&reason), "{}", result.stderr);
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert!(activity.contains(&reason), "{activity}");
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+    assert_ci_reservation_released(&scenario);
+    scenario.assert_cleaned_up(&branch);
+
+    let again = scenario.run(PASS);
+    assert_eq!(again.code, Some(0), "{}", again.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", again.stderr);
+    assert!(scenario.gh_calls_of("pr", "create").is_empty());
+    assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+    assert_ci_reservation_released(&scenario);
+}
+
+#[test]
+fn unchanged_base_attempt_does_not_rerun_after_refusal() {
+    let scenario = Scenario::new();
+    let head = failed_base(&scenario, 1);
+    scenario.gh_fails("run rerun");
+    scenario.agent_does("true");
+    let first = scenario.run(PASS);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert!(
+        first
+            .stderr
+            .contains(&format!("CI-fix found nothing to change on main at {head}")),
+        "{}",
+        first.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.gh_calls_of("run", "rerun").len(), 1);
+    assert!(scenario.gh_calls_of("pr", "create").is_empty());
+
+    let mut state = scenario.gh_state();
+    state["failing"] = json!([]);
+    scenario.write_gh_state(&state);
+    let second = scenario.run(PASS);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(
+        scenario.gh_calls_of("run", "rerun").len(),
+        1,
+        "A later Pass re-ran checks after the unchanged repair: {}",
+        second.stderr
+    );
+}
+
+#[test]
+fn unchanged_base_attempt_is_scoped_to_the_base_and_full_commit() {
+    let scenario = Scenario::new();
+    let head = failed_base(&scenario, 2);
+    scenario.origin_has_branch("release", "main", &[]);
+    scenario.agent_does("true");
+    let first = scenario.run(PASS);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+
+    let mut state = scenario.gh_state();
+    state["runs"][0]["head_branch"] = "release".into();
+    scenario.write_gh_state(&state);
+    let release = scenario.run(&["fix", "base", "release", "no-merge", "no-email"]);
+    assert_eq!(release.code, Some(0), "{}", release.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", release.stderr);
+    assert!(
+        release.stderr.contains(&format!(
+            "CI-fix found nothing to change on release at {head}"
+        )),
+        "{}",
+        release.stderr
+    );
+
+    scenario.origin_has_commit("main", "next.txt", "next", "New Base branch commit");
+    let next = failed_base(&scenario, 2);
+    assert_ne!(next, head);
+    scenario.agent_does(FIX);
+    let changed = scenario.run(PASS);
+    assert_eq!(changed.code, Some(0), "{}", changed.stderr);
+    assert_eq!(scenario.claude_calls().len(), 3, "{}", changed.stderr);
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["head"],
+        format!("fix-main-{}", &next[..7])
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert_ci_reservation_released(&scenario);
+}
+
+#[test]
 fn base_ci_notification_keeps_the_authored_pr_title() {
     let scenario = Scenario::new();
     failed_base(&scenario, 2);

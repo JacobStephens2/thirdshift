@@ -822,7 +822,8 @@ fn notify(
                     .find_map(|resolution| match resolution {
                         crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
                         crate::run::Resolution::NotReproduced { .. }
-                        | crate::run::Resolution::ArchitectureReview { .. } => None,
+                        | crate::run::Resolution::ArchitectureReview { .. }
+                        | crate::run::Resolution::BaseCiUnchanged { .. } => None,
                     })
             }),
         advice: &[],

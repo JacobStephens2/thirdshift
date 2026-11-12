@@ -357,7 +357,8 @@ impl<'a> Account<'a> {
                     .unwrap_or(match &reached.resolution {
                         crate::run::Resolution::NotReproduced { .. } => "bug not reproduced",
                         crate::run::Resolution::PullRequest { .. }
-                        | crate::run::Resolution::ArchitectureReview { .. } => "succeeded",
+                        | crate::run::Resolution::ArchitectureReview { .. }
+                        | crate::run::Resolution::BaseCiUnchanged { .. } => "succeeded",
                     }),
                 ended: Ok(match &reached.resolution {
                     crate::run::Resolution::PullRequest { url, goal } => {
@@ -368,6 +369,9 @@ impl<'a> Account<'a> {
                     }
                     crate::run::Resolution::ArchitectureReview { reason, .. } => {
                         format!("Architecture review ended: {reason}")
+                    }
+                    crate::run::Resolution::BaseCiUnchanged { base, commit, .. } => {
+                        format!("CI-fix found nothing to change on {base} at {commit}")
                     }
                 }),
                 interrupted: false,
@@ -385,7 +389,8 @@ impl<'a> Account<'a> {
                         dispatched: None,
                     }),
                     crate::run::Resolution::PullRequest { .. }
-                    | crate::run::Resolution::NotReproduced { .. } => None,
+                    | crate::run::Resolution::NotReproduced { .. }
+                    | crate::run::Resolution::BaseCiUnchanged { .. } => None,
                 },
                 security_findings: None,
                 security_findings_waiting: false,

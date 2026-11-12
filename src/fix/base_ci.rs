@@ -1,6 +1,7 @@
 //! Base branch maintenance precedes the unscoped Fix Pass's PR search.
 use anyhow::{Result, ensure};
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::ci;
@@ -31,6 +32,24 @@ pub(super) fn run(
             "Base branch CI is reserved on origin".into(),
         ));
     };
+    // A local ref retains the unchanged attempt across Passes, without an
+    // empty branch on origin. Hash the Base branch so slash-containing names
+    // and long names cannot collide with the commit segment or ref limits.
+    // Consult it before observing CI, which may request a Check re-run.
+    let unchanged = format!(
+        "refs/thirdshift/base-ci-unchanged/{:x}/{tip}",
+        Sha256::digest(base.as_bytes())
+    );
+    if !launch
+        .directory
+        .git()
+        .run(&["for-each-ref", "--format=%(refname)", &unchanged])?
+        .is_empty()
+    {
+        return Ok(Outcome::Skipped(format!(
+            "CI-fix already found nothing to change on {base} at {tip}"
+        )));
+    }
     let github = GitHub::new();
     // Delivery's repository-scoped adapters take an IssueUrl. No issue exists
     // for this repair: BaseBranch context must never read or close this anchor.
@@ -94,6 +113,15 @@ pub(super) fn run(
         protected_paths: &asks.delivery_limits.protected_paths,
     }
     .base_ci_fix(worktree, &mut target, &title, &failed)
+    .and_then(|reached| {
+        if matches!(reached.resolution, Resolution::BaseCiUnchanged { .. }) {
+            launch
+                .directory
+                .git()
+                .run(&["update-ref", &unchanged, tip])?;
+        }
+        Ok(reached)
+    })
     .map_err(|mut failed| {
         if let Some(recovery) = &mut failed.recovery
             && let Some(pr) = target.info()
