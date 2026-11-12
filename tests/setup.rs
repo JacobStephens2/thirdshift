@@ -293,6 +293,10 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         config["resources"]["max_load_per_cpu_percent"].as_integer(),
         Some(0)
     );
+    assert_eq!(
+        config["resources"]["min_available_disk_mb"].as_integer(),
+        Some(5120)
+    );
     assert_eq!(config["pickup"]["failure_limit"].as_integer(), Some(3));
     assert!(config["pickup"].get("limit").is_none(), "{text}");
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));

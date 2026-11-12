@@ -46,6 +46,9 @@ pub(super) fn execute_issue_steps(
             if let Some(failed) = &mut issue_run.failure
                 && let Some(recovery) = &mut failed.recovery
             {
+                if crate::failed_run::out_of_disk(&failed.error) {
+                    recovery.add_out_of_disk();
+                }
                 recovery.add_command_context(context, on_origin);
                 for line in recovery.lines() {
                     progress::step(line);
@@ -782,7 +785,7 @@ impl HeldClaim<'_> {
     /// hand `error` on.
     fn fail(&mut self, selection: &Selection, error: anyhow::Error) -> anyhow::Error {
         self.end(
-            claim::Ending::Failed,
+            claim::Ending::failed(&error),
             Some(before_steps_comment(selection, &error)),
         );
         error
@@ -958,21 +961,21 @@ pub(super) fn run_issue_branch(
     // Issue branch. Release the Claim, as a run that published nothing does,
     // instead of removing it the way a finished Delivery does.
     let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
-    let comment = match (&completed.failed_run, &result) {
-        (Some(failed), _) => Some(failed.comment(Some(&branch))),
-        (None, Err(error)) => Some(before_steps_comment(&selection, error)),
-        (None, Ok(_)) => None,
-    };
     // A land-tickets Step whose Spec only waits ends the Claim as a waiting
     // Spec run does, matching its comment.
-    let failed_ending = if completed
-        .failed_run
-        .as_ref()
-        .is_some_and(crate::failed_run::FailedRun::waiting)
-    {
-        claim::Ending::Waiting
-    } else {
-        claim::Ending::Failed
+    let (comment, failed_ending) = match (&completed.failed_run, &result) {
+        (Some(failed), _) if failed.waiting() => {
+            (Some(failed.comment(Some(&branch))), claim::Ending::Waiting)
+        }
+        (Some(failed), _) => (
+            Some(failed.comment(Some(&branch))),
+            claim::Ending::failed(&failed.error),
+        ),
+        (None, Err(error)) => (
+            Some(before_steps_comment(&selection, error)),
+            claim::Ending::failed(error),
+        ),
+        (None, Ok(_)) => (None, claim::Ending::Failed),
     };
     drop(completed);
     if result.is_ok() && not_reproduced {

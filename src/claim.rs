@@ -64,8 +64,24 @@ pub enum Ending {
     /// A Spec run ended only waiting: no Ticket failed or was interrupted,
     /// and every Ticket not done waits on a person or on other work.
     Waiting,
+    /// It failed because the host ran out of disk space, which says nothing
+    /// about the issue: the Claim is released whatever is on origin, without
+    /// labelling a failure.
+    OutOfDisk,
     /// It failed otherwise.
     Failed,
+}
+
+impl Ending {
+    /// How a run that failed with `error` ends its Claim: [`Ending::OutOfDisk`]
+    /// when the host ran out of disk space, else [`Ending::Failed`].
+    pub fn failed(error: &anyhow::Error) -> Self {
+        if crate::failed_run::out_of_disk(error) {
+            Self::OutOfDisk
+        } else {
+            Self::Failed
+        }
+    }
 }
 
 /// Whether an issue with `labels` carries a Claim, whatever else it is
@@ -137,6 +153,9 @@ impl Claim<'_> {
     /// - Failed: the Claim is released if nothing of the run is on origin to
     ///   take over, except a Security fix. Otherwise `agent-failed` takes the
     ///   place of `in-progress` in one label edit.
+    /// - Out of disk: the host failed, not the issue, so the Claim is
+    ///   released even with work on origin, except a Security fix, which ends
+    ///   as a failed one does.
     /// - Before Delivery: a successful Custom process releases its Claim if
     ///   nothing is on origin, except a Security fix, and adds no failure label.
     /// - Waiting: a Spec run only waiting hands its Spec back, putting
@@ -422,7 +441,7 @@ impl<'a> Claimed<'a> {
             Ending::Reached(Goal::ReadyForReview) | Ending::Held => self.remove(outside),
             // Pickup never takes a Security fix, so a waiting one stays with
             // the Day shift as a failed one does, its details in its advisory.
-            Ending::Waiting | Ending::Failed if self.security_fix => {
+            Ending::Waiting | Ending::Failed | Ending::OutOfDisk if self.security_fix => {
                 self.label_failed(outside);
             }
             Ending::Waiting => {
@@ -435,6 +454,7 @@ impl<'a> Claimed<'a> {
             Ending::BeforeDelivery => {
                 self.release_if_nothing_on_origin(outside);
             }
+            Ending::OutOfDisk => self.release_out_of_disk(outside),
             Ending::Failed => {
                 let not_released = self.release_if_nothing_on_origin(outside);
                 if not_released {
@@ -641,30 +661,64 @@ impl<'a> Claimed<'a> {
         }
     }
 
+    /// [`Ending::OutOfDisk`], through `outside`: release the Claim as
+    /// [`Claimed::release_if_nothing_on_origin`] does, but whatever is on
+    /// origin, which stays there for the next run to continue. It finishes
+    /// after an interrupt, and a failure is a warning naming what to run by
+    /// hand.
+    fn release_out_of_disk(&self, outside: &mut impl Outside) {
+        if !self.changed_any() {
+            return;
+        }
+        let why = format!(
+            ", without {AGENT_FAILED}: {}",
+            crate::failed_run::OUT_OF_DISK
+        );
+        if let Err(error) =
+            retry_if_interrupted(outside, |outside| self.put_labels_back(outside, &why))
+        {
+            outside.warn(
+                &error,
+                format!(
+                    "could not release the Claim on #{} after the host ran out of disk space, so \
+                     release it by hand: {}",
+                    self.issue.number,
+                    self.release_by_hand()
+                ),
+            );
+        }
+    }
+
     /// [`Claimed::release_if_nothing_on_origin`], its failure as `git` or `gh`
     /// gave it.
     fn put_labels_back_unless_on_origin(&self, outside: &mut impl Outside) -> Result<bool> {
-        let issue = self.issue;
-        if outside.started(issue)? {
+        if outside.started(self.issue)? {
             return Ok(true);
         }
+        self.put_labels_back(outside, "").map(|()| false)
+    }
+
+    /// Put the issue's labels back as they were before the Claim, saying so
+    /// with `why` after the release line, unless it is no longer `in-progress`.
+    fn put_labels_back(&self, outside: &mut impl Outside, why: &str) -> Result<()> {
+        let issue = self.issue;
         let (off, on) = self.release_labels();
         let edit = Edit::of(issue, outside.labels(issue)?, off, on);
         if !is_on(edit.labels()) {
-            return Ok(false);
+            return Ok(());
         }
         let number = issue.number;
         outside.step(if !self.removed_ready_for_agent {
-            format!("releasing the Claim on #{number}: removing {IN_PROGRESS}")
+            format!("releasing the Claim on #{number}: removing {IN_PROGRESS}{why}")
         } else if self.added_in_progress {
             format!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT}, \
-                 in place of {IN_PROGRESS}"
+                 in place of {IN_PROGRESS}{why}"
             )
         } else {
-            format!("releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again")
+            format!("releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again{why}")
         });
-        outside.apply(&edit).map(|()| false)
+        outside.apply(&edit)
     }
 
     /// The labels releasing the Claim takes off and puts on, in that order:
@@ -1329,6 +1383,47 @@ mod tests {
         expected.extend(labelling_failed(&["bug", "agent-failed"]));
         assert_eq!(issue.calls, expected);
         assert_eq!(labels(&issue), ["bug", "agent-failed"]);
+    }
+
+    #[test]
+    fn a_run_the_host_ran_out_of_disk_under_is_released_even_started_on_origin_and_owes_no_comment()
+    {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.started = true;
+
+        let owed = claimed.end(&mut issue, Ending::OutOfDisk);
+
+        assert!(!owed);
+        assert_eq!(
+            issue.calls,
+            [
+                Call::Labels,
+                step(
+                    "releasing the Claim on #7: labelling it ready-for-agent, in place of \
+                     in-progress, without agent-failed: the host ran out of disk space; free disk \
+                     space on it, then retry the Command"
+                ),
+                edit(
+                    &["in-progress"],
+                    &["ready-for-agent"],
+                    &["bug", "ready-for-agent"]
+                ),
+            ]
+        );
+        assert_eq!(labels(&issue), ["bug", "ready-for-agent"]);
+    }
+
+    #[test]
+    fn a_security_fix_the_host_ran_out_of_disk_under_still_waits_for_the_day_shift() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["security-fix", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+
+        claimed.end(&mut issue, Ending::OutOfDisk);
+
+        assert_eq!(labels(&issue), ["security-fix", "agent-failed"]);
     }
 
     #[test]

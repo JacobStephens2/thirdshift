@@ -305,8 +305,9 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         ]}),
         View::Resources | View::ResourceStatus => object(json!({
             "host": object(json!({"total_memory_mb": integer, "available_memory_mb": integer,
-                "logical_cpus": integer, "load_one": {"type": "number"}})),
-            "limits": object(json!({"min_available_memory_mb": integer, "max_load_per_cpu_percent": integer})),
+                "logical_cpus": integer, "load_one": {"type": "number"}, "available_disk_mb": integer})),
+            "limits": object(json!({"min_available_memory_mb": integer, "max_load_per_cpu_percent": integer,
+                "min_available_disk_mb": integer})),
             "load_per_cpu_percent": {"type": "number"}, "ready": {"type": "boolean"},
             "reasons": array(text)
         })),

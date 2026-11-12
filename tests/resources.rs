@@ -26,6 +26,8 @@ fn resources_reports_host_measurements_and_the_configured_admission_decision() {
     assert!(snapshot["host"]["total_memory_mb"].as_u64().unwrap() > 0);
     assert!(snapshot["host"]["logical_cpus"].as_u64().unwrap() > 0);
     assert!(snapshot["load_per_cpu_percent"].as_f64().unwrap() >= 0.0);
+    assert!(snapshot["host"]["available_disk_mb"].as_u64().is_some());
+    assert_eq!(snapshot["limits"]["min_available_disk_mb"], 5120);
     assert!(
         snapshot["reasons"][0]
             .as_str()
@@ -36,6 +38,33 @@ fn resources_reports_host_measurements_and_the_configured_admission_decision() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert!(result.stdout.contains("Waiting for host resources"));
     assert!(result.stdout.contains("9007199254740991 MB"));
+    assert!(
+        result.stdout.contains("Available disk: "),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("minimum available disk: 5120 MB"),
+        "{}",
+        result.stdout
+    );
+}
+
+#[test]
+fn a_disk_minimum_above_free_space_blocks_admission_naming_disk() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[resources]\nmin_available_disk_mb = 9007199254740991\n");
+    let result = scenario.run(&["resources", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let snapshot: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(snapshot["ready"], false);
+    let free = snapshot["host"]["available_disk_mb"].as_u64().unwrap();
+    assert_eq!(
+        snapshot["reasons"],
+        serde_json::json!([format!(
+            "available disk {free} MB is below 9007199254740991 MB"
+        )])
+    );
 }
 
 #[test]

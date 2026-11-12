@@ -16,11 +16,12 @@ pub(super) struct Status {
 
 impl Status {
     pub(super) fn new(config: &UserConfig) -> Self {
-        if config.resources == resources::Limits::default() {
+        if config.resources.is_off() {
             return Self {
                 state: "off",
                 label: "Host limits off",
-                detail: "Memory and load limits are disabled; capacity is not checked.".into(),
+                detail: "Memory, load and disk limits are disabled; capacity is not checked."
+                    .into(),
             };
         }
         match resources::observe(config.resources) {
@@ -32,9 +33,10 @@ impl Status {
                     "Host busy · new sessions wait"
                 },
                 detail: format!(
-                    "{} MB available · {:.1}% load per CPU. {}",
+                    "{} MB available · {:.1}% load per CPU · {} MB disk available. {}",
                     snapshot.host.available_memory_mb,
                     snapshot.load_per_cpu_percent,
+                    snapshot.host.available_disk_mb,
                     if snapshot.ready {
                         "Within configured limits; capacity is not reserved.".into()
                     } else {

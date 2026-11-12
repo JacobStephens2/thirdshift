@@ -35,6 +35,19 @@ pub fn is_issue(labels: &Labels) -> bool {
 /// The labels of a Base fix issue.
 const LABELS: [Label; 2] = [BASE_FIX, READY_FOR_AGENT];
 
+/// A Base fix that ended without merging, as its child Run's own words gave
+/// it, which its agent can have written: never the parent Run's host's.
+#[derive(Debug)]
+pub struct ChildEnded(String);
+
+impl fmt::Display for ChildEnded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ChildEnded {}
+
 /// What a Run asks about a Base fix, by its command or, without `base-fix`
 /// or `no-base-fix`, by the User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,9 +293,10 @@ impl BaseFix {
             Ended::NotReproduced { comment_url } => {
                 bail!("Base fix #{number} did not reproduce: {comment_url}")
             }
-            Ended::ArchitectureReview { reason } => {
-                bail!("Base fix #{number} ended before Delivery: {reason}")
-            }
+            Ended::ArchitectureReview { reason } => Err(ChildEnded(format!(
+                "Base fix #{number} ended before Delivery: {reason}"
+            ))
+            .into()),
             Ended::Reached { .. } => {
                 taken.reached = true;
                 outside.merged(running);
@@ -304,7 +318,7 @@ impl BaseFix {
                 if let Some(log) = log {
                     outside.step(format!("Base fix #{number} session trace: {log}"));
                 }
-                bail!("Base fix {} failed: {cause}", taken.issue.url)
+                Err(ChildEnded(format!("Base fix {} failed: {cause}", taken.issue.url)).into())
             }
         }
     }
