@@ -401,10 +401,24 @@ fn scenario_root_guardian() {
         unsafe { libc::signal(signal, libc::SIG_IGN) };
     }
     std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()).unwrap();
-    match fs::remove_dir_all(root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => panic!("could not remove Scenario root: {error}"),
+    let deadline = Instant::now() + super::WAIT_BOUND;
+    loop {
+        match fs::remove_dir_all(&root) {
+            Ok(()) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !root.exists() => return,
+            // A fixture can also have commands outside OwnedRuns (such as
+            // the Console). Tolerate their final filesystem activity without
+            // accepting an incompletely removed root as successful cleanup.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+                ) && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("could not remove Scenario root {}: {error}", root.display()),
+        }
     }
 }
 

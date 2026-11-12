@@ -222,6 +222,9 @@ and assertion unwinding wait up to the same 120-second bound for this guardian
 to finish. Concurrent Scenarios
 have separate pipes and roots; no temporary-directory scanning or historical
 cleanup is performed.
+The directory guardian retries transient nonempty-directory and disappearing-entry
+errors within that bound, so final filesystem activity from commands outside
+`OwnedRuns` does not make a partial removal count as success.
 
 Terminal Runs (`run_terminal`, `run_terminal_bounded`, `run_on_terminal`) follow
 the [Setup PTY child lifetime](#setup-pty-child-lifetime) contract instead.
