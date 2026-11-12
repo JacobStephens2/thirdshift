@@ -265,9 +265,6 @@ pub(in crate::logs) fn details(
         Default::default()
     };
     let mut value = crate::logs::metrics::details(snapshot, command)?;
-    if let Observation::Record(command) = command {
-        add_stage_times(&mut value, command, snapshot.observed_at());
-    }
     value
         .as_object_mut()
         .expect("Command details object")
@@ -278,28 +275,6 @@ pub(in crate::logs) fn details(
                 .clone(),
         );
     Ok(value)
-}
-
-fn add_stage_times(value: &mut serde_json::Value, command: &Command, now: DateTime<Local>) {
-    for (index, timing) in command
-        .record
-        .stage_times((command.state == "live").then_some(now.fixed_offset()))
-        .enumerate()
-    {
-        value["stages"][index]["seconds"] = serde_json::json!(timing.seconds());
-        value["stages"][index]["time"] = serde_json::json!(super::stage_time(
-            timing.seconds(),
-            timing.stage.suspended_seconds
-        ));
-    }
-    for (field, children) in [
-        ("children", &command.children),
-        ("dispatched", &command.dispatched),
-    ] {
-        for (index, child) in children.iter().enumerate() {
-            add_stage_times(&mut value[field][index], child, now);
-        }
-    }
 }
 
 pub(crate) fn envelope(command: serde_json::Value) -> serde_json::Value {

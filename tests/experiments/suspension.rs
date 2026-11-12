@@ -61,22 +61,7 @@ fn commands_mark_trials_that_span_their_recorded_suspension() {
             fixture.scenario.agent_does(review_reports_prelude());
         }
         let library = fixture.scenario.path("suspension-clock.so");
-        let compiled = std::process::Command::new("cc")
-            .args([
-                "-shared",
-                "-fPIC",
-                "tests/console/session-clock.c",
-                "-ldl",
-                "-o",
-            ])
-            .arg(&library)
-            .output()
-            .unwrap();
-        assert!(
-            compiled.status.success(),
-            "{}",
-            String::from_utf8_lossy(&compiled.stderr)
-        );
+        support::clock::compile(&library);
         let offset = fixture.scenario.path("clock-offset");
         let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
         fixture

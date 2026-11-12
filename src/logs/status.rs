@@ -348,7 +348,7 @@ fn ticket_text(ticket: &super::command_record::TicketRecord, repository: &str) -
     format!("Ticket #{} · {state}", ticket.issue.number)
 }
 
-fn stage_time(seconds: Option<f64>, suspended_seconds: u64) -> String {
+pub(super) fn stage_time(seconds: Option<f64>, suspended_seconds: u64) -> String {
     let mut time = seconds
         .map(|seconds| age(seconds as i64))
         .unwrap_or_else(|| "time unknown".into());
