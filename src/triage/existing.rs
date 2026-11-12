@@ -138,7 +138,7 @@ pub(super) fn check_recommendation(
 ) -> Result<()> {
     ensure!(
         recommendation.issues.len() == 1,
-        "existing-issue Triage requires exactly one recommendation issue; propose splits in a ready-for-human questionnaire"
+        "existing-issue Triage requires exactly one recommendation issue; propose splits in a ready-for-human issue body"
     );
     let issue = &mut recommendation.issues[0];
     ensure!(
