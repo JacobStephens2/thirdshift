@@ -231,13 +231,15 @@ impl ReviewProcess {
             let github = GitHub::new();
             // Validate before reserving, so an ineligible explicit PR changes
             // no label. Capture again after reservation for the actual run.
-            github.review_pull_request(pr)?;
+            let snapshot = github.review_pull_request(pr)?;
+            notification.pull_request(pr, &snapshot.title);
             let _reservation = match reservation {
                 Some(held) => held,
                 None => Reservation::take(&launch, &github, pr)?
                     .context("pull request is already reserved or labelled in-progress")?,
             };
             let snapshot = github.review_pull_request(pr)?;
+            notification.pull_request(pr, &snapshot.title);
             logs::issue_branch(Some(&snapshot.branch));
             logs::pull_request(&pr.url);
             progress::step(format_args!("working on pull request {}", pr.url));
