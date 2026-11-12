@@ -1383,6 +1383,56 @@ fn disposable_validation_artifacts_do_not_block_the_next_review() {
 }
 
 #[test]
+fn an_undelivered_review_leaving_only_validation_artifacts_frees_its_worktree_and_branch() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.agent_does(
+        "mkdir .review-logs\nprintf passed > .review-logs/tests.log\nprintf passed > .validation-tests.txt\nexit 1",
+    );
+    let result = scenario.run(&["review", &url]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("uncommitted changes"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario
+            .launch_git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        1
+    );
+    assert!(
+        scenario
+            .launch_git(&["branch", "--list", "colleague"])
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_undelivered_review_preserves_an_untracked_source_file_beside_validation_artifacts() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.agent_does(
+        "mkdir .review-logs\nprintf passed > .review-logs/tests.log\necho fix > review-fix.txt\nexit 1",
+    );
+    let result = scenario.run(&["review", &url]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("uncommitted changes"),
+        "{}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    let worktree = Path::new(calls[0]["cwd"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("review-fix.txt")).unwrap(),
+        "fix\n"
+    );
+}
+
+#[test]
 fn recommend_only_preserves_an_existing_local_head_branch() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);

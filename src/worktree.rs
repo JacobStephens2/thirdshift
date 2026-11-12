@@ -36,7 +36,15 @@ mod synchronization_tests;
 #[derive(Clone, Copy)]
 enum UntrackedFiles {
     Preserve,
+    /// Only the Review run's named validation output, see [`validation_artifact`].
+    DiscardNamedValidationArtifacts,
     DiscardValidationArtifacts,
+}
+
+/// Review validation instructions name these root entries for disposable logs.
+fn validation_artifact(path: &str) -> bool {
+    let root = path.split('/').next().unwrap_or_default();
+    root == ".review-logs" || root.starts_with(".validation-")
 }
 
 /// Failure preservation differs for a Ticket's implementation and an
@@ -443,19 +451,31 @@ fn uncommitted_changes(
     untracked: UntrackedFiles,
 ) -> Result<bool> {
     let entries = run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
-    Ok(index_hides_tracked_work(&entries)
-        || !run(&[
-            "-c",
-            "core.fsmonitor=false",
-            "status",
-            "--porcelain",
-            match untracked {
-                UntrackedFiles::Preserve => "--untracked-files=all",
-                UntrackedFiles::DiscardValidationArtifacts => "--untracked-files=no",
-            },
-            "--ignore-submodules=none",
-        ])?
-        .is_empty())
+    if index_hides_tracked_work(&entries) {
+        return Ok(true);
+    }
+    let status = run(&[
+        "-c",
+        "core.fsmonitor=false",
+        "status",
+        "--porcelain",
+        "-z",
+        match untracked {
+            UntrackedFiles::Preserve | UntrackedFiles::DiscardNamedValidationArtifacts => {
+                "--untracked-files=all"
+            }
+            UntrackedFiles::DiscardValidationArtifacts => "--untracked-files=no",
+        },
+        "--ignore-submodules=none",
+    ])?;
+    // A rename's source path is its own field; its entry already counts as work.
+    Ok(status
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| {
+            !matches!(untracked, UntrackedFiles::DiscardNamedValidationArtifacts)
+                || !entry.strip_prefix("?? ").is_some_and(validation_artifact)
+        }))
 }
 
 /// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.

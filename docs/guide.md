@@ -3488,6 +3488,10 @@ untracked validation artifacts and reruns review and delivery with the preserved
 commits. Recommendation retries restart that owned checkout at the captured head.
 Uncommitted tracked edits, unfinished Git operations, locked checkouts, changed
 ownership evidence and other local branches are preserved for human attention.
+A Review run that ends without delivering still removes its worktree and local
+branch when the only leftovers are validation logs under `.review-logs/` or
+root entries named `.validation-*`; other untracked files, tracked edits and
+unpushed commits keep it.
 
 The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
