@@ -41,6 +41,7 @@ impl Audit {
             findings: self.findings.findings,
             waiting: self.findings.waiting,
             advice: self.findings.advice,
+            fixing_skipped: None,
         }
     }
 }

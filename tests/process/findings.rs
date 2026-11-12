@@ -310,6 +310,32 @@ fn fixing_requires_permission_and_the_command_overrides_the_user_config() {
     }
 }
 
+/// #2094: a repository with issues turned off cannot hold a fix Ticket, so
+/// fix-findings starts no publishing session and leaves every record as it was.
+#[test]
+fn fixing_is_skipped_without_a_session_when_issues_are_turned_off() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let mut before = scenario.gh_state();
+    before["has_issues"] = json!(false);
+    scenario.write_gh_state(&before);
+    scenario.agent_does_in_session(1, &stage_fix(0));
+    let result = scenario.run(&["process", "findings"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Security fixing skipped: acme/widgets has issues turned off"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    let after = scenario.gh_state();
+    assert_eq!(after["advisories"], before["advisories"]);
+    assert_eq!(after["issues"], before["issues"]);
+    assert!(after["prs"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn closing_rechecks_each_merged_base_and_leaves_a_failing_finding_for_the_day_shift() {
     let scenario = findings();

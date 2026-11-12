@@ -1442,6 +1442,70 @@ fn a_dispatched_fix_holds_off_no_audit_and_is_not_dispatched_again() {
     assert_eq!(scenario.gh_state()["issues"], issues);
 }
 
+/// #2094: a repository with issues turned off cannot hold a fix Ticket.
+fn with_issues_disabled(scenario: &Scenario) {
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!(false);
+    scenario.write_gh_state(&state);
+}
+
+#[test]
+fn a_repository_with_issues_off_audits_and_skips_fixing_without_a_publishing_session() {
+    let scenario = with_reproduced_findings(&["critical"]);
+    with_issues_disabled(&scenario);
+    // Whichever session comes first: a publishing session would stage a
+    // fix, as in the reported runs.
+    scenario.agent_does(&format!(
+        "if grep -q 'Output directory' prompt.txt 2>/dev/null || printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'Output directory'; then\n{}\nelse\n{}\nfi\n",
+        audit_script(&json!([finding("finding-0")]).to_string()),
+        stage_fix("GHSA-finding-0")
+    ));
+    let before = scenario.gh_state();
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "day@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Security fixing skipped: acme/widgets has issues turned off"),
+        "{}",
+        result.stderr
+    );
+    let (subject, body) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Security run: findings recorded"
+    );
+    assert!(
+        body.contains(
+            "Security fixing skipped: acme/widgets has issues turned off, so no Security fix Ticket can be filed"
+        ),
+        "{body}"
+    );
+    assert!(!body.contains("Private candidate write-up"), "{body}");
+    assert!(
+        result
+            .stderr
+            .contains("0 new finding(s), 1 already recorded"),
+        "{}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 1, "only the audit runs: {calls:?}");
+    assert!(
+        !calls[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Proposed public issue")
+    );
+    let after = scenario.gh_state();
+    assert_eq!(after["advisories"], before["advisories"]);
+    assert_eq!(after["issues"], before["issues"]);
+}
+
 #[test]
 fn reproduced_findings_without_permission_are_not_fixed_and_hold_off_no_audit() {
     for config in ["", "[security]\nfix = false\n", "[security]\nfix = true\n"] {

@@ -10,6 +10,8 @@ pub(super) fn run(prepared: &Prepared, step: &ResolvedStep, index: usize) -> Res
     let github = GitHub::new();
     // A new write-up can quote an outcome no reproduction wrote.
     // reproduce-findings still scores a record this audit just created.
+    // A repository with issues turned off cannot hold the fix, so its
+    // reproduced findings hold off no audit.
     let owes_reproduction = matches!(step.kind, StepKind::ReproduceFindings)
         && prepared
             .security_findings
@@ -20,6 +22,7 @@ pub(super) fn run(prepared: &Prepared, step: &ResolvedStep, index: usize) -> Res
     if !owes_reproduction
         && prepared.security_fix
         && github.security_records(&repo.slug())?.next_fix()?.is_some()
+        && github.has_issues(&repo.slug())?
     {
         let message = format!(
             "{} skipped: a recorded Security finding awaits an allowed fix",
