@@ -293,6 +293,7 @@ impl StageName {
     pub(super) fn is_session(name: &str) -> bool {
         [
             Self::Implement,
+            Self::CodeReview,
             Self::Resume,
             Self::Repair,
             Self::SpecReview,
@@ -383,7 +384,10 @@ impl CommandRecord {
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
-        if matches!(self.kind.as_str(), "Run" | "Spec run" | "Base fix") {
+        if matches!(
+            self.kind.as_str(),
+            "Run" | "Spec run" | "Base fix" | "Review run" | "Triage run" | "Fix run"
+        ) {
             self.run_metrics = Some(super::run_metrics::RunMetrics::of(
                 self,
                 ranges,
