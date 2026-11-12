@@ -2038,8 +2038,9 @@ The Built-in `security-run` owns `security-audit` → `reproduce-findings` →
 Effort and limits. Its Command limit, the lock of its kind and Ready-issue,
 failed-fix and unchanged-Base skip gates stay before the file. The first two
 Steps skip when an earlier
-reproduced finding awaits an allowed fix; fixing and closing retain their
-permission gates. The Security run fixes at most one finding per invocation,
+reproduced finding awaits an allowed fix, unless the repository has issues
+turned off; fixing and closing retain their permission gates. The Security
+run fixes at most one finding per invocation,
 and closes only that finding after its fix merges and its proof passes.
 Inspect it with `thirdshift process show security-run` or validate it with
 `thirdshift process check security-run`. A copy under a new Custom process
@@ -2335,7 +2336,8 @@ Each takes its own Harness, Model and Effort. Their session traces stay local,
 including when OTLP export is configured.
 
 With `security-fix` (or `--security-fix`) on the command, or `[security] fix = true`,
-each Step skips itself when a recorded finding awaits an allowed fix;
+each Step skips itself when a recorded finding awaits an allowed fix, unless
+the repository has issues turned off and so cannot hold the fix;
 `no-security-fix` overrides the config. Before the Process name use the dashed
 flags. These Steps publish no fix or finding, and a file cannot loosen their
 privacy rules. Security runs execute the Built-in `security-run` sequence
@@ -2531,7 +2533,9 @@ the worktree kind, and it gets the usual one Resume with or without an issue.
 `security-fix` or `fix = true` under `[security]` allows it, fixes each
 reproduced finding still awaiting a fix, in severity order. `no-security-fix`
 overrides the setting. Unreproduced findings and findings with an existing
-fix are skipped. The Step uses the Security run's private publication checks:
+fix are skipped. In a repository with issues turned off, the Step fixes
+nothing, starts no session and says so: no fix Ticket can be filed there.
+The Step uses the Security run's private publication checks:
 a public fix issue contains only the proposed change and a private-record
 link. It links the fix, starts a Ticket run or Spec run, and records its
 ending privately. A failed fix stops the Step and stays with the Day shift.
@@ -3147,7 +3151,7 @@ The stamp is the local time the command started, with its UTC offset, as in `202
 
 Command logs and Session traces insert `~<token>` immediately after the stamp. The random token gives each Command its own storage even when start times agree; its Command record uses the exact Command-log stem followed by `.command.json`. Model sidecars (`.models.json`), review reports (`.standards` and `.spec`) and review summaries (`.review-summary.json`) use the Session stem before `.logs.jsonl`, for example `7-<stamp>~<token>-implement.models.json`. The Command record names the log-records file; Silent watches that file grow, and the Waterfall reads the trace spans. Human Command names stay the same, and start stamps remain display and grouping facts. A matching stamp alone does not attach a tokenless Session to a new Command: a record reference or exact Model evidence must establish that ownership. Converted traces and older Command records remain readable without renaming; a record naming the former raw file resolves to its log-records file. Readers no longer accept the old Session-log format, and the one-time `logs --convert` and `--remove-converted` commands have been retired. A failed Command-log writer retains its allocated owner; if allocation itself failed, a Session fails with that cause instead of choosing a shared timestamp-only filename.
 
-The code review writes `summary.json` beside its reports with finding counts by Standards and Spec, including findings later fixed or declined. At Ticket run or Review run completion, the review's originating Session stage keeps these in its Run metrics as `review_findings`, with `standards` and `spec` counts. Missing or invalid summaries are `null`, and an unavailable axis is `null` rather than zero. A Resume updates that same review's summary; another review keeps its own counts. `show --json` reads these retained counts without parsing report prose. A release changing this Factory skill needs an Experiment once #977 exists. A standards report, a spec report or that summary is kept beside the Session trace only when the review reports directory is a real directory and the report is a regular file inside it. A symlink, whether the directory or a report, is refused in a progress line and the session's outcome stays as it is. A missing report is skipped.
+The code review writes `summary.json` beside its reports with counts of actionable findings by Standards and Spec, including findings later fixed. Declined or accepted observations that require no change are excluded; a review with no actionable findings records zero. At Ticket run or Review run completion, the review's originating Session stage keeps these in its Run metrics as `review_findings`, with `standards` and `spec` counts. Missing or invalid summaries are `null`, and an unavailable axis is `null` rather than zero. A Resume updates that same review's summary; another review keeps its own counts. `show --json` reads these retained counts without parsing report prose. A release changing this Factory skill needs an Experiment once #977 exists. A standards report, a spec report or that summary is kept beside the Session trace only when the review reports directory is a real directory and the report is a regular file inside it. A symlink, whether the directory or a report, is refused in a progress line and the session's outcome stays as it is. A missing report is skipped.
 
 The **Activity log**, `activity.log`, is a short running record of what the factory did on the repository ([ADR-0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md)). A Ticket run, a Spec run or a Pass writes a line when it starts work, naming its Command log, and one when it ends, with its outcome; a Ticket run you type by hand writes them too, and the run a Pass dispatched, a Spec run's Tickets and a Base fix write none of their own. A skipped Pass writes a line only when its reason differs from the last line of its own kind, so a repository that sits idle shows one line, not one per pass, and the first skip after a pass that did work always shows: that is when the repository went idle. A warning about the [User config](#user-config), such as an ignored `pickup.limit`, is written as `User config warning: <warning>` by the first Command on the repository to see it, and again only when it differs from the last such line, though every Command prints it on stderr. Every line starts with the local date and time:
 
@@ -3821,6 +3825,8 @@ stay the same.
 The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email`, `email-unless-merged`, `no-email`, `security-fix`, `no-security-fix`, `security-close` and `no-security-close`, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.
 
 Fixing is off by default. `security-fix` on the command or `fix = true` under `[security]` allows one fix; `no-security-fix` overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.
+
+A repository with GitHub issues turned off cannot hold a fix Ticket. With fixing allowed, a Security run first reads the repository's `has_issues` setting; when it is off, the run fixes nothing and starts no publishing session, and its reproduced findings hold off no audit. It audits and records findings as a report-only run does, says `Security fixing skipped: <owner>/<repo> has issues turned off, so no Security fix Ticket can be filed` on stderr, and ends with the same reason after its recorded counts, in its Run notification too. A failed or unreadable setting fails the run before the audit, rather than being taken as issues turned off.
 
 Closing is on by default when fixing is allowed. `no-security-close` on the command or `close = false` under `[security]` leaves the finding open after fixing; `security-close` overrides that setting. After a dispatched fix ends merged, the run re-runs the private record's proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix's outcome. A closed record is never picked up as waiting or as the next fix.
 

@@ -122,6 +122,9 @@ pub trait Outside {
     fn audit(&mut self, base: &str) -> crate::security::audit::Attempt;
     /// Private advisory or issue records in every state.
     fn security_records(&mut self) -> Result<SecurityRecords>;
+    /// Whether the repository accepts issues, and so can hold a Security
+    /// fix Ticket.
+    fn has_issues(&mut self) -> Result<bool>;
     /// Whether origin's prepared Base branch is the last completed audit's commit.
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool>;
     /// Record one finding in the repository's private storage.
@@ -309,6 +312,10 @@ impl Outside for LaunchAndGitHub<'_> {
 
     fn security_records(&mut self) -> Result<SecurityRecords> {
         GitHub::new().security_records(&self.repo.slug())
+    }
+
+    fn has_issues(&mut self) -> Result<bool> {
+        GitHub::new().has_issues(&self.repo.slug())
     }
 
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
@@ -506,6 +513,8 @@ mod in_memory {
         SecurityAudit(String),
         /// It listed private advisories in every state.
         AdvisoryList,
+        /// It read whether the repository accepts issues.
+        HasIssues,
         /// It compared the Base branch with the completed audit history.
         AuditHistory,
         /// It recorded this fingerprint privately.
@@ -595,6 +604,9 @@ mod in_memory {
         audit_error: Option<String>,
         advisories: Vec<Value>,
         finding_issues: Option<Vec<Value>>,
+        /// Whether the repository accepts issues, or the cause reading
+        /// that fails with.
+        has_issues: Result<bool, String>,
         unchanged_base: bool,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
@@ -632,6 +644,7 @@ mod in_memory {
                 audit_error: None,
                 advisories: Vec::new(),
                 finding_issues: None,
+                has_issues: Ok(true),
                 unchanged_base: false,
                 review: Ok(None),
                 session_log: None,
@@ -740,6 +753,13 @@ mod in_memory {
 
         pub fn finding_issues(mut self, issues: Vec<Value>) -> Self {
             self.finding_issues = Some(issues);
+            self
+        }
+
+        /// Have the repository accept issues or not, or reading that
+        /// fail with `Err(cause)`.
+        pub fn has_issues(mut self, has_issues: Result<bool, &str>) -> Self {
+            self.has_issues = has_issues.map_err(str::to_string);
             self
         }
 
@@ -971,6 +991,13 @@ mod in_memory {
                 Some(issues) => SecurityRecords::issues(issues.clone()),
                 None => SecurityRecords::advisories(self.advisories.clone()),
             })
+        }
+
+        fn has_issues(&mut self) -> Result<bool> {
+            self.calls.push(Call::HasIssues);
+            self.has_issues
+                .clone()
+                .map_err(|error| anyhow::anyhow!(error))
         }
 
         fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {

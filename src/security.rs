@@ -77,6 +77,9 @@ pub struct Ended {
     /// shift's triage.
     pub waiting: Vec<String>,
     pub advice: Vec<Advice>,
+    /// Why fixing, though allowed, was skipped: the repository cannot hold
+    /// a fix Ticket.
+    pub fixing_skipped: Option<String>,
 }
 
 impl From<anyhow::Error> for Ended {
@@ -88,6 +91,7 @@ impl From<anyhow::Error> for Ended {
             findings: Vec::new(),
             waiting: Vec::new(),
             advice: Vec::new(),
+            fixing_skipped: None,
         }
     }
 }
@@ -211,6 +215,19 @@ fn run_through(
         Ok(None) => {}
         Err(error) => return Outcome::Audited(error.into()),
     }
+    // A repository with issues turned off cannot hold a fix Ticket, so its
+    // reproduced findings neither take a publishing session nor hold off
+    // the audit.
+    let fixing_skipped = if fixing {
+        match outside.has_issues() {
+            Ok(true) => None,
+            Ok(false) => Some(issues_turned_off(repo)),
+            Err(error) => return Outcome::Audited(error.into()),
+        }
+    } else {
+        None
+    };
+    let fixing = fixing && fixing_skipped.is_none();
     let pending = if fixing {
         match records.next_fix() {
             Ok(pending) => pending,
@@ -230,7 +247,10 @@ fn run_through(
             Err(error) => return Outcome::Audited(error.into()),
         }
     }
-    crate::processes::security::run(
+    if let Some(reason) = &fixing_skipped {
+        outside.step(reason.clone());
+    }
+    let outcome = crate::processes::security::run(
         outside,
         crate::processes::security::SecurityRun {
             repo,
@@ -240,6 +260,21 @@ fn run_through(
             offer_command,
             pending,
         },
+    );
+    match outcome {
+        Outcome::Audited(ended) => Outcome::Audited(Ended {
+            fixing_skipped,
+            ..ended
+        }),
+        outcome @ (Outcome::Skipped(_) | Outcome::Fixed { .. }) => outcome,
+    }
+}
+
+/// That fixing is skipped in `repo`, whose issues are turned off, and why.
+pub(crate) fn issues_turned_off(repo: &Repo) -> String {
+    format!(
+        "Security fixing skipped: {} has issues turned off, so no Security fix Ticket can be filed",
+        repo.slug()
     )
 }
 

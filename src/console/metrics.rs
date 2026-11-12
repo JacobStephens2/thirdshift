@@ -374,8 +374,9 @@ pub(super) async fn show(
         }
         let local = super::fleet_control::local_name(&config);
         // The API never reaches this point with a `machine`: it stays local.
-        let fleet = format == super::api::Format::Html
-            && fleet::default_view(&config, viewer.fleet_person());
+        let capture = (format == super::api::Format::Html)
+            .then(|| fleet::Capture::new(&config, viewer.fleet_person()));
+        let fleet = capture.as_ref().is_some_and(fleet::Capture::default_view);
         let machines = Machines {
             chosen: match machine.as_str() {
                 "" if fleet => None,
@@ -383,7 +384,10 @@ pub(super) async fn show(
                 chosen => Some(chosen.to_owned()),
             },
             fleet,
-            others: fleet::others(&config, viewer.fleet_person()),
+            others: capture
+                .as_ref()
+                .map(fleet::Capture::others)
+                .unwrap_or_default(),
             local,
         };
         if !machines.is(&machines.local) {
@@ -400,7 +404,10 @@ pub(super) async fn show(
                     .flat_map(|(key, value)| [format!("--{key}"), value]),
             );
             cli.push("--json".into());
-            let fleet = fleet::load(&config, &asked, viewer.fleet_person())?;
+            let fleet = capture
+                .as_ref()
+                .expect("HTML Fleet view has a capture")
+                .load(&asked)?;
             return format.render(fleet, |fleet| {
                 Ok(FleetPage {
                     page: super::PageContext::new(&config, &viewer.scopes),

@@ -482,6 +482,299 @@ fn metrics(home: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+/// A native saved-slot fixture, including the digest requirement for fallback.
+fn saved_slot(
+    home: &Path,
+    name: &str,
+    reported: bool,
+    at: &str,
+    query: &str,
+) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(name.as_bytes());
+    if reported {
+        digest.update([1]);
+    }
+    let hex: String = digest.finalize()[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let directory = home.join(".thirdshift/logs/fleet-metrics");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("{hex}.json"));
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "version": 1, "machine": name, "person": null, "last_seen": at,
+            "pushed_at": reported.then_some(at), "views": {query: {
+                "fetched_at": at, "filters": if query.contains("kind=") { "kind=Run" } else { "" },
+                "weekly": false, "summary": {"outcomes": [], "comparison": null}
+            }}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
+
+fn metrics_peer(home: &Path, address: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(
+        home.join(".thirdshift/config.toml"),
+        format!(
+            "[console]\nport = 0\nfleet = [{{ name = 'capture-peer', address = '{address}' }}]\n"
+        ),
+    )
+    .unwrap();
+    let credentials = home.join(".thirdshift/credentials.toml");
+    fs::write(&credentials, "[fleet]\ncapture-peer = 'fixture-token'\n").unwrap();
+    fs::set_permissions(credentials, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn metrics_listener() -> std::net::TcpListener {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    listener
+}
+
+fn metrics_request(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(line, "GET /api/v1/metrics?window=7d HTTP/1.1\r\n");
+                loop {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "metrics peer request never arrived"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+}
+
+fn metrics_reply(mut stream: std::net::TcpStream, code: u16, body: &str) {
+    use std::io::Write;
+    write!(
+        stream,
+        "HTTP/1.1 {code} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+}
+
+#[test]
+fn console_metrics_reuses_captured_choices_and_results_during_a_live_read() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let peer = metrics_listener();
+    metrics_peer(
+        home.path(),
+        &format!("http://{}", peer.local_addr().unwrap()),
+    );
+    let at = chrono::Utc::now().to_rfc3339();
+    let retired = saved_slot(home.path(), "capture-retired", false, &at, "window=7d");
+    // Saving the live result fails, but must not cost the result or captured sources.
+    let peer_slot = saved_slot(home.path(), "capture-peer", false, &at, "window=7d");
+    fs::remove_file(&peer_slot).unwrap();
+    fs::create_dir(peer_slot.with_extension("lock")).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let address = &console.address;
+    let html = std::thread::scope(|threads| {
+        let response = threads.spawn(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .unwrap()
+                .get(format!("{address}/metrics?window=7d"))
+                .send()
+                .unwrap()
+                .text()
+                .unwrap()
+        });
+        let request = metrics_request(&peer);
+        fs::remove_file(retired).unwrap();
+        saved_slot(home.path(), "capture-late", true, &at, "window=7d");
+        metrics_reply(request, 200, r#"{"outcomes":[],"comparison":null}"#);
+        response.join().unwrap()
+    });
+    assert!(html.contains("value=\"capture-retired\""), "{html}");
+    assert!(
+        html.contains("<strong>capture-retired</strong>"),
+        "choices and results must use the same capture: {html}"
+    );
+    assert!(!html.contains("capture-late"), "{html}");
+    assert!(html.contains("<strong>capture-peer</strong>"), "{html}");
+    assert!(
+        html.contains("snapshot not saved:"),
+        "live data survives save failure: {html}"
+    );
+    let next = console
+        .get("/metrics?machine=capture-late&window=7d")
+        .text()
+        .unwrap();
+    assert!(next.contains("<strong>capture-late</strong>"), "{next}");
+    assert!(!next.contains("capture-retired"), "{next}");
+}
+
+#[test]
+fn console_metrics_observes_a_saved_path_once_and_the_local_api_never_observes_it() {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let at = chrono::Utc::now().to_rfc3339();
+    let path = saved_slot(home.path(), "capture-once", true, &at, "window=7d");
+    let contents = fs::read(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(
+        Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    // No writer is attached yet: reading saved Fleet sources would block this
+    // local API request until the HTTP client's deadline, failing the test.
+    let local = api::json(console.get("/api/v1/metrics?window=7d"));
+    assert!(local.get("machines").is_none(), "{local}");
+    let address = &console.address;
+    let html = std::thread::scope(|threads| {
+        let response = threads.spawn(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .unwrap()
+                .get(format!("{address}/metrics?machine=capture-once&window=7d"))
+                .send()
+                .unwrap()
+                .text()
+                .unwrap()
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let mut writer = loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&path)
+            {
+                Ok(writer) => break writer,
+                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "saved source was never observed"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        writer.write_all(&contents).unwrap();
+        // The reader gets EOF only after removal. A second capture would see
+        // an unknown machine; the request must reuse its first observation.
+        fs::remove_file(&path).unwrap();
+        drop(writer);
+        response.join().unwrap()
+    });
+    assert!(html.contains("value=\"capture-once\""), "{html}");
+    assert!(html.contains("<strong>capture-once</strong>"), "{html}");
+    let next = console.get("/metrics?machine=capture-once&window=7d");
+    assert_ne!(next.status(), 200, "a new request sees the removed source");
+}
+
+#[test]
+fn unavailable_metrics_choose_exact_slots_before_views_and_never_override_refusals() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let peer = metrics_listener();
+    metrics_peer(
+        home.path(),
+        &format!("http://{}", peer.local_addr().unwrap()),
+    );
+    let at = "2026-11-12T00:00:00Z";
+    saved_slot(home.path(), "capture-peer", false, at, "window=7d");
+    saved_slot(home.path(), "capture-peer", true, at, "window=7d");
+    let load = |code: u16| {
+        std::thread::scope(|threads| {
+            let result = threads.spawn(|| {
+                metrics(
+                    home.path(),
+                    &["--machine", "capture-peer", "--window", "7d", "--json"],
+                )
+            });
+            let request = metrics_request(&peer);
+            metrics_reply(request, code, "{}");
+            let result = result.join().unwrap();
+            assert!(result.status.success(), "{result:?}");
+            serde_json::from_slice::<Value>(&result.stdout).unwrap()
+        })
+    };
+    let tied = load(503);
+    assert_eq!(tied["machines"][0]["status"], "reported", "{tied}");
+    saved_slot(
+        home.path(),
+        "capture-peer",
+        false,
+        "2026-11-12T00:00:01Z",
+        "window=7d",
+    );
+    let newer_read = load(503);
+    assert_eq!(
+        newer_read["machines"][0]["status"], "cached",
+        "{newer_read}"
+    );
+    saved_slot(
+        home.path(),
+        "capture-peer",
+        true,
+        "2026-11-12T00:00:02Z",
+        "window=30d&kind=Run",
+    );
+    let newer_report = load(503);
+    assert_eq!(
+        newer_report["machines"][0]["status"], "reported",
+        "{newer_report}"
+    );
+    assert!(
+        newer_report["machines"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("no saved snapshot for this view")
+    );
+    for (code, status) in [
+        (403, "refused"),
+        (404, "incompatible"),
+        (200, "incompatible"),
+    ] {
+        let refused = load(code);
+        assert_eq!(refused["machines"][0]["status"], status, "{refused}");
+        assert!(refused["machines"][0]["last_seen"].is_null(), "{refused}");
+        assert!(
+            refused["outcomes"].as_array().unwrap().is_empty(),
+            "{refused}"
+        );
+    }
+}
+
 fn spec_runs(fleet: &Value) -> &Value {
     fleet["comparison"]["fleet"]
         .as_array()
