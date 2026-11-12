@@ -75,6 +75,62 @@ async function count(page, value) {
   await page.waitForFunction(({ value, host }) => document.title === `${value} need you · ${host} · thirdshift Console`, { value, host });
 }
 
+test('only step-2 Slow notifies and uses the urgent favicon', { skip: process.platform !== 'linux' }, async t => {
+  const paths = [1, 7, 10, 11, 12].map(number => join(records, `${number}.command.json`));
+  t.after(async () => {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+    await rm(join(records, '7.log'), { force: true });
+    await item(1);
+  });
+  await rm(paths[0]);
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const start = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
+    + ':' + stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  const live = {
+    version: 1, kind: 'Run', name: 'widgets#7', repository: 'acme/widgets', hostname: 'fixture',
+    issue: { number: 7, url: 'https://github.com/acme/widgets/issues/7', title: 'Slow work' },
+    process_id: process.pid, process_start: start, harness: 'codex', ended_at: null, outcome: null
+  };
+  for (const [number, minutes] of [[10, 10], [11, 14], [12, 20]]) {
+    const ended = new Date(Date.now() - 7200000).toISOString();
+    const began = new Date(Date.parse(ended) - minutes * 60000).toISOString();
+    await replaceRecord(join(records, `${number}.command.json`), JSON.stringify({
+      ...live, name: `widgets#${number}`, issue: { ...live.issue, number, title: 'History' }, started_at: began, ended_at: ended,
+      outcome: 'merged', stages: [{ name: 'implement', began_at: began, session_log: null }]
+    }));
+  }
+  const stageAge = async minutes => {
+    const began = new Date(Date.now() - minutes * 60000).toISOString();
+    await writeFile(join(records, '7.log'), 'still working\n');
+    await replaceRecord(paths[1], JSON.stringify({
+      ...live, started_at: began, stages: [{ name: 'implement', began_at: began, session_log: null }]
+    }));
+  };
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await rm(paths[1], { force: true });
+    const context = await contextFor(t);
+    const page = await context.newPage();
+    await page.setViewportSize(viewport);
+    await page.goto(origin);
+    await count(page, 0);
+    await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
+    await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
+    await stageAge(20);
+    const row = page.locator('#inbox .command').filter({ has: page.getByText('Slow work', { exact: true }) });
+    await row.locator('.gist').getByText(/slower than usual \(12–17 min\), still working/).waitFor();
+    assert.equal(await row.evaluate(element => element.closest('.group').dataset.group), 'working');
+    await count(page, 0);
+    assert.equal(await page.evaluate(() => notices.length), 0);
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
+    await stageAge(34);
+    await count(page, 1);
+    await page.waitForFunction(() => notices.length === 1);
+    assert.equal(await row.evaluate(element => element.closest('.group').dataset.group), 'needs you');
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon-urgent.svg');
+    await context.close();
+  }
+});
+
 test('notifications ask on click, survive reload and open the Inbox for a rise', async t => {
   const context = await contextFor(t, 'prompt');
   const page = await context.newPage();
