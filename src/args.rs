@@ -220,6 +220,10 @@ pub struct MetricsArgs {
     pub models: Vec<String>,
     pub versions: Vec<String>,
     pub accounts: Vec<String>,
+    /// `--fleet`: merge every Fleet machine's trends with this machine's.
+    pub fleet: bool,
+    /// `--machine <name>`: one Fleet machine's trends, or this machine's.
+    pub machine: Option<String>,
 }
 
 /// A `metrics --window` preset: its length, ending today, and its grain.
@@ -1022,12 +1026,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {
     use chrono::Datelike;
-    let usage = "usage: thirdshift metrics [<command>] [--json] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--version <thirdshift version>] [--account <account>]";
+    let usage = "usage: thirdshift metrics [<command>] [--json] [--fleet | --machine <name>] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--version <thirdshift version>] [--account <account>]";
     let mut asked = MetricsArgs::default();
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
             "--json" if !asked.json => asked.json = true,
+            "--fleet" if !asked.fleet => asked.fleet = true,
+            "--machine" => {
+                let name = words.next().context("--machine needs a Fleet name")?;
+                crate::config::console::fleet::validate_name(name)?;
+                anyhow::ensure!(asked.machine.is_none(), "repeated argument: --machine");
+                asked.machine = Some(name.clone());
+            }
             "--window" => {
                 let value = words.next().context(usage)?;
                 let window = MetricsWindow::NAMES
@@ -1126,6 +1137,14 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
                 && asked.versions.is_empty()
                 && asked.accounts.is_empty()),
         "window and filters apply only to metrics trends"
+    );
+    anyhow::ensure!(
+        !(asked.fleet && asked.machine.is_some()),
+        "give --fleet or --machine, not both"
+    );
+    anyhow::ensure!(
+        asked.command.is_none() || !(asked.fleet || asked.machine.is_some()),
+        "--fleet and --machine apply only to metrics trends; use show <command> --machine <name>"
     );
     Ok(asked)
 }

@@ -471,3 +471,326 @@ fn failure_drilldown_links_stay_within_a_proxy_request_line() {
         }
     }
 }
+
+/// `metrics` on `home`, or its failure.
+fn metrics(home: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .arg("metrics")
+        .args(args)
+        .env("HOME", home)
+        .output()
+        .unwrap()
+}
+
+fn spec_runs(fleet: &Value) -> &Value {
+    fleet["comparison"]["fleet"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Spec run")
+        .unwrap()
+}
+
+#[test]
+fn fleet_metrics_merge_paired_consoles_and_keep_an_offline_peer_cached() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    for (home, number, outcome) in [
+        (local_home.path(), 71, "failed"),
+        (remote_home.path(), 72, "merged"),
+        (remote_home.path(), 73, "failed"),
+    ] {
+        let mut value = record(home, number, Some(outcome), 0);
+        value["name"] = json!(format!("widgets#{number}"));
+        write_record(home, number, &value);
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let local = Console::start(binary, local_home.path());
+    // Before pairing, only a link-only entry is configured: the page stays local.
+    assert!(
+        local
+            .get("/metrics")
+            .text()
+            .unwrap()
+            .contains("Yield and pull-request survival")
+    );
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "remote", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    let hostname = api::json(local.get("/api/v1/whoami"))["hostname"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let fleet = api::cli(
+        local_home.path(),
+        &["metrics", "--fleet", "--window", "7d", "--json"],
+    );
+    assert!(fleet["machine"].is_null(), "{fleet}");
+    let states: Vec<_> = fleet["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|machine| {
+            (
+                machine["name"].as_str().unwrap(),
+                machine["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        states,
+        [
+            (hostname.as_str(), "ok"),
+            ("other.example.test", "link-only"),
+            ("remote", "ok")
+        ]
+    );
+    // Each machine's own counts, added once: the Fleet is their sum.
+    let alone = |home: &Path| {
+        api::cli(home, &["metrics", "--window", "7d", "--json"])["comparison"]["rows"][0]["current"]
+            .clone()
+    };
+    let (mine, theirs) = (alone(local_home.path()), alone(remote_home.path()));
+    let total = spec_runs(&fleet);
+    for count in ["runs", "succeeded", "failed"] {
+        assert_eq!(
+            total["current"][count].as_u64(),
+            Some(mine[count].as_u64().unwrap() + theirs[count].as_u64().unwrap()),
+            "{count}: {fleet}"
+        );
+    }
+    assert_eq!(
+        (&total["current"]["succeeded"], &total["current"]["failed"]),
+        (&json!(1), &json!(2))
+    );
+    assert_eq!(total["delta"]["runs"], 3);
+    let machines: Vec<_> = fleet["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|bucket| bucket["machine"].as_str().unwrap())
+        .collect();
+    assert_eq!(machines, [hostname.as_str(), "remote"]);
+    let failed = &fleet["where_runs_failed"];
+    assert_eq!(failed["failed"], 2);
+    assert_eq!(failed["rows"][0]["failed"], 2);
+    assert_eq!(
+        failed["rows"][0]["machines"],
+        json!({hostname.as_str(): 1, "remote": 1})
+    );
+
+    // The page defaults to the Fleet and opens a peer's Failed Command there.
+    let html = local.get("/metrics?window=7d").text().unwrap();
+    assert!(html.contains("<h1>Metrics · Fleet</h1>"), "{html}");
+    assert!(
+        html.contains("thirdshift metrics --fleet --window 7d --json"),
+        "{html}"
+    );
+    let peer_details = html
+        .split("<a href=\"")
+        .skip(1)
+        .filter_map(|tail| {
+            tail.split_once('"')
+                .map(|(href, _)| href.replace("&#38;", "&"))
+        })
+        .find(|href| href.starts_with("/peek?") && href.ends_with("&machine=remote"))
+        .unwrap_or_else(|| panic!("{html}"));
+    assert!(
+        peer_details.contains("73-fixture.command.json"),
+        "{peer_details}"
+    );
+    let details = local.get(&peer_details);
+    assert_eq!(details.status(), 200);
+    assert!(details.text().unwrap().contains("73"));
+
+    // The API stays local: it refuses to read the Fleet for a caller.
+    for query in [
+        "?fleet=true",
+        "?machine=remote",
+        &format!("?machine={hostname}"),
+    ] {
+        let refused = local.get(&format!("/api/v1/metrics{query}"));
+        assert_eq!(refused.status(), 400, "{query}");
+        assert!(refused.text().unwrap().contains("explicit client view"));
+    }
+
+    // One machine at a time, on the CLI and the page.
+    let only = api::cli(
+        local_home.path(),
+        &["metrics", "--machine", "remote", "--window", "7d", "--json"],
+    );
+    assert_eq!(only["machine"], "remote");
+    assert_eq!(only["machines"].as_array().unwrap().len(), 1);
+    assert_eq!(spec_runs(&only)["current"], theirs);
+    let html = local
+        .get("/metrics?machine=remote&window=7d")
+        .text()
+        .unwrap();
+    assert!(html.contains("<h1>Metrics · remote</h1>"), "{html}");
+    assert!(
+        html.contains("thirdshift metrics --machine remote --window 7d --json"),
+        "{html}"
+    );
+    let here = api::cli(
+        local_home.path(),
+        &[
+            "metrics",
+            "--machine",
+            &hostname,
+            "--window",
+            "7d",
+            "--json",
+        ],
+    );
+    assert_eq!(here["comparison"]["rows"][0]["current"], mine);
+    let html = local
+        .get(&format!("/metrics?machine={hostname}&window=7d"))
+        .text()
+        .unwrap();
+    assert!(html.contains("Yield and pull-request survival"), "{html}");
+    assert!(
+        html.contains(&format!("<option value=\"{hostname}\" selected>")),
+        "{html}"
+    );
+
+    // An offline peer keeps its last-read history, marked cached.
+    drop(remote);
+    let started = std::time::Instant::now();
+    let offline = api::cli(
+        local_home.path(),
+        &["metrics", "--fleet", "--window", "7d", "--json"],
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+    let peer = offline["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|machine| machine["name"] == "remote")
+        .unwrap();
+    assert_eq!(peer["status"], "cached", "{offline}");
+    assert!(chrono::DateTime::parse_from_rfc3339(peer["last_seen"].as_str().unwrap()).is_ok());
+    assert!(
+        peer["error"]
+            .as_str()
+            .unwrap()
+            .contains("failed or timed out"),
+        "{peer}"
+    );
+    assert_eq!(spec_runs(&offline)["current"], spec_runs(&fleet)["current"]);
+    assert_eq!(offline["where_runs_failed"]["failed"], 2);
+    let html = local.get("/metrics?window=7d").text().unwrap();
+    assert!(
+        html.contains("cached, offline</span> · last seen <time"),
+        "{html}"
+    );
+    assert!(html.contains("widgets#73 (cached) on remote"), "{html}");
+    let text = metrics(local_home.path(), &["--fleet", "--window", "7d"]);
+    assert!(text.status.success(), "{text:?}");
+    assert!(String::from_utf8_lossy(&text.stdout).contains("status: cached"));
+
+    // A retired machine's snapshot stays too, and can still be chosen.
+    let removed = Command::new(binary)
+        .args(["console", "fleet", "remove", "remote"])
+        .env("HOME", local_home.path())
+        .output()
+        .unwrap();
+    assert!(removed.status.success(), "{removed:?}");
+    let retired = api::cli(
+        local_home.path(),
+        &["metrics", "--machine", "remote", "--window", "7d", "--json"],
+    );
+    assert_eq!(retired["machines"][0]["status"], "cached");
+    assert_eq!(
+        retired["machines"][0]["error"],
+        "no longer in this Console's Fleet"
+    );
+    assert_eq!(spec_runs(&retired)["current"], theirs);
+    let html = local.get("/metrics").text().unwrap();
+    assert!(
+        html.contains("<h1>Metrics · Fleet</h1>"),
+        "a saved snapshot keeps Fleet the default"
+    );
+    let unknown = metrics(local_home.path(), &["--machine", "nowhere"]);
+    assert!(!unknown.status.success());
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown Fleet machine"));
+}
+
+#[test]
+fn api_metrics_stays_local_once_a_peer_is_paired() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let local = Console::start(binary, local_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "remote", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    let body = api::json(local.get("/api/v1/metrics?window=7d"));
+    assert!(
+        body.get("machine").is_none(),
+        "API answered with Fleet metrics: {body}"
+    );
+    assert!(body.get("machines").is_none(), "{body}");
+}
+
+#[test]
+fn a_fleet_machine_named_fleet_can_be_chosen_alone() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let local = Console::start(binary, local_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "fleet", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    let one = api::cli(
+        local_home.path(),
+        &["metrics", "--machine", "fleet", "--json"],
+    );
+    let fleet = api::cli(local_home.path(), &["metrics", "--fleet", "--json"]);
+    assert_ne!(
+        one["machine"], fleet["machine"],
+        "one machine reads as the whole Fleet"
+    );
+    let html = local.get("/metrics?machine=fleet").text().unwrap();
+    assert!(!html.contains("(this machine)"), "{html}");
+}
+
+#[test]
+fn fleet_metrics_keep_an_offline_peer_for_another_window() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    record(remote_home.path(), 73, Some("failed"), 0);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "remote", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    api::cli(
+        local_home.path(),
+        &["metrics", "--fleet", "--window", "7d", "--json"],
+    );
+    drop(remote);
+    let other = api::cli(
+        local_home.path(),
+        &["metrics", "--fleet", "--window", "30d", "--json"],
+    );
+    assert!(
+        other["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["machine"] == "remote"),
+        "offline peer's last-fetched history missing: {other}"
+    );
+}

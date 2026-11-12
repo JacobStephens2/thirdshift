@@ -1,0 +1,36 @@
+{% macro bar(tally) %}<td><svg class="metrics-bar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{ tally.summary() }}">{% for segment in tally.segments() %}<rect class="{{ segment.css }}" x="{{ segment.x }}" width="{{ segment.width }}" height="10"><title>{{ segment.title }}</title></rect>{% endfor %}</svg></td>{% endmacro -%}
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fleet metrics · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main class="metrics"><div class="page-title"><h1>Metrics{% if let Some(machine) = fleet.machine %} · {{ machine }}{% else %} · Fleet{% endif %}</h1><code>thirdshift {{ cli }}</code></div>
+<p>How {% if let Some(machine) = fleet.machine %}{{ machine }}'s{% else %}every Fleet machine's{% endif %} Commands ended, read from each machine's own Metrics. Each Command counts once, on the machine it ran on. A machine that cannot be reached shows the summary this Console last read from it, marked cached with when; its Commands' details open only while it answers. Choose this machine for its signal groups. Reload to see changes.</p>
+{% if let Some(error) = error %}<p role="alert">{{ error }}</p>{% endif %}
+{% include "console/metrics_form.html" %}
+<p>Window: {% if let Some(preset) = fleet.window.preset %}{{ preset }}, {% endif %}{{ fleet.window.grain }} buckets{% if let Some(from) = fleet.window.from %} from {{ from }}{% endif %}{% if let Some(through) = fleet.window.through %} through {{ through }}{% endif %}.</p>
+<section aria-labelledby="metrics-machines"><h2 id="metrics-machines">Machines</h2>
+<ul class="metrics-machines">{% for machine in fleet.machines %}<li><strong>{{ machine.name }}</strong>{% if machine.local %} (this machine){% endif %}: <span class="metrics-status {{ machine.status }}">{{ machine.status }}{% if machine.status == fleet::Status::Cached %}, offline{% endif %}</span>{% if let Some(seen) = machine.last_seen %} · last seen <time datetime="{{ seen.to_rfc3339() }}">{{ seen.format("%Y-%m-%d %H:%M UTC") }}</time>{% endif %}{% if let Some(address) = machine.address %} · <a href="{{ address }}">Open Console</a>{% endif %}{% if let Some(error) = machine.error %} · {{ error }}{% endif %}</li>{% endfor %}</ul>
+</section>
+<ul class="metrics-legend" aria-label="Outcome stacks">{% for class in classes %}<li><svg class="metrics-swatch" viewBox="0 0 10 10" aria-hidden="true"><rect class="{{ class.css() }}" width="10" height="10"/></svg>{{ class.name() }}</li>{% endfor %}</ul>
+{% if let Some(comparison) = fleet.comparison %}<section aria-labelledby="metrics-compared"><h2 id="metrics-compared">Compared with the preceding window</h2>
+<p>{{ comparison.current.from }} – {{ comparison.current.through }} against {{ comparison.prior.from }} – {{ comparison.prior.through }}. <code>n</code> is Succeeded + Failed. Fleet rows add every machine's counts for a kind.</p>
+<div class="metrics-table" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead><tr><th scope="col">Kind</th><th scope="col">Machine</th><th scope="col">Account</th><th scope="col">Success rate</th><th scope="col">Prior</th><th scope="col">Change</th><th scope="col">Current outcomes</th><th scope="col">Prior outcomes</th></tr></thead>
+<tbody>{% for row in comparison.fleet %}<tr><th scope="row">{{ row.kind }}</th><td>Fleet</td><td></td><td>{{ row.current.rate() }} · n {{ row.current.n }}</td><td>{{ row.prior.rate() }} · n {{ row.prior.n }}</td><td>{{ row.delta.rate() }}</td><td>{{ row.current.summary() }}</td><td>{{ row.prior.summary() }}</td></tr>{% endfor %}
+{% for row in comparison.rows %}<tr><th scope="row">{{ row.kind }}</th><td>{% if let Some(machine) = row.machine %}{{ machine }}{% endif %}</td><td>{% if let Some(account) = row.account %}{{ account }}{% endif %}</td><td>{{ row.current.rate() }} · n {{ row.current.n }}</td><td>{{ row.prior.rate() }} · n {{ row.prior.n }}</td><td>{{ row.delta.rate() }}</td><td>{{ row.current.summary() }}</td><td>{{ row.prior.summary() }}</td></tr>{% endfor %}</tbody>
+</table></div>{% if comparison.rows.is_empty() %}<p>No Commands in either window.</p>{% endif %}</section>{% endif %}
+<section aria-labelledby="metrics-outcomes"><h2 id="metrics-outcomes">Outcomes</h2>
+<div class="metrics-table" tabindex="0" role="region" aria-label="Outcomes table"><table>
+<thead><tr><th scope="col">{% if fleet.window.weekly() %}Week{% else %}Day{% endif %}</th><th scope="col">Machine</th><th scope="col">Kind</th><th scope="col">Account</th><th scope="col">Ended</th><th scope="col">Succeeded</th><th scope="col">Failed</th><th scope="col">Paused</th><th scope="col">Stopped</th><th scope="col">Live</th><th scope="col">Success rate</th></tr></thead>
+<tbody>{% for bucket in fleet.outcomes %}<tr><th scope="row">{{ bucket.row.bucket }}</th><td>{{ bucket.machine }}</td><td>{{ bucket.row.kind }}</td><td>{% if let Some(account) = bucket.row.account %}{{ account }}{% endif %}</td>
+{% call bar(bucket.row.tally) %}{% endcall %}
+{% for class in classes %}<td title="{{ bucket.row.tally.breakdown(**class) }}">{{ bucket.row.tally.count(**class) }}</td>{% endfor %}<td>{{ bucket.row.tally.live }}</td><td>{{ bucket.row.tally.rate() }}</td></tr>{% endfor %}</tbody>
+</table></div>{% if fleet.outcomes.is_empty() %}<p>No Commands in this window.</p>{% endif %}</section>
+<section aria-labelledby="metrics-failures"><h2 id="metrics-failures">Where runs failed</h2>
+<p>The window's Failed Commands across the Fleet, died ones included, by the stage they stopped at and how. {{ fleet.where_runs_failed.observed }} of {{ fleet.where_runs_failed.failed }} recorded theirs; {{ fleet.where_runs_failed.missing }} are missing. Each name opens its details on the machine that holds it.</p>
+<div class="metrics-table" tabindex="0" role="region" aria-label="Where runs failed table"><table>
+<thead><tr><th scope="col">Stopped at</th><th scope="col">Category</th><th scope="col">Source</th><th scope="col">Failed</th><th scope="col">By machine</th><th scope="col">Commands</th></tr></thead>
+<tbody>{% for row in fleet.where_runs_failed.rows %}<tr><th scope="row">{% if let Some(stage) = row.stopped_at %}{{ stage }}{% else %}no stage{% endif %}</th><td>{{ row.category }}</td><td>{% if row.recorded %}recorded{% else %}fallback{% endif %}</td><td>{{ row.failed }}</td><td>{% for (machine, count) in row.machines %}{% if !loop.first %}, {% endif %}{{ machine }} {{ count }}{% endfor %}</td><td>{% for failed in row.commands %}{% if !loop.first %}, {% endif %}{% if let Some(href) = self.details(failed) %}<a href="{{ href }}">{{ failed.command.name }}</a>{% else %}{{ failed.command.name }} (cached){% endif %} on {{ failed.machine }}{% endfor %}</td></tr>{% endfor %}</tbody>
+</table></div>{% if fleet.where_runs_failed.rows.is_empty() %}<p>No Failed Commands in this window.</p>{% endif %}
+</section>
+</main>{% include "console/chrome.html" %}</body></html>

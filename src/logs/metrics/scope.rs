@@ -1,7 +1,7 @@
 //! Which Commands and buckets a metrics trend covers: its filters and window.
 
 use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::super::reading::Command;
 use crate::args::{MetricsArgs, MetricsGrain, MetricsWindow};
@@ -19,7 +19,7 @@ pub(crate) struct Window {
     unit: MetricsGrain,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Span {
     pub(crate) from: NaiveDate,
     pub(crate) through: NaiveDate,

@@ -98,6 +98,8 @@ const FLEET: &[(&str, &str)] = &[
 // Distinct actions represented by fields of a CLI command, rather than enums.
 const ACTIONS: &[&str] = &[
     "cronjobs --fleet",
+    "metrics --fleet",
+    "metrics --machine other",
     "update --check",
     "config spec.parallel",
     "config spec.parallel 3",
@@ -122,6 +124,10 @@ const EXCLUSIONS: &[(&str, &str)] = &[
     (
         "cronjobs --fleet",
         "Fleet schedule aggregation is an explicit client of owning-machine inventories; the API stays local and cannot lend saved Fleet credentials.",
+    ),
+    (
+        "metrics --fleet",
+        "Fleet metrics aggregation is an explicit client of owning-machine metrics and cached peer snapshots; the API stays local and cannot lend saved Fleet credentials.",
     ),
     (
         "console token list",
@@ -218,6 +224,8 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
         Command::Update { check, .. } => check.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
         Command::CronJobs { fleet, .. } => fleet.to_string(),
+        // `--machine` reads one Fleet machine through the same client.
+        Command::Metrics(asked) => (asked.fleet || asked.machine.is_some()).to_string(),
         Command::ConsoleOtherAccounts { value, .. } => value.is_some().to_string(),
         Command::ConsoleTheme { name, .. } => name.is_some().to_string(),
         Command::ConsoleSections { hide, show, .. } => {

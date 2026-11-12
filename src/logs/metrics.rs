@@ -2,6 +2,7 @@
 
 mod bug_origins;
 mod failures;
+pub(crate) mod fleet;
 mod groups;
 mod outcomes;
 mod scope;
@@ -111,13 +112,51 @@ fn add_details(details: &mut Value, command: &Command, origins: &ConfirmedCounts
 
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
-    let report = read(&config, asked)?;
+    let report = if reads_fleet(&config, asked) {
+        let report = serde_json::to_value(fleet::load(&config, asked, None)?)?;
+        if asked.json {
+            report
+        } else {
+            // Another machine's text must not start a line of its own.
+            one_line(report)
+        }
+    } else {
+        read(&config, asked)?
+    };
     if asked.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         print(&report, 0);
     }
     Ok(())
+}
+
+/// Whether `metrics` reads Fleet machines: `--fleet`, or `--machine` naming
+/// any machine but this one.
+pub(crate) fn reads_fleet(config: &UserConfig, asked: &MetricsArgs) -> bool {
+    asked.fleet
+        || asked
+            .machine
+            .as_ref()
+            .is_some_and(|name| *name != crate::console::fleet_control::local_name(config))
+}
+
+fn one_line(value: Value) -> Value {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only text can hold a line break; other JSON values pass through"
+    )]
+    match value {
+        Value::String(text) => Value::String(crate::cronjobs::report_line(&text)),
+        Value::Array(values) => Value::Array(values.into_iter().map(one_line).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| (crate::cronjobs::report_line(&name), one_line(value)))
+                .collect(),
+        ),
+        value => value,
+    }
 }
 
 /// Trends across every Command on this machine the serving account can read,
