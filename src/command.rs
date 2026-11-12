@@ -223,10 +223,14 @@ impl Started {
     }
 }
 
-/// `error` on stderr, after any lines a pass held from the terminal, and the
-/// exit code of a failure.
+/// `error` on stderr, after any lines a pass held from the terminal, then
+/// what to do when the host running out of disk space caused it, and the exit
+/// code of a failure.
 pub fn failure(error: &anyhow::Error) -> ExitCode {
     logs::show_held();
     progress::step(format_args!("{error:#}"));
+    if crate::failed_run::out_of_disk(error) {
+        progress::step(crate::failed_run::OUT_OF_DISK);
+    }
     ExitCode::FAILURE
 }
