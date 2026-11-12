@@ -18,6 +18,7 @@ use crate::issue::{IssueUrl, Repo};
 use crate::launch;
 use crate::logs;
 use crate::progress;
+use crate::review::PullRequestUrl;
 use crate::run_ending::Account;
 
 /// Whether a Run or a Pass emails its Run notification, by its command or,
@@ -118,6 +119,14 @@ impl Subject {
     }
 }
 
+/// Input identity captured before sessions, independently of the owning Command.
+struct CapturedInput {
+    label: &'static str,
+    url: String,
+    number: u64,
+    title: Option<String>,
+}
+
 /// A Run notification waiting for its command to end, with email checked
 /// when requested.
 pub struct RunNotification {
@@ -127,6 +136,7 @@ pub struct RunNotification {
     started: Instant,
     started_at: chrono::DateTime<chrono::Utc>,
     subject: Subject,
+    input: Option<CapturedInput>,
     /// The command's configured Harness, Model and Effort, once known.
     configured: Option<Choice>,
 }
@@ -173,7 +183,7 @@ impl RunNotification {
             About::ReviewRun => Subject::ReviewRun(repo),
             About::FixRun => Subject::FixRun(repo),
             About::TriageRun => Subject::TriageRun(repo),
-            // The command subject names the process. No issue title is read.
+            // Input is captured after the Process resolves it.
             About::Process { name } => Subject::Process {
                 name: name.to_string(),
                 repo,
@@ -185,6 +195,7 @@ impl RunNotification {
             started,
             started_at,
             subject,
+            input: None,
             configured: None,
         })
     }
@@ -201,6 +212,27 @@ impl RunNotification {
         };
     }
 
+    /// Capture a Custom process's issue before its Steps, keeping its Command name.
+    /// A failed title read leaves the existing command subject intact.
+    pub fn issue(&mut self, issue: &IssueUrl) {
+        self.input = Some(CapturedInput {
+            label: "Issue",
+            url: issue.url.clone(),
+            number: issue.number,
+            title: GitHub::new().issue_title(issue).ok(),
+        });
+    }
+
+    /// Reuse a Review or Fix snapshot; notification completion never reads GitHub.
+    pub fn pull_request(&mut self, pr: &PullRequestUrl, title: &str) {
+        self.input = Some(CapturedInput {
+            label: "Pull request",
+            url: pr.url.clone(),
+            number: pr.issue.number,
+            title: Some(title.to_string()),
+        });
+    }
+
     /// Name the configured Harness, Model and Effort without claiming
     /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
@@ -214,7 +246,8 @@ impl RunNotification {
     /// either. A failed write or send is only a warning: it never changes
     /// the command's outcome.
     pub fn finish(self, account: &Account) {
-        let Some(subject) = subject_line(&self.subject, account.outcome) else {
+        let Some(subject) = subject_line(&self.subject, self.input.as_ref(), account.outcome)
+        else {
             return;
         };
         let host = host::name();
@@ -230,6 +263,7 @@ impl RunNotification {
         });
         let mut text = body(
             &self.subject,
+            self.input.as_ref(),
             account,
             configured.as_deref(),
             command_log.as_deref(),
@@ -282,16 +316,24 @@ impl RunNotification {
 /// The subject of a notification about `subject` for a command whose
 /// outcome is `outcome`: none about a Pickup run that took no issue, and
 /// none about a skipped Process.
-fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
+fn subject_line(subject: &Subject, input: Option<&CapturedInput>, outcome: &str) -> Option<String> {
     if matches!(subject, Subject::Process { .. }) && outcome == "skipped" {
         return None;
     }
     if let Subject::Issue { issue, title, .. } = subject {
         return Some(issue_subject(issue, title.as_deref(), outcome));
     }
-    subject
-        .command()
-        .map(|(command, repo)| command_subject(&command, repo, outcome))
+    subject.command().map(|(command, repo)| {
+        let input = input
+            .and_then(|input| {
+                input
+                    .title
+                    .as_ref()
+                    .map(|title| format!(" #{} {title}", input.number))
+            })
+            .unwrap_or_default();
+        command_subject(&format!("{command}{input}"), repo, outcome)
+    })
 }
 
 /// `[thirdshift] <owner>/<repo>#<n> <title>: <outcome>`, without the title
@@ -326,6 +368,7 @@ fn command_subject(command: &str, repo: Option<&Repo>, outcome: &str) -> String 
 /// is left out of an interrupted command's, whose outcome says so.
 fn body(
     subject: &Subject,
+    input: Option<&CapturedInput>,
     account: &Account,
     configured: Option<&str>,
     command_log: Option<&Path>,
@@ -354,6 +397,12 @@ fn body(
     }
     if let Some((command, repo)) = subject.command() {
         text += &command_lines(&command, repo);
+    }
+    if let Some(input) = input {
+        text += &format!("{:<14}{}\n", format!("{}:", input.label), input.url);
+        if let Some(title) = &input.title {
+            text += &format!("Title:        {title}\n");
+        }
     }
     if let Some(recommendation) = account.triage {
         text += &recommendation.notification;
@@ -452,7 +501,9 @@ fn body(
         }
     }
     if let Some(pr_url) = account.pr_url {
-        text += &format!("Pull request: {pr_url}\n");
+        if input.is_none_or(|input| input.url != pr_url) {
+            text += &format!("Pull request: {pr_url}\n");
+        }
     } else if account.outcome == "bug not reproduced" {
         for url in &account.urls {
             text += &format!("Triage notes: {url}\n");
@@ -659,7 +710,7 @@ mod tests {
     /// The subject and body of the notification about `subject` for a
     /// command that ended as `account` tells, if it sends one.
     fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
-        subject_line(subject, account.outcome).map(|line| (line, body_of(subject, account)))
+        subject_line(subject, None, account.outcome).map(|line| (line, body_of(subject, account)))
     }
 
     /// The body for a command that ended as `account` tells, run on
@@ -667,6 +718,7 @@ mod tests {
     fn body_of(subject: &Subject, account: &Account) -> String {
         body(
             subject,
+            None,
             account,
             None,
             None,
@@ -981,6 +1033,7 @@ mod tests {
         assert_eq!(
             body(
                 &Subject::Pending,
+                None,
                 &account,
                 Some("claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),

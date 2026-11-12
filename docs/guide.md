@@ -2918,6 +2918,10 @@ An [Architect run](#architect-runs) takes the same flags and the same `email.alw
 
 A [Pickup run](#pickup-runs) takes the same flags and the same `email.always` and `email.unless_merged` too. One that took an issue sends [one notification](#one-run-notification-for-the-issue-taken), the one the run it dispatched would have sent by hand, and a skipped one sends none.
 
+A [Review run](#review-runs), in either mode or started with `--author`, and a [Fix run](#fix-runs) keep their Command name in the subject and body. When the pull request's title was captured, the subject is `[thirdshift] <owner>/<repo> Review run #<n> <PR title>: <outcome>` (or `Fix run`), and the body's `Pull request:` URL is followed by `Title:`. Review notifications about a local branch or worktree conflict include the captured title too.
+
+A Custom process with issue or pull-request input follows the same pattern, naming `Process <name>` in the subject and `Command:` line, and including the input's URL and known title in the body. Titles are captured before sessions and retained after later failure or interruption. If a title cannot be read, the command keeps its subject without the number and title; notification completion makes no GitHub lookup for them. Ticket, Spec and Pickup issue subjects keep their format above. The saved notification contains the same subject and body as the email.
+
 A notification that can't be sent is a `warning:` line on stderr with Resend's error. It never changes the Ticket run's outcome, stdout or exit code.
 
 ### Stopping a Command
