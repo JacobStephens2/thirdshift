@@ -26,12 +26,6 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
     let launch = Git::new(std::env::current_dir()?);
     let repo = launch::repo()?;
     let base = launch::checked_out_base()?;
-    let github = GitHub::new();
-    if !github.has_issues(&repo.slug())? {
-        let message = crate::security::issues_turned_off(&repo);
-        progress::step(&message);
-        return Ok(message);
-    }
     let flags = Flags {
         goal: Some(if run.limits.forbid_self_merge {
             Goal::ReadyForReview
@@ -50,10 +44,17 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
         config: &config,
         security_review_harness: None,
     };
+    let github = GitHub::new();
     let mut records = github.security_records(&repo.slug())?;
     let mut urls = Vec::new();
     while let Some((record, finding)) = records.take_next_fix()? {
         interrupt::check()?;
+        // A repository with issues turned off cannot hold a fix Ticket.
+        if urls.is_empty() && !github.has_issues(&repo.slug())? {
+            let message = crate::security::issues_turned_off(&repo);
+            progress::step(&message);
+            return Ok(message);
+        }
         run.completed
             .lock()
             .expect("completed Runs")

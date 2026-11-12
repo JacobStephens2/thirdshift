@@ -5,7 +5,7 @@
 //! ```text
 //! {"repo": "owner/repo",
 //!  "private"?: true,
-//!  "has_issues"?: false,
+//!  "has_issues"?: false | <any other value, returned as is>,
 //!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "issue_closed_at"?: {"<number>": "<ISO 8601 time>"},
@@ -1004,9 +1004,9 @@ fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
     println!("{}", json_fields(&fields, &wanted_fields(flags)));
 }
 
-/// Whether the repository accepts issues: `has_issues`, else true.
+/// Whether the repository accepts issues: false only when `has_issues` is.
 fn issues_enabled(state: &Json) -> bool {
-    state.get("has_issues").is_none_or(Json::truthy)
+    !matches!(state.get("has_issues"), Some(Bool(false)))
 }
 
 /// `gh issue list` and `gh issue create` refuse a repository with issues
@@ -1525,7 +1525,11 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                     "private",
                     Bool(state.get("private").is_some_and(Json::truthy))
                 ),
-                ("has_issues", Bool(issues_enabled(state)))
+                // A non-boolean stands for malformed metadata.
+                (
+                    "has_issues",
+                    state.get("has_issues").cloned().unwrap_or(Bool(true))
+                )
             ])
         );
         return;

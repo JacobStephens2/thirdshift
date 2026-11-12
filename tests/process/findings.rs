@@ -739,3 +739,41 @@ fn disabling_close_keeps_a_private_finding_open() {
         result.stderr
     );
 }
+
+/// Unreadable repository metadata fails the Step, never taken for issues
+/// turned off.
+#[test]
+fn malformed_issues_metadata_fails_the_fix_step_before_any_session() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!("unknown");
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["process", "findings"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("no has_issues setting"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+/// #2094: with nothing to fix, fix-findings neither reads nor reports the
+/// issues setting.
+#[test]
+fn issues_turned_off_with_nothing_to_fix_reports_no_skip() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!(false);
+    state["advisories"] = json!([]);
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["process", "findings"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("Security fixing skipped"),
+        "{}",
+        result.stderr
+    );
+}
