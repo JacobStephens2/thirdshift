@@ -121,7 +121,7 @@ impl Delivery<'_> {
             snapshot,
             ..
         } = *self;
-        *pushed = push_fixes(git, github, pr, snapshot)?;
+        *pushed = self.push_fixes(snapshot)?;
         let mut expected = snapshot.clone();
         if let Some(head) = pushed.as_ref() {
             expected.head = head.clone();
@@ -175,7 +175,7 @@ impl Delivery<'_> {
                     let entry = repair(session::Kind::Repair(repairs), &failed, &expected)?;
                     unchanged(github, pr, &expected)?;
                     report.push_str(&format!("\n\n### Repair {repairs}\n\n{entry}"));
-                    let next = push_fixes(git, github, pr, &expected)?;
+                    let next = self.push_fixes(&expected)?;
                     watch.after_repair(expected.head.clone(), failed);
                     if let Some(head) = next {
                         expected.head = head.clone();
@@ -184,6 +184,33 @@ impl Delivery<'_> {
                 }
             }
         }
+    }
+
+    fn push_fixes(&self, snapshot: &ReviewPullRequest) -> Result<Option<String>> {
+        let git = self.git;
+        let head = git.run(&["rev-parse", "HEAD"])?;
+        ensure!(
+            git.run(&["branch", "--show-current"])? == snapshot.branch
+                && git
+                    .run(&["status", "--porcelain", "--untracked-files=no"])?
+                    .is_empty()
+                && git.succeeds(&["merge-base", "--is-ancestor", &snapshot.head, &head])?,
+            "review fixes must be committed on the pull request's captured branch without rewriting history"
+        );
+        ensure!(
+            compatible(self.github, self.pr, snapshot)?.head == snapshot.head,
+            "the branch moved during Review run"
+        );
+        if head == snapshot.head {
+            return Ok(None);
+        }
+        self.require_mergeable(&snapshot.head)?;
+        // A matching lease stays a fast-forward: the captured head is an ancestor.
+        // It also catches a receive-time rewind that a plain push would overwrite.
+        git.push_checked(&snapshot.branch, &head, Some(&snapshot.head), || {
+            compatible(self.github, self.pr, snapshot).map(|_| ())
+        })?;
+        Ok(Some(head))
     }
 
     fn unchanged_head(&self, head: &str) -> Result<()> {
@@ -223,34 +250,4 @@ impl Delivery<'_> {
             }
         }
     }
-}
-
-fn push_fixes(
-    git: &Git,
-    github: &GitHub,
-    pr: &PullRequestUrl,
-    snapshot: &ReviewPullRequest,
-) -> Result<Option<String>> {
-    let head = git.run(&["rev-parse", "HEAD"])?;
-    ensure!(
-        git.run(&["branch", "--show-current"])? == snapshot.branch
-            && git
-                .run(&["status", "--porcelain", "--untracked-files=no"])?
-                .is_empty()
-            && git.succeeds(&["merge-base", "--is-ancestor", &snapshot.head, &head])?,
-        "review fixes must be committed on the pull request's captured branch without rewriting history"
-    );
-    ensure!(
-        compatible(github, pr, snapshot)?.head == snapshot.head,
-        "the branch moved during Review run"
-    );
-    if head == snapshot.head {
-        return Ok(None);
-    }
-    // A matching lease stays a fast-forward: the captured head is an ancestor.
-    // It also catches a receive-time rewind that a plain push would overwrite.
-    git.push_checked(&snapshot.branch, &head, Some(&snapshot.head), || {
-        compatible(github, pr, snapshot).map(|_| ())
-    })?;
-    Ok(Some(head))
 }
