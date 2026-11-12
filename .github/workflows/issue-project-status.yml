@@ -3,27 +3,30 @@ name: Issue label to project status
 on:
   issues:
     types: [labeled, unlabeled]
-  # Re-synchronize the issues a pull request closes when it is opened or its
-  # body changes. Only issue and project data is read; no pull request code is
-  # checked out, so pull_request_target is safe here.
+  # Synchronize a pull request's own card when it opens or its in-progress
+  # label changes, and the issues it closes when it opens or its body changes.
+  # Only issue and project data is read; no pull request code is checked out,
+  # so pull_request_target is safe here.
   pull_request_target:
-    types: [opened, reopened, edited]
+    types: [opened, reopened, edited, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       issue_number:
-        description: Issue number to synchronize
+        description: Issue or pull request number to synchronize
         required: true
         type: number
 
 permissions: {}
 
 concurrency:
-  group: issue-project-status-${{ github.event.issue.number || inputs.issue_number || format('pr-{0}', github.event.pull_request.number) }}
+  group: issue-project-status-${{ github.event.issue.number || inputs.issue_number || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   sync-status:
-    if: github.event_name != 'issues' || github.event.label.name == 'in-progress'
+    if: >-
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled')
+      || github.event.label.name == 'in-progress'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -33,8 +36,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PROJECT_STATUS_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ITEM_NUMBER: ${{ github.event.issue.number || inputs.issue_number || github.event.pull_request.number }}
+          PR_ACTION: ${{ github.event_name == 'pull_request_target' && github.event.action || '' }}
           PROJECT_ID: PVT_kwHOAzaH4M4BmapY
           STATUS_FIELD_ID: PVTSSF_lAHOAzaH4M4BmapYzhlDz3Y
           TODO_OPTION_ID: f75ad846
@@ -48,19 +51,13 @@ jobs:
             exit 1
           fi
 
-          sync_issue() {
-            # Read the current issue rather than trusting a possibly stale event.
-            issue=$(gh api "repos/$GH_REPO/issues/$1")
-            if ! jq -e '.state == "open"' <<< "$issue" >/dev/null; then
-              echo 'Issue is closed; no change.'
-              return 0
-            fi
-            claimed=$(jq -r '.labels | any(.name == "in-progress")' <<< "$issue")
-
-            issue_id=$(jq -r '.node_id' <<< "$issue")
-            items=$(gh api graphql --paginate --slurp -f issue="$issue_id" -f query='
-              query($issue: ID!, $endCursor: String) {
-                node(id: $issue) {
+          # Read the item's project card and Status, and whether an open pull
+          # request stands for its work: the item itself when it is an open
+          # pull request, or an open pull request that closes the issue.
+          read_item() {
+            gh api graphql --paginate --slurp -f id="$1" -f query='
+              query($id: ID!, $endCursor: String) {
+                node(id: $id) {
                   ... on Issue {
                     projectItems(first: 100, after: $endCursor) {
                       nodes {
@@ -76,33 +73,69 @@ jobs:
                       nodes { state }
                     }
                   }
+                  ... on PullRequest {
+                    state
+                    projectItems(first: 100, after: $endCursor) {
+                      nodes {
+                        id
+                        project { id }
+                        fieldValueByName(name: "Status") {
+                          ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+                        }
+                      }
+                      pageInfo { hasNextPage endCursor }
+                    }
+                  }
                 }
-              }')
-            read -r item_id current < <(jq -r --arg project "$PROJECT_ID" '
-              [.[].data.node.projectItems.nodes[]
-                | select(.project.id == $project)
-                | "\(.id) \(.fieldValueByName.optionId // "")"] | first // ""' <<< "$items")
+              }'
+          }
+
+          sync_item() {
+            # Read the current item rather than trusting a possibly stale event.
+            item=$(gh api "repos/$GH_REPO/issues/$1")
+            if ! jq -e '.state == "open"' <<< "$item" >/dev/null; then
+              echo "#$1 is closed; no change."
+              return 0
+            fi
+            claimed=$(jq -r '.labels | any(.name == "in-progress")' <<< "$item")
+            node_id=$(jq -r '.node_id' <<< "$item")
+
+            find_card() {
+              data=$(read_item "$node_id")
+              read -r item_id current < <(jq -r --arg project "$PROJECT_ID" '
+                [.[].data.node.projectItems.nodes[]
+                  | select(.project.id == $project)
+                  | "\(.id) \(.fieldValueByName.optionId // "")"] | first // ""' <<< "$data")
+            }
+            find_card
+            if [[ -z "${item_id:-}" && "${2:-}" == wait ]]; then
+              # A just-opened pull request may not be on the board yet.
+              sleep 30
+              find_card
+            fi
             if [[ -z "${item_id:-}" ]]; then
-              echo 'Issue is not in the thirdshift project; no change.'
+              echo "#$1 is not in the thirdshift project; no change."
               return 0
             fi
 
-            # A live Claim puts a Todo or PR open issue In Progress, even after
-            # a pull request is linked. Without a Claim, an open pull request
-            # that closes the issue puts a Todo or In Progress issue in PR open;
-            # with none, an In Progress issue goes back to Todo. Other statuses
+            # A live Claim, or a Review or Fix run's reservation, puts a Todo or
+            # PR open card In Progress. Without one, an open pull request that
+            # stands for the work puts a Todo or In Progress card in PR open;
+            # with none, an In Progress card goes back to Todo. Other statuses
             # are left alone.
             if [[ "$claimed" == true ]]; then
               [[ "$current" == "$TODO_OPTION_ID" || "$current" == "$PR_OPEN_OPTION_ID" ]] || {
-                echo 'Claimed issue is not in Todo or PR open; no change.'; return 0; }
+                echo "#$1 is claimed but not in Todo or PR open; no change."; return 0; }
               target=$IN_PROGRESS_OPTION_ID; target_name='In Progress'
-            elif jq -e '[.[0].data.node.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN")] | length > 0' <<< "$items" >/dev/null; then
+            elif jq -e '.[0].data.node | .state == "OPEN"
+                or ([.closedByPullRequestsReferences.nodes[]? | select(.state == "OPEN")] | length > 0)' \
+                <<< "$data" >/dev/null; then
               [[ "$current" == "$TODO_OPTION_ID" || "$current" == "$IN_PROGRESS_OPTION_ID" ]] || {
-                echo 'Unclaimed issue with an open pull request is not in Todo or In Progress; no change.'; return 0; }
+                echo "#$1 has an open pull request but is not in Todo or In Progress; no change."; return 0; }
               target=$PR_OPEN_OPTION_ID; target_name='PR open'
             else
               [[ "$current" == "$IN_PROGRESS_OPTION_ID" ]] || {
-                echo 'Unclaimed issue without an open pull request is not In Progress; no change.'; return 0; }
+                echo "#$1 is unclaimed without an open pull request and not In Progress; no change."; return 0; }
               target=$TODO_OPTION_ID; target_name='Todo'
             fi
 
@@ -114,23 +147,24 @@ jobs:
                   value: { singleSelectOptionId: $option }
                 }) { projectV2Item { id } }
               }'
-            echo "Moved issue #$1 to $target_name."
+            echo "Moved #$1 to $target_name."
           }
 
-          if [[ -n "$PR_NUMBER" ]]; then
-            # The issues this pull request closes, as GitHub has linked them.
-            issues=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
-              --json closingIssuesReferences \
-              --jq ".closingIssuesReferences[]
-                | select(\"\\(.repository.owner.login)/\\(.repository.name)\" == \"$GH_REPO\")
-                | .number")
-            if [[ -z "$issues" ]]; then
-              echo "Pull request #$PR_NUMBER closes no issue here; no change."
-            fi
-            for number in $issues; do
-              echo "Issue #$number:"
-              sync_issue "$number"
-            done
-          else
-            sync_issue "$ISSUE_NUMBER"
-          fi
+          case "$PR_ACTION" in
+            opened | reopened) sync_item "$ITEM_NUMBER" wait ;;
+            *) sync_item "$ITEM_NUMBER" ;;
+          esac
+
+          case "$PR_ACTION" in
+            opened | reopened | edited)
+              # The issues this pull request closes, as GitHub has linked them.
+              issues=$(gh pr view "$ITEM_NUMBER" --repo "$GH_REPO" \
+                --json closingIssuesReferences \
+                --jq ".closingIssuesReferences[]
+                  | select(\"\\(.repository.owner.login)/\\(.repository.name)\" == \"$GH_REPO\")
+                  | .number")
+              for number in $issues; do
+                sync_item "$number"
+              done
+              ;;
+          esac
