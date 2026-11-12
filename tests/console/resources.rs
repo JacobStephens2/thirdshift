@@ -46,18 +46,24 @@ fn console_header_shows_host_admission_and_reloads_limits() {
     }
     fs::write(
         &config,
-        format!("{settings}\n[resources]\nmin_available_memory_mb = 1\n"),
+        format!(
+            "{settings}\n[resources]\nmin_available_memory_mb = 1\nmin_available_disk_mb = 1\n"
+        ),
     )
     .unwrap();
     let response = console.get("/resources/status");
     assert_eq!(response.status(), 200);
+    let status = response.text().unwrap();
     assert!(
-        response
-            .text()
-            .unwrap()
-            .contains("Host ready for another session")
+        status.contains("Host ready for another session"),
+        "{status}"
     );
-    fs::write(&config, settings).unwrap();
+    assert!(status.contains("MB disk available"), "{status}");
+    fs::write(
+        &config,
+        format!("{settings}\n[resources]\nmin_available_disk_mb = 0\n"),
+    )
+    .unwrap();
     assert!(
         console
             .get("/resources/status")
@@ -92,6 +98,9 @@ fn resources_page_shows_host_measurements_limits_and_admission_then_reloads_conf
     for expected in [
         "Resources",
         "Available memory",
+        "Available disk",
+        "Minimum available disk",
+        "5120 MB",
         "Logical CPUs",
         "One-minute load",
         "9007199254740991",
@@ -101,7 +110,11 @@ fn resources_page_shows_host_measurements_limits_and_admission_then_reloads_conf
     ] {
         assert!(html.contains(expected), "missing {expected}: {html}");
     }
-    fs::write(config, settings).unwrap();
+    fs::write(
+        config,
+        format!("{settings}\n[resources]\nmin_available_disk_mb = 1\n"),
+    )
+    .unwrap();
     assert!(
         console
             .get("/resources")

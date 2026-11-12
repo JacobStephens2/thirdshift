@@ -1291,6 +1291,7 @@ parallel = 5
 [resources]
 min_available_memory_mb = 0
 max_load_per_cpu_percent = 0
+min_available_disk_mb = 5120
 
 [pass]
 command_limit = 2
