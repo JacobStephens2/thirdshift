@@ -782,7 +782,7 @@ impl HeldClaim<'_> {
     /// hand `error` on.
     fn fail(&mut self, selection: &Selection, error: anyhow::Error) -> anyhow::Error {
         self.end(
-            claim::Ending::Failed,
+            claim::Ending::failed(&error),
             Some(before_steps_comment(selection, &error)),
         );
         error
@@ -965,14 +965,11 @@ pub(super) fn run_issue_branch(
     };
     // A land-tickets Step whose Spec only waits ends the Claim as a waiting
     // Spec run does, matching its comment.
-    let failed_ending = if completed
-        .failed_run
-        .as_ref()
-        .is_some_and(crate::failed_run::FailedRun::waiting)
-    {
-        claim::Ending::Waiting
-    } else {
-        claim::Ending::Failed
+    let failed_ending = match (&completed.failed_run, &result) {
+        (Some(failed), _) if failed.waiting() => claim::Ending::Waiting,
+        (Some(failed), _) => claim::Ending::failed(&failed.error),
+        (None, Err(error)) => claim::Ending::failed(error),
+        (None, Ok(_)) => claim::Ending::Failed,
     };
     drop(completed);
     if result.is_ok() && not_reproduced {

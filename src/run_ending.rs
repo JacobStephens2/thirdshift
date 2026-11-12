@@ -524,8 +524,9 @@ impl<'a> Account<'a> {
     /// Show stopping/recovery facts first, then on stderr its `elapsed` wall
     /// time if this is the top-level command, then what became of its Base fix,
     /// if it took one, then the line that says how it ended once it
-    /// succeeded; or its cause, its advice, if it has any, then its session
-    /// log and the command's Command log; its URLs on stdout. Returns its
+    /// succeeded; or its cause, its advice, if it has any, what to do when the
+    /// host ran out of disk space, then its session log and the command's
+    /// Command log; its URLs on stdout. Returns its
     /// exit code.
     pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
         if let Some(recommendation) = self.triage {
@@ -613,6 +614,12 @@ impl Shown {
             ),
         }
         steps.extend(account.advice.iter().map(Advice::to_string));
+        if let Err(cause) = &account.ended
+            && account.pre_audit_failure.is_none()
+            && crate::failed_run::says_out_of_disk(cause.full())
+        {
+            steps.push(crate::failed_run::OUT_OF_DISK.to_string());
+        }
         if account.ended.is_err() && account.pre_audit_failure.is_none() {
             if let Some(log) = account.log {
                 steps.push(format!("{SESSION_LOG}{}", log.display()));
@@ -712,7 +719,10 @@ impl Reader {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
-        } else if !Advice::is_line(message) && !crate::recovery::Recovery::is_line(message) {
+        } else if !Advice::is_line(message)
+            && !crate::recovery::Recovery::is_line(message)
+            && message != crate::failed_run::OUT_OF_DISK
+        {
             self.cause = Some(message.to_string());
             self.log = None;
         }
@@ -1513,6 +1523,23 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn a_run_the_host_ran_out_of_disk_under_says_to_free_space_and_reads_back_its_cause() {
+        let cause = "git worktree add failed: fatal: unable to write new index file: No space \
+                     left on device";
+        let ended = failed(cause, Some(LOG), None);
+        let shown = Shown::of(&Account::of_run(&ended));
+        let at = shown.steps.iter().position(|step| step == cause).unwrap();
+        assert_eq!(shown.steps[at + 1], crate::failed_run::OUT_OF_DISK);
+        assert_eq!(
+            read_back(&ended),
+            ChildEnding {
+                outcome: failure(cause, Some(LOG)),
+                base_fix: None,
+            }
+        );
     }
 
     #[test]

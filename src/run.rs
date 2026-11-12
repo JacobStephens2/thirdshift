@@ -389,7 +389,7 @@ fn claim_ending(outcome: &Result<Reached, FailedRun>) -> claim::Ending {
         },
         Err(failed) if failed.held() => claim::Ending::Held,
         Err(failed) if failed.waiting() => claim::Ending::Waiting,
-        Err(_) => claim::Ending::Failed,
+        Err(failed) => claim::Ending::failed(&failed.error),
     }
 }
 
