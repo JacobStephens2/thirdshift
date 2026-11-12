@@ -6,10 +6,12 @@
 <p>Host snapshot. <a href="/resources">Reload</a> to update measurements and limits.</p>
 <dl>
   <dt>Available memory</dt><dd>{{ snapshot.host.available_memory_mb }} MB of {{ snapshot.host.total_memory_mb }} MB (1 MB = 1,000,000 bytes)</dd>
+  <dt>Available disk</dt><dd>{{ snapshot.host.available_disk_mb }} MB where worktrees and temporary files go</dd>
   <dt>Logical CPUs</dt><dd>{{ snapshot.host.logical_cpus }}</dd>
   <dt>One-minute load</dt><dd>{{ snapshot.host.load_one|fmt("{:.2}") }} · {{ snapshot.load_per_cpu_percent|fmt("{:.1}") }}% per CPU</dd>
   <dt>Minimum available memory</dt><dd>{% if snapshot.limits.min_available_memory_mb == 0 %}Disabled{% else %}{{ snapshot.limits.min_available_memory_mb }} MB{% endif %}</dd>
   <dt>Maximum load per CPU</dt><dd>{% if snapshot.limits.max_load_per_cpu_percent == 0 %}Disabled{% else %}{{ snapshot.limits.max_load_per_cpu_percent }}%{% endif %}</dd>
+  <dt>Minimum available disk</dt><dd>{% if snapshot.limits.min_available_disk_mb == 0 %}Disabled{% else %}{{ snapshot.limits.min_available_disk_mb }} MB{% endif %}</dd>
 </dl>
 {% if snapshot.ready %}<p role="status">Ready to start another session</p>{% else %}<p role="status">Waiting for host resources</p><ul>{% for reason in snapshot.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
 <p>Set limits in <code>[resources]</code> in <code>~/.thirdshift/config.toml</code>. Zero disables each limit. Before every session, thirdshift waits while a configured limit is exceeded. Running sessions continue.</p>

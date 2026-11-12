@@ -1908,14 +1908,14 @@ Uncommitted changes in your clone are fine: the Ticket run works in its own work
 
 ### Host resources
 
-`thirdshift resources` (or `thirdshift resources --json`) reports this host's available and total RAM in MB (1,000,000 bytes), logical CPU count, one-minute load average, configured limits and whether another session may start. The Console's **Resources** page shows the same snapshot; reload to update it.
+`thirdshift resources` (or `thirdshift resources --json`) reports this host's available and total RAM in MB (1,000,000 bytes), available disk space in MB, logical CPU count, one-minute load average, configured limits and whether another session may start. The Console's **Resources** page shows the same snapshot; reload to update it.
 
 Every Console reader page also shows the host's session admission status below
 the notification control in the top right. It links to Resources and refreshes
 every ten seconds while the page is visible. **Host ready for another session**
 means the configured limits currently pass; **Host busy · new sessions wait**
-means a limit blocks new sessions. **Host limits off** means neither limit is
-configured, and **Host resources unavailable** means the status could not be
+means a limit blocks new sessions. **Host limits off** means every limit is
+set to `0`, and **Host resources unavailable** means the status could not be
 read. Without JavaScript, reload to refresh it. This indicator checks host
 resources only; it does not reserve capacity or check repository Pass gates.
 
@@ -1925,11 +1925,14 @@ Set `[resources]` in `~/.thirdshift/config.toml` to delay new sessions when this
 [resources]
 min_available_memory_mb = 2048
 max_load_per_cpu_percent = 100
+min_available_disk_mb = 5120
 ```
 
-Both settings default to `0`, disabling that limit. Values are nonnegative whole numbers; `max_load_per_cpu_percent` is at most 4,294,967,295. A load limit of 100 permits a one-minute load of 8 on eight logical CPUs. Load includes runnable work and, on Linux, tasks waiting for IO; it is not instantaneous CPU usage.
+The memory and load settings default to `0`, disabling that limit. `min_available_disk_mb` defaults to `5120`, room for a typical session's worktree and build output, so a full disk delays new sessions without any configuration; set it to `0` to disable it. Values are nonnegative whole numbers; `max_load_per_cpu_percent` is at most 4,294,967,295. A load limit of 100 permits a one-minute load of 8 on eight logical CPUs. Load includes runnable work and, on Linux, tasks waiting for IO; it is not instantaneous CPU usage.
 
-Before every session, including a Resume, Repair, Security review or a preflight Model test call, thirdshift checks the host. If available RAM is below the minimum or load per CPU exceeds the maximum, it reports why and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.
+Before every session, including a Resume, Repair, Security review or a preflight Model test call, thirdshift checks the host. If available RAM is below the minimum, load per CPU exceeds the maximum, or free disk space is below its minimum, it reports every failing limit and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.
+
+Free disk space is the space an ordinary user may still write on the filesystem that holds the worktrees: the parent of the repository holding the directory thirdshift runs in, or that directory itself outside a repository. When the system temporary directory is on another filesystem, the lower of the two counts. For the Console and `thirdshift resources`, that is the directory they were started in.
 
 These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. `spec.parallel` still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.
 
@@ -2729,6 +2732,11 @@ quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity
 
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
+
+[resources]
+min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
+max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
+min_available_disk_mb = 5120  # delay new sessions below this free disk space in MB where worktrees and temporary files go; 0 disables; default 5120
 
 [pass]
 command_limit = 1   # how many Commands running on one repository on this machine stop a Pass starting another; default 1
@@ -3694,7 +3702,7 @@ The reason says how many Commands are running and what the limit is, such as `at
 
 Passes of different kinds share the repository up to the limit: Pickup runs, a Custom process started with no issue, one [Architect run](#architect-runs) and one [Security run](#security-runs) can run side by side. Two Architect runs, or two Security runs, never run on one repository at once: each of the two holds a lock of its kind under the same directory as the slots, and another of its kind is skipped while it is held, with `an Architect run is already running on <owner>/<repo>` (or `a Security run`). A Pickup run and a Custom process take no such lock. An Architect run reviews in its worktree `<repo>-architect` and a Security run in `<repo>-security`, so neither ever removes the other's live worktree as one left behind. Each reserves the plan or the fix it dispatches on `origin` before marking it ready, as a Pickup run reserves the Ready issue it takes, so that a Pickup run beside it never takes the same issue.
 
-The repository is the one `origin` names, so two clones of one repository count as the same, and the limit counts no other repository: Commands on different repositories run at the same time, whatever each one's count. Load across the whole machine is for the [`[resources]`](#host-resources) memory and load waits. A Custom process started with no issue, and whose file declares no Issue-branch worktree, is a Pass for this rule only: it does not take an Architect run's Ready-issue or Architect-idea gates. Its skip keeps a Command record whose outcome is `skipped`. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped.
+The repository is the one `origin` names, so two clones of one repository count as the same, and the limit counts no other repository: Commands on different repositories run at the same time, whatever each one's count. Load across the whole machine is for the [`[resources]`](#host-resources) memory, load and disk waits. A Custom process started with no issue, and whose file declares no Issue-branch worktree, is a Pass for this rule only: it does not take an Architect run's Ready-issue or Architect-idea gates. Its skip keeps a Command record whose outcome is `skipped`. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped.
 
 Each live Command holds a slot: an operating-system lock on a file under `~/.thirdshift/command-slots/<owner>/<repo>/`, taken after a Pass's checks in step 1, or as a Ticket run started on an Issue URL opens its Launch directory, and held until its process exits. A Pass counts the slots held and takes one under a short lock, so two Passes starting together can't both take the last. The operating system releases a slot when its process ends for any reason, a crash, a kill or a reboot included, so there is never a stale slot to clear: the next Pass on the repository runs normally. The files themselves stay, and mean nothing on their own. Every newer Pass also holds a shared lock on the file a thirdshift from before the Command limit locks exclusively, under `~/.thirdshift/architect-locks/`. An older Pass cannot start until all newer Passes end. An older Pass holding that file counts as one Command and keeps every newer Pass out, even above a Command limit of 1: the newer Pass is skipped for the limit if full, or with `an older thirdshift's Pass is running on <owner>/<repo>` otherwise. This preserves the older binary's exclusive access through an update. A review worktree that a killed Architect run, or Security run, left behind is removed by the next of its kind.
 
