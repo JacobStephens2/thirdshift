@@ -25,6 +25,15 @@ const SOURCE_EDITS: &str = "For source edits, prefer an available structured pat
     Normal language-specific code generation and narrowly justified scripts remain appropriate; \
     scope scripted replacements to the intended region and check the diff for unrelated changes.\n";
 
+/// CI diagnosis stays targeted and leaves only the repair in commits.
+const CI_FIX_VALIDATION: &str = "Keep disposable command/test logs inside `.validation-logs/` in this worktree, never in `/tmp`. \
+    This directory is excluded from Git and discarded by worktree cleanup. Never stage or commit validation logs. \
+    Remove untracked validation logs before committing and before ending the session. \
+    Reproduce with the failing test file or filter before running a full suite. \
+    Do not run full test suites with `--debug` or verbose trace flags to isolate a failure. \
+    Do not use `sleep`/`tail` polling loops; run commands in the foreground with a sufficient timeout. \
+    Inspect large logs with bounded streaming tools rather than reading entire files into memory.\n";
+
 /// Every prompt ends with this, worded for either Harness. A session exits
 /// once the agent ends its turn, killing any background task still running.
 /// Other sessions on the same machine run the same commands, so a wait on a
@@ -511,7 +520,7 @@ pub fn pull_request_review(
                  Commit only if the review changes files; otherwise make no commit, including no `--allow-empty` commit. \
                  Do not push, rebase, merge, change branches or edit the pull request: thirdshift pushes fixes without force and posts your final report as a comment. \
                  Return the complete Standards and Spec findings, what you fixed, every Unaddressed finding, review coverage and validation results in your final message.\n\n\
-                 {SOURCE_EDITS}\n{PR_LIFECYCLE}",
+                 {SOURCE_EDITS}",
                 address = review.address_findings(),
                 unaddressed = review.unaddressed_findings(),
             )
@@ -592,7 +601,8 @@ fn review_validation_instructions(commands: &[String]) -> String {
         Inspect large logs with bounded streaming tools (`tail`, `head`, `grep`) rather than reading entire files into memory. \
         If the repository's agent instructions say a suite is invalid from a worktree, do not run it elsewhere as a substitute: report it as `not run against the branch`, with the reason, and never report it as passing. \
         In the final report that thirdshift posts as the review comment, list each exact command and what ran, what passed, what failed and what could not run, with exit status or the reason it could not run. \
-        Check the pull request is still open before additional validation; stop if it is merged or closed.",
+        Check the pull request is still open at most once, immediately before starting a multi-minute validation suite; stop if it is merged or closed. \
+        Do not poll PR state before targeted checks, file reads or sub-agent steps; thirdshift checks lifecycle around the session and before Delivery.",
         commands = serde_json::to_string(commands).expect("command strings serialize as JSON"),
     )
 }
@@ -749,7 +759,7 @@ fn base_ci_prompt(
     publication: &str,
 ) -> String {
     format!(
-        "Fix CI on Base branch `{base}` in this Worktree on `{branch}`.\n\nFailed checks:\n{}\n\n{}\nRead the failure logs, find the root cause and fix it. Do not skip, disable or weaken tests or checks. Run the affected checks locally.\n{publication}\n{SOURCE_EDITS}\n{HEADLESS}",
+        "Fix CI on Base branch `{base}` in this Worktree on `{branch}`.\n\nFailed checks:\n{}\n\n{}\nRead the failure logs, find the root cause and fix it. Do not skip, disable or weaken tests or checks.\n{CI_FIX_VALIDATION}\nRun the affected checks locally.\n{publication}\n{SOURCE_EDITS}\n{HEADLESS}",
         ci::check_list(failed),
         RepairSubject::BaseBranch(base).instruction()
     )
@@ -820,6 +830,7 @@ pub fn ci_fix_repair<'a>(
          {inherited}\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
+         {CI_FIX_VALIDATION}\n\
          Run the affected checks locally. Commit only changed files, and push {branch} only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
          Compare the failing test or check with the branch's diff against {base}. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
@@ -1282,6 +1293,78 @@ mod tests {
                     "missing {instruction}: {prompt}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn ci_fix_validation_keeps_logs_local_and_reproduces_with_targeted_tests() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let failed = FailedChecks {
+            own: Vec::new(),
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        for prompt in [
+            base_ci_fix("main", "fix-main-abc1234", &[]),
+            ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
+            ci_fix_repair(
+                RepairSubject::PullRequest("<pr>"),
+                "main",
+                "feature",
+                "<pr>",
+                &failed,
+            ),
+            ci_fix_repair(
+                RepairSubject::BaseBranch("main"),
+                "main",
+                "fix-main-abc1234",
+                "<pr>",
+                &failed,
+            ),
+        ] {
+            for instruction in [
+                "Keep disposable command/test logs inside `.validation-logs/` in this worktree, never in `/tmp`",
+                "Never stage or commit validation logs",
+                "Remove untracked validation logs before committing and before ending the session",
+                "Reproduce with the failing test file or filter before running a full suite",
+                "Do not run full test suites with `--debug` or verbose trace flags",
+                "Do not use `sleep`/`tail` polling loops",
+            ] {
+                assert!(
+                    prompt.contains(instruction),
+                    "missing {instruction}: {prompt}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn review_checks_pr_state_once_before_a_multi_minute_suite() {
+        let pr =
+            crate::review::PullRequestUrl::parse("https://github.com/acme/widgets/pull/8").unwrap();
+        for mode in [
+            crate::review::Mode::Address,
+            crate::review::Mode::RecommendOnly,
+        ] {
+            let prompt = pull_request_review(
+                &pr,
+                "main",
+                mode,
+                &[],
+                EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            );
+            assert!(prompt.contains("Check the pull request is still open at most once, immediately before starting a multi-minute validation suite"), "{prompt}");
+            assert!(
+                prompt.contains(
+                    "Do not poll PR state before targeted checks, file reads or sub-agent steps"
+                ),
+                "{prompt}"
+            );
+            assert!(!prompt.contains("before additional validation"), "{prompt}");
+            assert!(!prompt.contains("Before additional validation"), "{prompt}");
         }
     }
 

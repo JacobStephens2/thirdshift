@@ -100,6 +100,44 @@ fn unchanged_failed_repair_drafts_without_an_empty_commit_and_offers_fix_retry()
 }
 
 #[test]
+fn ci_fix_discards_validation_logs_without_committing_them() {
+    for fails in [false, true] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+        let url = scenario.github_has_pr("colleague", "main", "OPEN");
+        let head = scenario.origin_git(&["rev-parse", "colleague"]);
+        let mut state = scenario.gh_state();
+        state["checks"][head.trim()] =
+            json!([{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]);
+        scenario.write_gh_state(&state);
+        let finish = if fails {
+            "exit 1"
+        } else {
+            "git add -A\ngit commit -qm 'Fix branch CI'\ngh fake checks \"$(git rev-parse HEAD)\" '[{\"name\":\"test\",\"conclusion\":\"success\"}]'"
+        };
+        scenario.agent_does(&format!(
+            "mkdir .validation-logs\nprintf 'test output' > .validation-logs/check.log\necho repaired > ci-fix.txt\n{finish}"
+        ));
+
+        let result = scenario.run(&["fix", &url, "no-merge", "no-base-fix", "no-email"]);
+
+        assert_eq!(result.code, Some(i32::from(fails)), "{}", result.stderr);
+        assert_eq!(
+            scenario.origin_file("colleague", "ci-fix.txt").as_deref(),
+            Some("repaired\n"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.origin_file("colleague", ".validation-logs/check.log"),
+            None,
+            "validation logs were published (failed session: {fails})"
+        );
+        scenario.assert_cleaned_up("colleague");
+    }
+}
+
+#[test]
 fn ci_repair_gets_trusted_pr_context_and_holds_the_reservation_until_delivery() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);

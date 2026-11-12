@@ -539,15 +539,21 @@ fn run_checked<T, S>(
     pull_request.begin_delivery();
     let path = worktree.path().to_path_buf();
     let branch = worktree.branch().to_string();
-    let before_each = move || match context {
-        RepairContext::PullRequest(pr) => {
-            hand_over_pull_request(pr, base, &branch, &path, true, started)
+    let before_each = move || {
+        // CI-fix sessions leave disposable logs here. Keep them out of both
+        // agent commits and automatic Failed run preservation; owned cleanup
+        // already removes ignored files with the rest of the Worktree.
+        skills::exclude(&Git::new(&path), "/.validation-logs/")?;
+        match context {
+            RepairContext::PullRequest(pr) => {
+                hand_over_pull_request(pr, base, &branch, &path, true, started)
+            }
+            RepairContext::Issue(issue) => {
+                no_untrusted_edit_since(issue, started, "Ticket run")?;
+                hand_over_issue(issue, &path)
+            }
+            RepairContext::BaseBranch(_) => Ok(()),
         }
-        RepairContext::Issue(issue) => {
-            no_untrusted_edit_since(issue, started, "Ticket run")?;
-            hand_over_issue(issue, &path)
-        }
-        RepairContext::BaseBranch(_) => Ok(()),
     };
     let (delivered, log) = Sessions::checked_within(
         logs,
