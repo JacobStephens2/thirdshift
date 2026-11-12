@@ -175,6 +175,15 @@ impl GitHub {
         }
     }
 
+    /// The login this machine's gh credentials act as on the default host:
+    /// a person's account, or a GitHub App's `<app>[bot]`. Cached with the
+    /// Quota wait's identity, so a known credential costs no GitHub call.
+    pub(crate) fn authenticated_login(&self) -> Result<String> {
+        let store = Store::machine()?;
+        let host = identity::host(&[]);
+        Ok(identity::resolve(self, &store, &host)?.login().to_string())
+    }
+
     pub(super) fn observe_quota(&self, resource: Resource, quota: Quota) -> Result<()> {
         let store = Store::machine()?;
         let host = identity::host(&[]);

@@ -6,7 +6,6 @@ use serde_json::Value;
 
 use super::{CommandFailure, GitHub};
 use crate::issue::IssueUrl;
-use crate::trust::trusted_association;
 
 /// What stands in for each comment by an account that is not a Trusted
 /// account.
@@ -31,13 +30,24 @@ impl GitHub {
     pub(crate) fn session_issue(&self, issue: &IssueUrl) -> Result<SessionIssue> {
         let (json, comments) =
             self.paged_nodes(issue, COMMENTS_QUERY, "comments", "issue comments")?;
-        issue_markdown(issue, &json["data"]["repository"]["issue"], &comments)
+        issue_markdown(
+            issue,
+            &json["data"]["repository"]["issue"],
+            &comments,
+            |association, login| self.trusted_commenter(association, login),
+        )
     }
 }
 
 /// The Markdown [`GitHub::issue_for_session`] gives: `node`'s title and body,
-/// then each of `comments`, oldest first.
-fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<SessionIssue> {
+/// then each of `comments`, oldest first, kept when `trusted` says its
+/// author, by association and login, is a Trusted account.
+fn issue_markdown(
+    issue: &IssueUrl,
+    node: &Value,
+    comments: &[Value],
+    trusted: impl Fn(&str, Option<&str>) -> Result<bool>,
+) -> Result<SessionIssue> {
     let mut trusted_bodies = vec![text(node, "body")?.to_string()];
     let mut markdown = format!(
         "# {title}\n\n{url}\n\n{body}\n",
@@ -50,7 +60,7 @@ fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<
         let association = text(comment, "authorAssociation")?;
         // A deleted account has no author; its association is not trusted.
         match comment["author"]["login"].as_str() {
-            Some(login) if trusted_association(association) => {
+            Some(login) if trusted(association, Some(login))? => {
                 trusted_bodies.push(text(comment, "body")?.to_string());
                 markdown.push_str(&format!(
                     "Comment by @{login}, {at}:\n\n{body}\n",
@@ -95,6 +105,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::trust::trusted_association;
+
+    fn by_association(association: &str, _login: Option<&str>) -> Result<bool> {
+        Ok(trusted_association(association))
+    }
 
     fn seven() -> IssueUrl {
         IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
@@ -122,7 +137,7 @@ mod tests {
             comment(None, "OWNER", "From a deleted account."),
         ];
 
-        let input = issue_markdown(&seven(), &node, &comments).unwrap();
+        let input = issue_markdown(&seven(), &node, &comments, by_association).unwrap();
         assert_eq!(
             input.trusted_bodies,
             ["Make widgets.\n", "Use blue.", "And green.", "Not red.",]
@@ -150,7 +165,9 @@ mod tests {
     fn an_issue_with_no_comments_is_its_title_and_body() {
         let node = json!({"title": "Add widgets", "body": ""});
 
-        let text = issue_markdown(&seven(), &node, &[]).unwrap().markdown;
+        let text = issue_markdown(&seven(), &node, &[], by_association)
+            .unwrap()
+            .markdown;
 
         assert_eq!(
             text,
@@ -163,6 +180,6 @@ mod tests {
         let node = json!({"title": "Add widgets", "body": ""});
         let comments = [json!({"author": {"login": "owner"}, "body": "Hi."})];
 
-        assert!(issue_markdown(&seven(), &node, &comments).is_err());
+        assert!(issue_markdown(&seven(), &node, &comments, by_association).is_err());
     }
 }

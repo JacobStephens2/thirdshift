@@ -9,7 +9,7 @@ use crate::git::Git;
 use crate::github::GitHub;
 use crate::issue::IssueUrl;
 use crate::labels::{self, Edit, Label};
-use crate::trust::{self, Reads};
+use crate::trust;
 
 const STATES_AND_CLAIM: [Label; 7] = [
     labels::NEEDS_TRIAGE,
@@ -55,7 +55,7 @@ pub(super) fn finding_notification(issue: &IssueUrl, github: &GitHub) -> Result<
 }
 
 pub(super) fn trust_reason(issue: &IssueUrl, github: &GitHub) -> Result<Option<String>> {
-    if !trust::trusted_association(&github.author_association(issue)?) {
+    if !trust::trusted_author(github, issue)? {
         return Ok(Some("author is not a Trusted account".into()));
     }
     if let Some(text) = trust::untrusted_edit(github, issue, None)? {

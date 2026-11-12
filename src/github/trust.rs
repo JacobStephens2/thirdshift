@@ -9,18 +9,21 @@ use serde_json::Value;
 use super::{CommandFailure, GitHub};
 use crate::issue::IssueUrl;
 use crate::labels::READY_FOR_AGENT;
-use crate::trust::{Action, IssueText, Reads};
+use crate::trust::{Action, Author, IssueText, Reads, trusted_association};
 
 impl Reads for GitHub {
-    fn author_association(&self, issue: &IssueUrl) -> Result<String> {
+    fn author(&self, issue: &IssueUrl) -> Result<Author> {
         let json = self.gh_json(&[
             "api",
             &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
         ])?;
-        Ok(json["author_association"]
-            .as_str()
-            .context("gh api output has no author_association")?
-            .to_string())
+        Ok(Author {
+            association: json["author_association"]
+                .as_str()
+                .context("gh api output has no author_association")?
+                .to_string(),
+            login: json["user"]["login"].as_str().map(str::to_string),
+        })
     }
 
     /// A Claim removes the label, but its historical event still matters.
@@ -85,10 +88,29 @@ impl GitHub {
             return Ok(true);
         }
         let repo = self.gh_json(&["api", &format!("repos/{}", repository.slug())])?;
-        if repo["owner"]["type"] == "Organization" {
-            return self.membership(&format!("orgs/{}/members/{login}", repository.owner));
+        if repo["owner"]["type"] == "Organization"
+            && self.membership(&format!("orgs/{}/members/{login}", repository.owner))?
+        {
+            return Ok(true);
         }
-        Ok(false)
+        self.is_self(Some(login))
+    }
+
+    /// Whether an author with `association` and `login` is a Trusted account,
+    /// where a membership read for each author would cost too much: a trusted
+    /// association, or the account thirdshift's own credentials act as, such
+    /// as a GitHub App's `<app>[bot]`, whose association is not trusted.
+    pub(crate) fn trusted_commenter(&self, association: &str, login: Option<&str>) -> Result<bool> {
+        Ok(trusted_association(association) || self.is_self(login)?)
+    }
+
+    /// Whether `login` is the account thirdshift's credentials act as. Work
+    /// thirdshift published itself, under a GitHub App, is its own.
+    fn is_self(&self, login: Option<&str>) -> Result<bool> {
+        let Some(login) = login else {
+            return Ok(false);
+        };
+        Ok(same_account(login, &self.authenticated_login()?))
     }
 }
 
@@ -111,6 +133,15 @@ impl GitHub {
             ),
         }
     }
+}
+
+/// Whether two logins name one account. REST spells a GitHub App's bot
+/// `<app>[bot]`, and GraphQL spells it `<app>`.
+fn same_account(a: &str, b: &str) -> bool {
+    fn bare(login: &str) -> &str {
+        login.strip_suffix("[bot]").unwrap_or(login)
+    }
+    bare(&a.to_ascii_lowercase()).eq(bare(&b.to_ascii_lowercase()))
 }
 
 /// The account that made the event or edit `node`, if GitHub still knows it,
@@ -160,3 +191,16 @@ query($owner: String!, $repo: String!, $number: Int!, $after: String) {
     }
   }
 }";
+
+#[cfg(test)]
+mod tests {
+    use super::same_account;
+
+    #[test]
+    fn a_bot_is_the_same_account_with_or_without_its_rest_suffix() {
+        assert!(same_account("thirdshift-fleet[bot]", "Thirdshift-Fleet"));
+        assert!(same_account("thirdshift-fleet", "thirdshift-fleet[bot]"));
+        assert!(same_account("runner", "RUNNER"));
+        assert!(!same_account("thirdshift-fleet[bot]", "outsider"));
+    }
+}

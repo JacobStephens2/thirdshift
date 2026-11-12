@@ -3506,6 +3506,42 @@ fn an_issue_written_by_an_untrusted_account_is_passed_over() {
     assert!(scenario.claude_calls().is_empty());
 }
 
+/// A GitHub App's bot opens issues with no trusted association. Its own
+/// issues are thirdshift's work: the account its credentials act as is a
+/// Trusted account. The fake's credentials act as `runner`.
+#[test]
+fn an_issue_written_by_the_account_thirdshift_acts_as_is_trusted() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    state["authors"] = serde_json::json!({"7": "runner"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+}
+
+#[test]
+fn an_issue_by_an_outsider_with_no_trusted_association_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    state["authors"] = serde_json::json!({"7": "outsider"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&["#7 issue author is not a Trusted account"]),
+    );
+}
+
 #[test]
 fn an_issue_with_no_ready_labelling_history_is_passed_over() {
     let scenario = Scenario::new();

@@ -55,6 +55,14 @@ impl fmt::Display for IssueText {
     }
 }
 
+/// An issue's author: their `authorAssociation` with its repository, and
+/// their login if GitHub still knows the account.
+#[derive(Clone, Debug)]
+pub struct Author {
+    pub association: String,
+    pub login: Option<String>,
+}
+
 /// A `ready-for-agent` labelling or an edit of an issue: the account that
 /// made it, if GitHub still knows it, and when.
 #[derive(Clone, Debug)]
@@ -65,8 +73,8 @@ pub struct Action {
 
 /// What the rule reads of GitHub about an issue.
 pub trait Reads {
-    /// The `authorAssociation` of `issue`'s author with its repository.
-    fn author_association(&self, issue: &IssueUrl) -> Result<String>;
+    /// `issue`'s author.
+    fn author(&self, issue: &IssueUrl) -> Result<Author>;
     /// Every `ready-for-agent` labelling of `issue`, oldest first.
     fn ready_labellings(&self, issue: &IssueUrl) -> Result<Vec<Action>>;
     /// Every edit of `issue`'s `text`, each read only when
@@ -77,8 +85,9 @@ pub trait Reads {
         issue: &IssueUrl,
         text: IssueText,
     ) -> Result<impl Iterator<Item = Result<Action>>>;
-    /// Whether `login` is a collaborator on `issue`'s repository or a member
-    /// of the organization that owns it.
+    /// Whether `login` is a collaborator on `issue`'s repository, a member
+    /// of the organization that owns it, or the account thirdshift's own
+    /// credentials act as.
     fn is_member(&self, issue: &IssueUrl, login: &str) -> Result<bool>;
 }
 
@@ -101,6 +110,12 @@ pub fn issue_trust(reads: &impl Reads, issue: &IssueUrl) -> Result<Option<Untrus
     Ok(check
         .untrusted_edit(issue, Some(at))?
         .map(UntrustedIssue::Edited))
+}
+
+/// Whether `issue`'s author is a Trusted account: by association, else, as
+/// for an actor, by membership or as the account thirdshift acts as.
+pub fn trusted_author(reads: &impl Reads, issue: &IssueUrl) -> Result<bool> {
+    Check::new(reads).trusted_author(issue)
 }
 
 /// Check a Ticket before its Run starts: its author, and every edit to
@@ -172,8 +187,17 @@ impl<'a, R: Reads> Check<'a, R> {
         }
     }
 
-    fn trusted_author(&self, issue: &IssueUrl) -> Result<bool> {
-        Ok(trusted_association(&self.reads.author_association(issue)?))
+    /// An author with no trusted association, such as a GitHub App's bot,
+    /// is still trusted by membership, as an actor is.
+    fn trusted_author(&mut self, issue: &IssueUrl) -> Result<bool> {
+        let author = self.reads.author(issue)?;
+        if trusted_association(&author.association) {
+            return Ok(true);
+        }
+        match author.login {
+            Some(login) => self.trusted_actor(issue, &login),
+            None => Ok(false),
+        }
     }
 
     fn untrusted_edit(
@@ -271,6 +295,7 @@ mod tests {
     #[derive(Default)]
     struct Issue {
         association: Option<&'static str>,
+        author: Option<&'static str>,
         labellings: Vec<Action>,
         body_edits: Vec<Action>,
         title_edits: Vec<Action>,
@@ -302,8 +327,12 @@ mod tests {
     }
 
     impl Reads for InMemory {
-        fn author_association(&self, issue: &IssueUrl) -> Result<String> {
-            Ok(self.issue(issue).association.unwrap_or("OWNER").to_string())
+        fn author(&self, issue: &IssueUrl) -> Result<Author> {
+            let issue = self.issue(issue);
+            Ok(Author {
+                association: issue.association.unwrap_or("OWNER").to_string(),
+                login: issue.author.map(str::to_string),
+            })
         }
 
         fn ready_labellings(&self, issue: &IssueUrl) -> Result<Vec<Action>> {
@@ -348,6 +377,27 @@ mod tests {
 
     fn ticket_trust_of(reads: &InMemory) -> Option<UntrustedIssue> {
         ticket_trust(reads, &url(ISSUE), &url(SPEC)).unwrap()
+    }
+
+    /// A GitHub App's bot has no trusted association on the issues it
+    /// opens, but the rule trusts it as it would trust it as an actor.
+    #[test]
+    fn an_author_with_no_trusted_association_is_trusted_by_membership() {
+        let reads = InMemory::with(Issue {
+            association: Some("NONE"),
+            author: Some("member"),
+            ..ready()
+        });
+        assert_eq!(issue_trust_of(&reads), None);
+
+        let reads = InMemory::with(Issue {
+            association: Some("NONE"),
+            author: Some("outsider"),
+            ..ready()
+        });
+        assert_eq!(issue_trust_of(&reads), Some(UntrustedIssue::Author));
+        assert_eq!(*reads.looked_up.borrow(), ["outsider"]);
+        assert!(reads.edits_read.borrow().is_empty());
     }
 
     #[test]

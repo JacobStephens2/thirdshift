@@ -14,6 +14,7 @@
 //!  "auth_token"?: "<token returned by gh auth token>",
 //!  "comments"?: {"<number>": ["<body>" | {"body", "by", "association"}, ...]},
 //!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
+//!  "authors"?: {"<number>": "<login>"},
 //!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
 //!  "edits"?: {"<number>": [{"kind": "body" | "title", "by": "<login>" | null, "at"}, ...]},
 //!  "collaborators"?: ["<login>", ...],
@@ -784,6 +785,13 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
                 .and_then(|authors| authors.get(n))
                 .cloned()
                 .unwrap_or_else(|| string("OWNER")),
+        ),
+        (
+            "user",
+            match state.get("authors").and_then(|authors| authors.get(n)) {
+                Some(login) => object([("login", login.clone())]),
+                None => Null,
+            },
         ),
         ("number", number(n.parse::<i64>().unwrap())),
         // The fake's database ids are the issue numbers.

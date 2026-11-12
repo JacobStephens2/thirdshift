@@ -23,6 +23,10 @@ impl Account {
             login: login.to_ascii_lowercase(),
         }
     }
+
+    pub fn login(&self) -> &str {
+        &self.login
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,10 +129,13 @@ impl Store {
             .map(|identity| identity.account))
     }
 
+    /// A credential replaces any earlier one for the same account, so a
+    /// GitHub App's hourly installation tokens keep one record, not one each.
     pub fn remember(&self, account: Account, credential: String) -> Result<()> {
         self.update(|record| {
             record.identities.retain(|identity| {
-                identity.account.host != account.host || identity.credential != credential
+                identity.account.host != account.host
+                    || (identity.credential != credential && identity.account != account)
             });
             record.identities.push(Identity {
                 account,

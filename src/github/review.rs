@@ -4,7 +4,6 @@ use anyhow::{Context, Result, ensure};
 
 use super::GitHub;
 use crate::review::PullRequestUrl;
-use crate::trust::trusted_association;
 
 #[derive(Clone)]
 pub(crate) struct ReviewPullRequest {
@@ -63,7 +62,7 @@ impl GitHub {
                     .as_str()
                     .context("pull request has no URL")?,
             )?;
-            if fix_candidate(&pr, &node, base, author, false)? {
+            if fix_candidate(self, &pr, &node, base, author, false)? {
                 candidates.push(pr);
             }
         }
@@ -84,7 +83,7 @@ impl GitHub {
             "api",
             &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
         ])?;
-        if !fix_candidate(pr, &node, base, author, reserved)? {
+        if !fix_candidate(self, pr, &node, base, author, reserved)? {
             return Ok(None);
         }
         let Some(snapshot) = self.pr_snapshot(&pr.issue, &pr.issue.number.to_string())? else {
@@ -146,7 +145,7 @@ impl GitHub {
                     .as_str()
                     .context("pull request has no URL")?,
             )?;
-            if ensure_reviewable(&pr, node).is_err() {
+            if self.ensure_reviewable(&pr, node).is_err() {
                 continue;
             }
             if self.reviewed_head(
@@ -316,9 +315,9 @@ impl GitHub {
             node["draft"]
                 .as_bool()
                 .context("pull request has no draft state")?;
-            ensure_owned_and_trusted(pr, &node)?;
+            self.ensure_owned_and_trusted(pr, &node)?;
         } else {
-            ensure_reviewable(pr, &node)?;
+            self.ensure_reviewable(pr, &node)?;
         }
         Ok(ReviewPullRequest {
             title: text(&node["title"])?,
@@ -414,10 +413,9 @@ impl GitHub {
                 let association = comment["author_association"]
                     .as_str()
                     .context("PR comment has no author association")?;
-                if let Some(login) = comment["user"]["login"]
-                    .as_str()
-                    .filter(|_| trusted_association(association))
-                {
+                let login = comment["user"]["login"].as_str();
+                let trusted = self.trusted_commenter(association, login)?;
+                if let Some(login) = login.filter(|_| trusted) {
                     markdown.push_str(&format!(
                         "\n### Comment by @{login}\n\n{}\n",
                         comment["body"].as_str().unwrap_or("")
@@ -448,20 +446,52 @@ fn trailing_review_marker(body: &str) -> Option<ReviewMarker> {
     serde_json::from_str(json.trim()).ok()
 }
 
-/// Shared by explicit runs (which explain refusal) and author selection
-/// (which passes over ineligible pull requests).
-fn ensure_reviewable(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
-    ensure!(
-        !node["draft"]
-            .as_bool()
-            .context("pull request has no draft state")?,
-        "pull request {} is a draft",
-        pr.url
-    );
-    ensure_owned_and_trusted(pr, node)
+impl GitHub {
+    /// Shared by explicit runs (which explain refusal) and author selection
+    /// (which passes over ineligible pull requests).
+    fn ensure_reviewable(&self, pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
+        ensure!(
+            !node["draft"]
+                .as_bool()
+                .context("pull request has no draft state")?,
+            "pull request {} is a draft",
+            pr.url
+        );
+        self.ensure_owned_and_trusted(pr, node)
+    }
+
+    fn ensure_owned_and_trusted(
+        &self,
+        pr: &PullRequestUrl,
+        node: &serde_json::Value,
+    ) -> Result<()> {
+        fn text(value: &serde_json::Value) -> Result<&str> {
+            value
+                .as_str()
+                .context("pull request metadata is missing text")
+        }
+        let head_repo = text(&node["head"]["repo"]["full_name"])?;
+        let base_repo = text(&node["base"]["repo"]["full_name"])?;
+        ensure!(
+            head_repo.eq_ignore_ascii_case(base_repo)
+                && base_repo.eq_ignore_ascii_case(&pr.issue.repo_slug()),
+            "pull request {} is from a fork",
+            pr.url
+        );
+        ensure!(
+            self.trusted_commenter(
+                text(&node["author_association"])?,
+                node["user"]["login"].as_str()
+            )?,
+            "pull request {} author is not a Trusted account",
+            pr.url
+        );
+        Ok(())
+    }
 }
 
 fn fix_candidate(
+    github: &GitHub,
     pr: &PullRequestUrl,
     node: &serde_json::Value,
     base: &str,
@@ -475,30 +505,8 @@ fn fix_candidate(
                 .as_str()
                 .is_some_and(|login| login.eq_ignore_ascii_case(author))
         })
-        && ensure_reviewable(pr, node).is_ok()
+        && github.ensure_reviewable(pr, node).is_ok()
         && (reserved || !super::labels_of(node)?.has(crate::claim::IN_PROGRESS)))
-}
-
-fn ensure_owned_and_trusted(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
-    fn text(value: &serde_json::Value) -> Result<&str> {
-        value
-            .as_str()
-            .context("pull request metadata is missing text")
-    }
-    let head_repo = text(&node["head"]["repo"]["full_name"])?;
-    let base_repo = text(&node["base"]["repo"]["full_name"])?;
-    ensure!(
-        head_repo.eq_ignore_ascii_case(base_repo)
-            && base_repo.eq_ignore_ascii_case(&pr.issue.repo_slug()),
-        "pull request {} is from a fork",
-        pr.url
-    );
-    ensure!(
-        trusted_association(text(&node["author_association"])?),
-        "pull request {} author is not a Trusted account",
-        pr.url
-    );
-    Ok(())
 }
 
 const CLOSING_ISSUES: &str =

@@ -1631,8 +1631,7 @@ fn run_published(
     if !viewed.is_open {
         bail!("the issue {} is closed", issue.url);
     }
-    let association = trust::Reads::author_association(&github, &issue)?;
-    if !trust::trusted_association(&association) {
+    if !trust::trusted_author(&github, &issue)? {
         bail!("#{}'s author is not a Trusted account", issue.number);
     }
     let started = prior

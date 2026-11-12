@@ -785,6 +785,27 @@ fn refuses_ineligible_pull_requests_before_starting_a_session() {
     }
 }
 
+/// A pull request opened by thirdshift's own GitHub App has no trusted
+/// association, but its author is the account thirdshift acts as, which
+/// the fake's credentials call `runner`.
+#[test]
+fn reviews_a_pull_request_by_the_account_thirdshift_acts_as() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["authorAssociation"] = json!("NONE");
+    state["prs"][0]["author"] = json!("runner");
+    scenario.write_gh_state(&state);
+    scenario.agent_does(
+        "printf '## Standards\\n\\nNo findings.\\n\\n## Spec\\n\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
 #[test]
 fn recommend_only_posts_one_review_of_the_pr_head_and_keeps_it_in_the_inbox() {
     let scenario = Scenario::new();

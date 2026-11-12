@@ -91,11 +91,16 @@ fn failing_test_name(line: &str) -> Option<&str> {
         .map(|(_, name)| name.trim())
 }
 
-/// Outsiders can open an issue or comment with any text. Only a Trusted
-/// author's report is dedup evidence, and only that issue may receive the
-/// owner's CI comment.
-fn trusted_report(record: &serde_json::Value) -> bool {
-    crate::trust::trusted_association(record["author_association"].as_str().unwrap_or(""))
+impl GitHub {
+    /// Outsiders can open an issue or comment with any text. Only a Trusted
+    /// author's report is dedup evidence, and only that issue may receive the
+    /// owner's CI comment.
+    fn trusted_report(&self, record: &serde_json::Value) -> Result<bool> {
+        self.trusted_commenter(
+            record["author_association"].as_str().unwrap_or(""),
+            record["user"]["login"].as_str(),
+        )
+    }
 }
 
 fn mentions_test(text: &str, test: &str) -> bool {
@@ -526,7 +531,7 @@ impl GitHub {
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .collect();
-            if !trusted_report(&issue) {
+            if !self.trusted_report(&issue)? {
                 if !failure.flaky() && title.starts_with(TITLE_PREFIX) && !labels.has(NEEDS_INFO) {
                     untrusted_ci_red = true;
                 }
@@ -560,11 +565,12 @@ impl GitHub {
                     ),
                     "",
                 )?;
-                if comments.iter().any(|comment| {
-                    trusted_report(comment)
-                        && comment["body"].as_str().unwrap_or("").contains(&commit)
-                }) {
-                    return Ok(BaseCiAction::Nothing);
+                for comment in &comments {
+                    if comment["body"].as_str().unwrap_or("").contains(&commit)
+                        && self.trusted_report(comment)?
+                    {
+                        return Ok(BaseCiAction::Nothing);
+                    }
                 }
                 let issue =
                     IssueUrl::parse(issue["html_url"].as_str().context("issue has no URL")?)?;
