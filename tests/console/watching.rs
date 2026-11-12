@@ -205,6 +205,64 @@ fn a_silent_transition_wakes_the_inbox_without_a_file_change() {
 }
 
 #[test]
+fn slow_step_two_wakes_the_inbox_at_the_minimum_overrun_without_file_changes() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for number in 1..=3 {
+        let mut past = record(home.path(), number, Some("merged"), 1);
+        past["kind"] = "Run".into();
+        past["tickets"] = json!([]);
+        let ended = chrono::Local::now() - chrono::Duration::hours(2);
+        let began = ended - chrono::Duration::seconds(12);
+        past["started_at"] = began.to_rfc3339().into();
+        past["ended_at"] = ended.to_rfc3339().into();
+        past["stages"] =
+            json!([{"name": "implement", "began_at": began.to_rfc3339(), "session_log": null}]);
+        write_record(home.path(), number, &past);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let mut fixture = live_record(home.path(), 81, std::process::id());
+    // Startup is complete. Leave twenty seconds for publishing the fixture,
+    // the initial HTTP read and opening SSE before the 312-second boundary.
+    let began = chrono::Local::now() - chrono::Duration::seconds(292);
+    fixture["kind"] = "Run".into();
+    fixture["tickets"] = json!([]);
+    fixture["started_at"] = began.to_rfc3339().into();
+    fixture["stages"] =
+        json!([{"name": "implement", "began_at": began.to_rfc3339(), "session_log": null}]);
+    write_record(home.path(), 81, &fixture);
+    fs::write(
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log"),
+        "still working\n",
+    )
+    .unwrap();
+    let initial = console.get("/").text().unwrap();
+    assert!(initial.contains("slower than usual"), "{initial}");
+    assert!(!initial.contains("data-state=\"Slow\""), "{initial}");
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(40))
+        .build()
+        .unwrap()
+        .get(format!("{}/events", console.address))
+        .send()
+        .unwrap();
+    let mut stream = BufReader::new(response);
+    loop {
+        let event = sse_event(&mut stream);
+        if event.starts_with(':') {
+            continue;
+        }
+        assert!(event.contains("event: commands"), "{event}");
+        let page = console.get("/").text().unwrap();
+        if page.contains("data-state=\"Slow\"") {
+            assert!(page.contains("favicon-urgent.svg"), "{page}");
+            break;
+        }
+    }
+}
+
+#[test]
 fn taken_up_boundary_moves_the_row_without_a_file_change() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

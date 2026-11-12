@@ -352,7 +352,7 @@ The **Console**'s first page, and `thirdshift status`'s order: a machine's **Com
 _Avoid_: dashboard, feed, queue
 
 **Needs you**:
-The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** then **Slow** Ticket runs, and then the ended ones: a Command that died, one that failed, a **Paused Command**, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves once GitHub shows it settled: its issue closed or its pull request merged, or those of the Spec run or Ticket run it dispatched, or, for a Stop, `needs-triage` taken off, or, for findings, none still waiting. It also leaves when a later Command on the same issue or pull request starts on the machine, a **Fix run** included, even without a linked issue. Age clears only one GitHub can't speak for, such as a Command with no issue or pull request, once it is older than the period the **User config** sets. Any of them, live or ended, leaves on a **Dismissal**.
+The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** Ticket runs, then **Slow** ones that have run twice their **Usual range**, and then the ended ones: a Command that died, one that failed, a **Paused Command**, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves once GitHub shows it settled: its issue closed or its pull request merged, or those of the Spec run or Ticket run it dispatched, or, for a Stop, `needs-triage` taken off, or, for findings, none still waiting. It also leaves when a later Command on the same issue or pull request starts on the machine, a **Fix run** included, even without a linked issue. Age clears only one GitHub can't speak for, such as a Command with no issue or pull request, once it is older than the period the **User config** sets. Any of them, live or ended, leaves on a **Dismissal**.
 _Avoid_: alerts, attention, triage queue
 
 **Silent**:
@@ -360,7 +360,7 @@ A live **Ticket run** whose **Session trace** and **Command log** have both stop
 _Avoid_: stalled, stuck, hung
 
 **Slow**:
-A live **Ticket run** whose stage has gone past the top of that stage's **Usual range**, not counting **Suspended time**, while its logs keep growing. It is still working; it only needs a look, unlike a **Silent** one.
+A live **Ticket run** whose stage has gone past the top of that stage's **Usual range** while its logs keep growing. It is still working, so it shows on its row in Working or Landing; only once it reaches twice that top, and at least five minutes past it, does it enter **Needs you**.
 _Avoid_: late, overdue, stalled
 
 **Suspended time**:

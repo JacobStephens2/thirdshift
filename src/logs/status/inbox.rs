@@ -39,6 +39,7 @@ pub(crate) struct Row {
     pub occurred_ms: i64,
     pub live: bool,
     pub logging: bool,
+    pub slow: bool,
     pub log_growth: String,
     pub selector: String,
     pub can_dismiss: bool,
@@ -440,6 +441,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
+        slow: matches!(facts.health, Some(Health::Slow { .. })),
         log_growth: String::new(),
         selector,
         can_dismiss: facts.account.is_none()
@@ -533,6 +535,13 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         findings: facts.security_findings,
         sessions: Vec::new(),
     };
+    // Compact Inbox rows hide nested runs. Keep each Slow descendant's
+    // stage and health visible on the row that represents its work.
+    for child in row.children.iter().filter(|child| child.slow) {
+        row.now_line
+            .push_str(&format!(" · {}: {}", child.subject, child.now_line));
+        row.slow = true;
+    }
     // Compact Inbox rows hide nested runs. Carry the dispatched Spec's
     // recorded accounting onto its Pass without counting child attempts.
     if row.ticket_progress.is_none() {
@@ -674,6 +683,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 occurred_ms: timestamp(command.ended_at.as_deref().unwrap_or(&command.started_at)),
                 live: false,
                 logging: false,
+                slow: false,
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
                 can_dismiss: false,
