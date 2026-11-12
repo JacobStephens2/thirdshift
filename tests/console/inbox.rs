@@ -3,6 +3,180 @@ use serde_json::Value;
 use std::path::Path;
 use std::{fs, process::Command};
 
+/// A Triage URL that fails the origin check is still recorded. The compact
+/// header must not lend the launch repository's name to that other issue.
+#[test]
+fn a_rejected_foreign_triage_issue_is_not_linked_under_the_local_repository() {
+    let scenario = super::support::Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    let foreign = "https://github.com/attacker/phish/issues/4";
+    let result = scenario.run(&["triage", foreign]);
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("origin mismatch"),
+        "{}",
+        result.stderr
+    );
+    let console = Console::start(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &scenario.path("home"),
+    );
+    for page in ["/?section=overview", "/?section=needs-you"] {
+        let html = console.get(page).text().unwrap();
+        let heads: Vec<_> = html
+            .split("<div class=\"row-head\">")
+            .skip(1)
+            .map(|head| head.split("</div>").next().unwrap())
+            .collect();
+        assert!(
+            heads.iter().any(|head| head.contains("acme/widgets#4")),
+            "compact rows lost the recorded subject on {page}"
+        );
+        for head in &heads {
+            assert!(
+                !head.contains("href=\"https://github.com/attacker/phish/issues/4\""),
+                "header lends the local repository to {foreign}: {head}"
+            );
+        }
+        let mut saw_heading = false;
+        for peek in html.split("data-peek=\"").skip(1) {
+            let path = peek.split('"').next().unwrap();
+            let details = console.get(path).text().unwrap();
+            let heading = details
+                .split("class=\"peek-heading\"")
+                .nth(1)
+                .unwrap_or("")
+                .split("</h2>")
+                .next()
+                .unwrap_or("");
+            if heading.contains("acme/widgets#4") {
+                saw_heading = true;
+            }
+            assert!(
+                !heading.contains("href=\"https://github.com/attacker/phish/issues/4\""),
+                "details lend the local repository to {foreign}: {heading}"
+            );
+        }
+        assert!(saw_heading, "details lost the recorded subject on {page}");
+    }
+}
+
+#[test]
+fn needs_you_review_and_triage_headers_link_targets_locally_and_across_fleet() {
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    let owner = tempfile::tempdir().unwrap();
+    let caller = tempfile::tempdir().unwrap();
+    configure(owner.path());
+    configure(caller.path());
+    let cases = [
+        (
+            "Review run",
+            false,
+            Some("https://github.com/acme/widgets/pull/101"),
+            Some("pull/101"),
+        ),
+        (
+            "Review run",
+            true,
+            Some("https://github.com/acme/widgets/pull/102"),
+            Some("pull/102"),
+        ),
+        ("Triage run", true, None, Some("issues/3")),
+        (
+            "Triage run",
+            true,
+            Some("https://github.com/acme/widgets/pull/104"),
+            Some("pull/104"),
+        ),
+        ("Triage run", false, None, None),
+        ("Review run", true, None, Some("issues/6")),
+        (
+            "Review run",
+            true,
+            Some("https://github.com/other/repo/pull/107"),
+            Some("issues/7"),
+        ),
+        (
+            "Triage run",
+            true,
+            Some("https://evil.example/pull/108"),
+            Some("issues/8"),
+        ),
+    ];
+    for (index, (kind, issue, pr, _)) in cases.iter().enumerate() {
+        let number = index as u64 + 1;
+        let mut fixture = record(owner.path(), number, Some("failed"), 0);
+        fixture["kind"] = json!(kind);
+        fixture["name"] = json!(format!("target-fixture-{number}"));
+        fixture["cause"] = json!(format!("Target failure {number}"));
+        fixture["tickets"] = json!([]);
+        if !issue {
+            fixture["issue"] = Value::Null;
+        }
+        fixture["pull_request"] = json!(pr);
+        super::write_record(owner.path(), number, &fixture);
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let local = Console::start(binary, owner.path());
+    let token = super::tokens::create(owner.path(), "caller", &["--scopes", "read"]);
+    assert!(
+        super::fleet::add(caller.path(), "owner", &local.address, &token)
+            .status
+            .success()
+    );
+    let fleet = Console::start(binary, caller.path());
+    for console in [&local, &fleet] {
+        let _events = console.get("/events");
+        for page in ["/?section=overview", "/?section=needs-you"] {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let html = loop {
+                let html = console.get(page).text().unwrap();
+                if html.contains("target-fixture-5") {
+                    break html;
+                }
+                assert!(Instant::now() < deadline, "{html}");
+                std::thread::sleep(Duration::from_millis(25));
+            };
+            let heads: Vec<_> = section(&html, "needs you")
+                .split("<div class=\"row-head\">")
+                .skip(1)
+                .map(|head| head.split("</div>").next().unwrap())
+                .collect();
+            assert_eq!(heads.len(), cases.len(), "{html}");
+            for (index, (_, _, _, target)) in cases.iter().enumerate() {
+                if let Some(target) = target {
+                    let url = format!("href=\"https://github.com/acme/widgets/{target}\"");
+                    let head = heads
+                        .iter()
+                        .find(|head| head.contains(&url))
+                        .unwrap_or_else(|| panic!("header target {url} missing: {heads:#?}"));
+                    if target.starts_with("pull/") {
+                        assert!(
+                            !head.contains(&format!("/issues/{}\"", index + 1)),
+                            "{head}"
+                        );
+                    }
+                } else {
+                    let head = heads
+                        .iter()
+                        .find(|head| head.contains("target-fixture-5"))
+                        .unwrap();
+                    assert!(head.contains("acme/widgets"), "{head}");
+                    assert!(!head.contains("href="), "{head}");
+                }
+            }
+            assert!(
+                !heads
+                    .iter()
+                    .any(|head| head.contains("evil.example") || head.contains("other/repo")),
+                "{heads:#?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn overview_ticket_progress_counts_recorded_states_and_omits_missing_accounting() {
     use serde_json::json;

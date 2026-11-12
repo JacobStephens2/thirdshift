@@ -20,6 +20,7 @@ pub(super) fn run(
     command: &FixArgs,
     config: &UserConfig,
     harness: &mut Choice,
+    started: &mut crate::command::Started,
 ) -> Result<Outcome> {
     let repo = &launch.repo;
     let base = launch.base.name();
@@ -137,6 +138,11 @@ pub(super) fn run(
         }
         failed
     });
+    if let Some(info) = target.info()
+        && let Ok(pr) = crate::review::PullRequestUrl::parse(&info.url)
+    {
+        started.pull_request(&pr, &title);
+    }
     if let Ok(reached) = &outcome
         && let Resolution::PullRequest {
             url,

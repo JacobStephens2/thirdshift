@@ -29,7 +29,10 @@ class WorkflowTimeouts(unittest.TestCase):
                 self.assertLess(int(timeout[1]), 360)
 
     def test_ci_jobs_have_execution_bounds(self):
-        self.assert_bounded(job_blocks(ROOT / ".github/workflows/ci.yml"))
+        self.assert_bounded({name: block for name, block in
+                             job_blocks(ROOT / ".github/workflows/ci.yml").items()
+                             if "    uses: ./.github/workflows/" not in block})
+        self.assert_bounded(job_blocks(ROOT / ".github/workflows/rust-tests.yml"))
 
     def test_pr_release_jobs_have_execution_bounds(self):
         jobs = job_blocks(ROOT / ".github/workflows/release.yml")
