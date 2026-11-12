@@ -2,6 +2,9 @@ use super::*;
 use crate::args::MetricsWindow;
 use serde_json::json;
 
+#[path = "capture_tests.rs"]
+mod capture;
+
 fn today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 11, 12).unwrap()
 }
@@ -80,6 +83,47 @@ fn machine(name: &str, status: Status) -> Machine {
         pushed_at: None,
         error: None,
     }
+}
+
+#[test]
+fn a_capture_keeps_saved_sources_until_the_next_operation() {
+    let logs = tempfile::tempdir().unwrap();
+    let mut config = UserConfig::parse("", &logs.path().join("config.toml"), logs.path()).unwrap();
+    config.logs_dir = logs.path().to_owned();
+    let asked = MetricsArgs {
+        machine: Some("retired".into()),
+        window: Some(MetricsWindow::Days7),
+        ..MetricsArgs::default()
+    };
+    let window = Window::of(&asked, Utc::now().date_naive());
+    save(
+        logs.path(),
+        "retired",
+        Slot::Read(None),
+        &View::of(&asked, &window),
+        &summary("retired", window.current().unwrap(), 2, 0),
+        Utc::now(),
+    )
+    .unwrap();
+    let capture = Capture::new(&config, None);
+    assert!(capture.default_view());
+    assert_eq!(capture.others(), ["retired"]);
+    std::fs::remove_file(path(logs.path(), "retired", Slot::Read(None))).unwrap();
+    assert_eq!(capture.others(), ["retired"]);
+    let loaded = capture.load(&asked).unwrap();
+    assert_eq!(loaded.machines[0].name, "retired");
+    assert_eq!(loaded.machines[0].status, Status::Cached);
+    let fresh = Capture::new(&config, None);
+    assert!(!fresh.default_view());
+    assert!(fresh.others().is_empty());
+    assert!(
+        fresh
+            .load(&asked)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("unknown Fleet machine")
+    );
 }
 
 #[test]
@@ -189,9 +233,7 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
         )
         .unwrap();
     }
-    let saved = saved(logs.path(), None);
-    assert_eq!(saved.len(), 1);
-    let saved = &saved[0];
+    let saved = read_saved(&path(logs.path(), "east/one", Slot::Read(None))).unwrap();
     assert_eq!(saved.machine, "east/one");
     assert_eq!(saved.views.len(), VIEWS);
     assert!(
@@ -206,7 +248,7 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
     let read = read_saved(&path(logs.path(), "east/one", Slot::Read(None))).unwrap();
     let summary = cached(
         &mut cached_machine,
-        read,
+        &read,
         &view(&format!("window={VIEWS}"), "x"),
         &window(),
     )
@@ -217,7 +259,7 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
     assert!(
         cached(
             &mut cached_machine,
-            read,
+            &read,
             &view("window=never", "other"),
             &window()
         )
@@ -296,7 +338,7 @@ fn another_windows_snapshot_stands_in_regrouped_by_week() {
     let all = View::of(&MetricsArgs::default(), &weekly);
     let mut east = machine("east", Status::Cached);
     let read = read_saved(&path(logs.path(), "east", Slot::Read(None))).unwrap();
-    let stood_in = cached(&mut east, read, &all, &weekly).unwrap();
+    let stood_in = cached(&mut east, &read, &all, &weekly).unwrap();
     assert!(stood_in.comparison.is_none());
     let buckets: Vec<_> = stood_in
         .outcomes
@@ -324,7 +366,7 @@ fn another_windows_snapshot_stands_in_regrouped_by_week() {
     .unwrap();
     let mut west = machine("west", Status::Cached);
     let read = read_saved(&path(logs.path(), "west", Slot::Read(None))).unwrap();
-    assert!(cached(&mut west, read, &daily, &window()).is_none());
+    assert!(cached(&mut west, &read, &daily, &window()).is_none());
 }
 
 #[test]
@@ -358,17 +400,25 @@ fn a_reported_snapshot_stands_in_for_everyone_and_a_newer_read_for_its_reader() 
         read,
     )
     .unwrap();
-    let everyone = saved(logs.path(), Some("someone@example.test"));
-    assert_eq!(everyone.len(), 1);
-    assert_eq!(everyone[0].pushed_at, Some(pushed));
-    let reader = saved(logs.path(), Some("reader@example.test"));
-    assert_eq!(reader.len(), 1);
-    assert_eq!(reader[0].last_seen, read);
-    assert!(reader[0].pushed_at.is_none());
-    let mut machine = machine("laptop", Status::Cached);
-    machine.stands_in(&everyone.into_iter().next().unwrap());
-    assert_eq!(machine.status, Status::Reported);
-    assert_eq!(machine.pushed_at, Some(pushed));
+    let mut config = UserConfig::parse("", &logs.path().join("config.toml"), logs.path()).unwrap();
+    config.logs_dir = logs.path().to_owned();
+    let asked = MetricsArgs {
+        machine: Some("laptop".into()),
+        window: Some(MetricsWindow::Days7),
+        ..MetricsArgs::default()
+    };
+    let everyone = Capture::new(&config, Some("someone@example.test"))
+        .load(&asked)
+        .unwrap();
+    assert_eq!(everyone.machines.len(), 1);
+    assert_eq!(everyone.machines[0].status, Status::Reported);
+    assert_eq!(everyone.machines[0].pushed_at, Some(pushed));
+    let reader = Capture::new(&config, Some("reader@example.test"))
+        .load(&asked)
+        .unwrap();
+    assert_eq!(reader.machines.len(), 1);
+    assert_eq!(reader.machines[0].last_seen, Some(read));
+    assert_eq!(reader.machines[0].status, Status::Cached);
 
     // A report naming another machine, or another kind of view, saves nothing.
     let other = MetricsReport {
