@@ -65,6 +65,30 @@ test('host waits and bypassed Command counts appear on Experiment pages and list
   }
 });
 
+test('suspended Trials disclose timing exclusions and keep their outcome in the Peek', async t => {
+  const folder = await fixture.save(home, fixture.finish(fixture.record()));
+  await fixture.results(home);
+  const key = fixture.key('alpha', 'candidate', 0);
+  const result = fixture.result('alpha', 'candidate', 0);
+  result.attempts[0].timings.suspended_seconds = 120;
+  await writeFile(join(folder, 'results', `${key}.json`), JSON.stringify(result));
+  t.after(async () => { await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      await page.goto(`${origin}/experiments/${fixture.id}`);
+      await page.getByText('Candidate: 1 Trial left out of timing (suspended)', { exact: true }).waitFor();
+      await openSuites(page);
+      await page.locator(`.trial-cell[data-experiment-peek="trial-${key}"]`).click();
+      await page.locator('#peek').getByText('Suspended', { exact: true }).waitFor();
+      assert.match(await page.locator('#peek').textContent(), /outcome and cost still count/);
+      assert.match(await page.locator('#peek').textContent(), /succeeded/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    } finally { await context.close(); }
+  }
+});
+
 test('passing cheaper Candidates share the Verdict line with JSON and text on desktop and phone', async t => {
   const value = fixture.finish(fixture.record());
   Object.assign(value.bar, { margin: -1, draws: 1024, min_discriminating_tasks: 0, discriminating_tasks: { 'code-review': ['alpha', 'beta', 'gamma'] } });

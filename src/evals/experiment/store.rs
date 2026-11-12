@@ -224,6 +224,9 @@ pub(crate) struct Minutes {
 
 impl Minutes {
     pub(super) fn include(&mut self, result: &TrialResult) {
+        if result.suspended() {
+            return;
+        }
         let arm = match result.arm {
             Arm::Baseline => &mut self.baseline,
             Arm::Candidate => &mut self.candidate,
@@ -557,6 +560,10 @@ impl Stored {
             }
             if self.pricing.is_some() {
                 selection.push_str(&view.accounting.render());
+            }
+            let timing_note = view.accounting.timing_note();
+            if !timing_note.is_empty() {
+                selection.push_str(&format!("\n{timing_note}"));
             }
             if let Some(spend) = &view.panel_spend {
                 selection.push_str(&spend.render());

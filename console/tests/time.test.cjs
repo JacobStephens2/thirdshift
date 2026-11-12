@@ -89,6 +89,43 @@ after(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
+test('Command details visibly show suspended stage time on desktop and phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/3-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const record = JSON.parse(original);
+  record.stages[0].suspended_seconds = 120;
+  await replaceRecord(path, JSON.stringify(record));
+  t.after(() => replaceRecord(path, original));
+  const measurements = [];
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      await page.goto(`${origin}/?page=stages`);
+      await page.locator('.stage-grid a.peek-link').filter({ hasText: 'acme/widgets#3' }).click();
+      await page.locator('#peek-content h2').waitFor();
+      for (const fact of ['stages', 'stages/1']) {
+        const details = page.locator(`#peek-content details[data-fact="${fact}"]`);
+        if (!await details.evaluate(node => node.open)) await details.locator(':scope > summary').click();
+      }
+      const time = page.locator('#peek-content details[data-fact="stages/1"] > dl > dt')
+        .filter({ hasText: /^time$/i }).locator('xpath=following-sibling::dd[1]');
+      assert.equal(await time.textContent(), '10 min · 2 min suspended');
+      await page.evaluate(() => document.fonts.ready);
+      await time.scrollIntoViewIfNeeded();
+      measurements.push(await time.evaluate((node, viewport) => ({
+        viewport, width: node.clientWidth, contentWidth: node.scrollWidth,
+        height: node.clientHeight, contentHeight: node.scrollHeight
+      }), viewport.width));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    } finally { await context.close(); }
+  }
+  for (const size of measurements) {
+    assert.ok(size.width > 0 && size.contentWidth <= size.width + 1 && size.contentHeight <= size.height + 1,
+      `Command details must visibly show the full stage and Suspended time: ${JSON.stringify(size)}`);
+  }
+});
+
 test('Lanes scales every window, nests child Runs and fits 390 px without CSP violations', async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());

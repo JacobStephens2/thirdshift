@@ -143,6 +143,7 @@ pub(crate) struct Ratios {
     pub cost: Option<f64>,
     pub time: Option<f64>,
     pub pairs: usize,
+    pub time_pairs: usize,
 }
 
 #[derive(Default, Serialize)]
@@ -150,6 +151,7 @@ pub(crate) struct Arm {
     #[serde(flatten)]
     pub total: Total,
     pub roles: BTreeMap<String, Total>,
+    pub timing_excluded_trials: usize,
 }
 
 #[derive(Serialize)]
@@ -183,6 +185,7 @@ pub(crate) struct Trial {
     pub arm: super::Arm,
     pub cost_usd: Option<f64>,
     pub time_ms: u128,
+    pub suspended: bool,
     pub roles: BTreeMap<String, Total>,
     pub sessions: Vec<SessionRef>,
 }
@@ -216,6 +219,22 @@ pub(super) fn trial_total(result: &TrialResult) -> Total {
 }
 
 impl Report {
+    /// Shared by CLI and Console, including Experiments without frozen prices.
+    pub(crate) fn timing_note(&self) -> String {
+        [("Baseline", &self.baseline), ("Candidate", &self.candidate)]
+            .into_iter()
+            .filter(|(_, arm)| arm.timing_excluded_trials > 0)
+            .map(|(name, arm)| {
+                let count = arm.timing_excluded_trials;
+                format!(
+                    "{name}: {count} {} left out of timing (suspended)",
+                    if count == 1 { "Trial" } else { "Trials" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
     pub(super) fn render(&self) -> String {
         let cost =
             |amount: Option<f64>| amount.map_or("unknown".into(), |amount| format!("${amount:.6}"));
@@ -246,11 +265,13 @@ impl Report {
         let mut report = Self::default();
         for result in results.iter().chain(unfinished) {
             let total = trial_total(result);
+            let suspended = result.suspended();
             let mut trial = Trial {
                 id: result.key(),
                 arm: result.arm,
                 cost_usd: total.cost_usd,
                 time_ms: total.time_ms,
+                suspended,
                 roles: BTreeMap::new(),
                 sessions: Vec::new(),
             };
@@ -273,12 +294,16 @@ impl Report {
                 super::Arm::Baseline => &mut report.baseline,
                 super::Arm::Candidate => &mut report.candidate,
             };
-            arm.total
-                .include(total.cost_usd, total.time_ms, total.sessions);
+            arm.timing_excluded_trials += usize::from(suspended);
+            arm.total.include(
+                total.cost_usd,
+                if suspended { 0 } else { total.time_ms },
+                total.sessions,
+            );
             for (role, total) in &trial.roles {
                 arm.roles.entry(role.clone()).or_default().include(
                     total.cost_usd,
-                    total.time_ms,
+                    if suspended { 0 } else { total.time_ms },
                     total.sessions,
                 );
             }
@@ -292,6 +317,7 @@ impl Report {
             times.extend(pair.time);
         }
         report.paired_median_ratios.cost = median(&mut costs);
+        report.paired_median_ratios.time_pairs = times.len();
         report.paired_median_ratios.time = median(&mut times);
         report
     }
@@ -302,6 +328,7 @@ pub(super) struct PairedRatios<'a> {
     pub task: &'a str,
     pub cost: Option<f64>,
     pub time: Option<f64>,
+    pub timing_excluded: bool,
 }
 
 pub(super) fn paired_ratios(results: &[TrialResult]) -> impl Iterator<Item = PairedRatios<'_>> {
@@ -321,6 +348,7 @@ pub(super) fn paired_ratios(results: &[TrialResult]) -> impl Iterator<Item = Pai
                 .map(|candidate| {
                     let base = trial_total(baseline);
                     let cand = trial_total(candidate);
+                    let timing_excluded = baseline.suspended() || candidate.suspended();
                     PairedRatios {
                         suite: &baseline.suite,
                         task: &baseline.task,
@@ -329,7 +357,9 @@ pub(super) fn paired_ratios(results: &[TrialResult]) -> impl Iterator<Item = Pai
                             .zip(cand.cost_usd)
                             .filter(|(base, _)| *base > 0.0)
                             .map(|(base, cand)| cand / base),
-                        time: (base.time_ms > 0).then(|| cand.time_ms as f64 / base.time_ms as f64),
+                        time: (base.time_ms > 0 && !timing_excluded)
+                            .then(|| cand.time_ms as f64 / base.time_ms as f64),
+                        timing_excluded,
                     }
                 })
         })

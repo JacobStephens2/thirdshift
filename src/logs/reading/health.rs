@@ -83,6 +83,12 @@ pub(super) fn observe(
         if let Some(stage) = &command.stage
             && !StageName::is_dispatch(&stage.name)
         {
+            let age = (stage.age_seconds as u64).saturating_sub(
+                command
+                    .record
+                    .current_stage()
+                    .map_or(0, |stage| stage.suspended_seconds),
+            );
             if let Some(range) = command
                 .record
                 .current_stage()
@@ -94,18 +100,13 @@ pub(super) fn observe(
                     .max(range.upper_seconds + SLOW_MINIMUM_OVERRUN_SECONDS)
                     .ceil() as u64;
                 for threshold in [range.upper_seconds.floor() as u64 + 1, step_two] {
-                    schedule_transition(&mut next_change, now, threshold, stage.age_seconds as u64);
+                    schedule_transition(&mut next_change, now, threshold, age);
                 }
-                if stage.age_seconds as f64 > range.upper_seconds {
+                if age as f64 > range.upper_seconds {
                     command.health = Some(Health::Slow {
-                        step: if stage.age_seconds as u64 >= step_two {
-                            2
-                        } else {
-                            1
-                        },
+                        step: if age >= step_two { 2 } else { 1 },
                         usual_range: range,
-                        multiple: (stage.age_seconds as f64 / range.upper_seconds.max(1.0)).floor()
-                            as u64,
+                        multiple: (age as f64 / range.upper_seconds.max(1.0)).floor() as u64,
                     });
                 }
             }

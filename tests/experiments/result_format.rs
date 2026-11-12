@@ -91,9 +91,25 @@ fn documented_format_matches_real_experiment_results() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     assert_eq!(
-        experiment["format"], 11,
-        "format 11 adds the host wait and competing Commands at start"
+        experiment["format"], 12,
+        "format 12 marks suspended Trials and excludes their time, retaining format 11's host wait"
     );
+    let schema = fixture.scenario.run(&["console", "openapi"]);
+    assert_eq!(schema.code, Some(0), "{}", schema.stderr);
+    let document: Value = serde_json::from_str(&schema.stdout).unwrap();
+    for path in ["/api/v1/experiments", "/api/v1/experiments/{id}"] {
+        let schema = &document["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"];
+        let schema = if path.ends_with("{id}") {
+            schema
+        } else {
+            &schema["items"]
+        };
+        assert_eq!(
+            schema["properties"]["format"]["const"], experiment["format"],
+            "{path}"
+        );
+    }
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(
         !experiment["pending_rechecks"]
