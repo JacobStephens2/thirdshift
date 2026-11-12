@@ -925,7 +925,7 @@ mod in_memory {
 
     use anyhow::{Result, anyhow, bail};
 
-    use super::Outside;
+    use super::{CheckObservation, Outside};
     use crate::github::{Check, Conclusion, JobRun};
 
     /// GitHub in memory: for each commit, a script of the check listings
