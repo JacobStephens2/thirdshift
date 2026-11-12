@@ -310,6 +310,32 @@ fn fixing_requires_permission_and_the_command_overrides_the_user_config() {
     }
 }
 
+/// #2094: a repository with issues turned off cannot hold a fix Ticket, so
+/// fix-findings starts no publishing session and leaves every record as it was.
+#[test]
+fn fixing_is_skipped_without_a_session_when_issues_are_turned_off() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let mut before = scenario.gh_state();
+    before["has_issues"] = json!(false);
+    scenario.write_gh_state(&before);
+    scenario.agent_does_in_session(1, &stage_fix(0));
+    let result = scenario.run(&["process", "findings"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Security fixing skipped: acme/widgets has issues turned off"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    let after = scenario.gh_state();
+    assert_eq!(after["advisories"], before["advisories"]);
+    assert_eq!(after["issues"], before["issues"]);
+    assert!(after["prs"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn closing_rechecks_each_merged_base_and_leaves_a_failing_finding_for_the_day_shift() {
     let scenario = findings();
@@ -709,6 +735,44 @@ fn disabling_close_keeps_a_private_finding_open() {
     assert_eq!(
         scenario.gh_state()["issues"]["7"],
         "OPEN",
+        "{}",
+        result.stderr
+    );
+}
+
+/// Unreadable repository metadata fails the Step, never taken for issues
+/// turned off.
+#[test]
+fn malformed_issues_metadata_fails_the_fix_step_before_any_session() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!("unknown");
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["process", "findings"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("no has_issues setting"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+/// #2094: with nothing to fix, fix-findings neither reads nor reports the
+/// issues setting.
+#[test]
+fn issues_turned_off_with_nothing_to_fix_reports_no_skip() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let mut state = scenario.gh_state();
+    state["has_issues"] = json!(false);
+    state["advisories"] = json!([]);
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["process", "findings"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("Security fixing skipped"),
         "{}",
         result.stderr
     );
