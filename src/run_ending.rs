@@ -301,11 +301,15 @@ pub struct Review<'a> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Cause {
     full: String,
+    category: crate::logs::FailureCategory,
     safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
     /// Completed Triage writes, retained separately from verbose failure diagnostics.
     triage_publication: Vec<crate::issue::IssueUrl>,
     /// Only title and link may leave the machine for a private Triage failure.
     private_triage_notification: Option<String>,
+    /// The host running out of disk space caused it, by its error's own
+    /// layers, not by words its agent can write.
+    out_of_disk: bool,
 }
 
 impl Cause {
@@ -313,6 +317,7 @@ impl Cause {
     pub fn of(error: &anyhow::Error) -> Self {
         Self {
             full: format!("{error:#}"),
+            category: crate::failed_run::category(error),
             safeguard_refusal: error.downcast_ref().copied(),
             triage_publication: error
                 .downcast_ref::<crate::triage::IncompletePublication>()
@@ -321,6 +326,19 @@ impl Cause {
             private_triage_notification: error
                 .downcast_ref::<crate::triage::PrivateFindingTriage>()
                 .map(|triage| triage.notification.clone()),
+            out_of_disk: crate::failed_run::out_of_disk(error),
+        }
+    }
+
+    /// Its failure category. An interrupted Spec run did not end only waiting.
+    pub fn category(&self, interrupted: bool) -> crate::logs::FailureCategory {
+        use crate::logs::FailureCategory;
+        match self.category {
+            FailureCategory::Waiting if interrupted => FailureCategory::StageFailed,
+            category @ (FailureCategory::Held
+            | FailureCategory::Waiting
+            | FailureCategory::Crashed
+            | FailureCategory::StageFailed) => category,
         }
     }
 
@@ -510,8 +528,9 @@ impl<'a> Account<'a> {
     /// Show stopping/recovery facts first, then on stderr its `elapsed` wall
     /// time if this is the top-level command, then what became of its Base fix,
     /// if it took one, then the line that says how it ended once it
-    /// succeeded; or its cause, its advice, if it has any, then its session
-    /// log and the command's Command log; its URLs on stdout. Returns its
+    /// succeeded; or its cause, its advice, if it has any, what to do when the
+    /// host ran out of disk space, then its session log and the command's
+    /// Command log; its URLs on stdout. Returns its
     /// exit code.
     pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
         if let Some(recommendation) = self.triage {
@@ -599,6 +618,12 @@ impl Shown {
             ),
         }
         steps.extend(account.advice.iter().map(Advice::to_string));
+        if let Err(cause) = &account.ended
+            && account.pre_audit_failure.is_none()
+            && cause.out_of_disk
+        {
+            steps.push(crate::failed_run::OUT_OF_DISK.to_string());
+        }
         if account.ended.is_err() && account.pre_audit_failure.is_none() {
             if let Some(log) = account.log {
                 steps.push(format!("{SESSION_LOG}{}", log.display()));
@@ -698,7 +723,10 @@ impl Reader {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
-        } else if !Advice::is_line(message) && !crate::recovery::Recovery::is_line(message) {
+        } else if !Advice::is_line(message)
+            && !crate::recovery::Recovery::is_line(message)
+            && message != crate::failed_run::OUT_OF_DISK
+        {
             self.cause = Some(message.to_string());
             self.log = None;
         }
@@ -1499,6 +1527,23 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn a_run_the_host_ran_out_of_disk_under_says_to_free_space_and_reads_back_its_cause() {
+        let cause = "git worktree add failed: fatal: unable to write new index file: No space \
+                     left on device";
+        let ended = failed(cause, Some(LOG), None);
+        let shown = Shown::of(&Account::of_run(&ended));
+        let at = shown.steps.iter().position(|step| step == cause).unwrap();
+        assert_eq!(shown.steps[at + 1], crate::failed_run::OUT_OF_DISK);
+        assert_eq!(
+            read_back(&ended),
+            ChildEnding {
+                outcome: failure(cause, Some(LOG)),
+                base_fix: None,
+            }
+        );
     }
 
     #[test]

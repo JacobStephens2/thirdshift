@@ -351,8 +351,16 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
         assert!(path.starts_with("/api/v1/"));
         for (_, operation) in methods.as_object().unwrap() {
             assert!(
-                ["read", "security", "act", "run", "admin", "authenticated"]
-                    .contains(&operation["x-scope"].as_str().unwrap())
+                [
+                    "read",
+                    "security",
+                    "act",
+                    "run",
+                    "admin",
+                    "report",
+                    "authenticated"
+                ]
+                .contains(&operation["x-scope"].as_str().unwrap())
             );
             for twin in operation["x-cli-twins"].as_array().unwrap() {
                 assert!(twin.as_str().unwrap().starts_with("thirdshift "));
@@ -559,6 +567,54 @@ fn read_api_equals_cli_for_command_trees_stages_waterfall_and_logs() {
             vec!["metrics", "widgets#8", "--json"],
         ),
         ("/api/v1/console-log", vec!["console", "log", "--json"]),
+        (
+            "/api/v1/metrics?window=7d&kind=Spec%20run&harness=codex&model=gpt-6&repo=acme/widgets",
+            vec![
+                "metrics",
+                "--window",
+                "7d",
+                "--kind",
+                "Spec run",
+                "--harness",
+                "codex",
+                "--model",
+                "gpt-6",
+                "--repo",
+                "acme/widgets",
+                "--json",
+            ],
+        ),
+        (
+            "/api/v1/metrics?window=30d",
+            vec!["metrics", "--window", "30d", "--json"],
+        ),
+        (
+            "/api/v1/metrics?version=0.30.0",
+            vec!["metrics", "--version", "0.30.0", "--json"],
+        ),
+        (
+            "/api/v1/metrics?window=12w",
+            vec!["metrics", "--window", "12w", "--json"],
+        ),
+        (
+            "/api/v1/metrics?window=all",
+            vec!["metrics", "--window", "all", "--json"],
+        ),
+        (
+            "/api/v1/metrics?grain=day&from=2026-10-01&through=2026-10-05&account=nobody",
+            vec![
+                "metrics",
+                "--grain",
+                "day",
+                "--from",
+                "2026-10-01",
+                "--through",
+                "2026-10-05",
+                "--account",
+                "nobody",
+                "--json",
+            ],
+        ),
         (
             "/api/v1/themes/focus-auto",
             vec!["console", "theme", "export", "focus-auto"],

@@ -12,7 +12,9 @@ use super::Week;
 use crate::{config, interrupt};
 
 mod confirmed;
+mod scores;
 pub(crate) use confirmed::read_confirmed_origins;
+pub(crate) use scores::{ScoreHistory, read_scores};
 
 pub(super) struct Store {
     root: PathBuf,

@@ -73,7 +73,7 @@ impl Action {
                 // Reject invalid local files before prompting or contacting a machine.
                 UserConfig::load()?;
                 Credentials::read()?;
-                let token = read_token()?;
+                let token = read_secret("Fleet token")?;
                 let entry = check(name, address, &token)?;
                 let _lock = lock()?;
                 let credentials = Credentials::read()?;
@@ -92,7 +92,8 @@ impl Action {
     }
 }
 
-fn lock() -> Result<std::fs::File> {
+/// Serializes Fleet and report pairing writes to User config and Credentials.
+pub(super) fn lock() -> Result<std::fs::File> {
     let root = config::home()?.join(".thirdshift");
     fs::create_dir_all(&root)?;
     let lock = OpenOptions::new()
@@ -105,35 +106,42 @@ fn lock() -> Result<std::fs::File> {
     Ok(lock)
 }
 
-fn read_token() -> Result<String> {
+/// A token from stdin, unechoed on a terminal, named `what` in its prompt.
+pub(super) fn read_secret(what: &str) -> Result<String> {
     crate::interrupt::install()?;
     let terminal = std::io::stdin().is_terminal();
     let _echo = terminal.then(crate::terminal::EchoOff::new).transpose()?;
     if terminal {
-        eprint!("Fleet token: ");
+        eprint!("{what}: ");
         std::io::stderr().flush()?;
     }
-    let token = crate::terminal::line()?.context("Fleet token input ended")?;
+    let token = crate::terminal::line()?.with_context(|| format!("{what} input ended"))?;
     if terminal {
         eprintln!();
     }
     let token = token.trim().to_owned();
-    ensure!(!token.is_empty(), "Fleet token is empty");
+    ensure!(!token.is_empty(), "{what} is empty");
     Ok(token)
 }
 
 pub(crate) fn pairing_address(address: &str) -> Result<reqwest::Url> {
+    token_address(address, "Fleet pairing")
+}
+
+/// An address a saved token may be sent to: HTTPS, or 127.0.0.1, without
+/// credentials, query or fragment. `what` names the pairing in refusals.
+pub(crate) fn token_address(address: &str, what: &str) -> Result<reqwest::Url> {
     let url = fleet::link_address(address)?;
     ensure!(
         url.username().is_empty()
             && url.password().is_none()
             && url.query().is_none()
             && url.fragment().is_none(),
-        "Fleet pairing addresses must have no credentials, query or fragment"
+        "{what} addresses must have no credentials, query or fragment"
     );
     ensure!(
         url.scheme() == "https" || url.host_str() == Some("127.0.0.1"),
-        "Fleet pairing requires HTTPS except for 127.0.0.1"
+        "{what} requires HTTPS except for 127.0.0.1"
     );
     Ok(url)
 }
@@ -142,9 +150,54 @@ pub(crate) fn pairing_address(address: &str) -> Result<reqwest::Url> {
 pub(super) struct Whoami {
     version: u8,
     api_version: String,
-    hostname: String,
+    pub(super) hostname: String,
     pub(super) thirdshift_version: String,
     pub scopes: Vec<Scope>,
+    /// Missing from some Consoles' answers; Fleet pairing does without it.
+    #[serde(default)]
+    pub(super) identity: WhoamiIdentity,
+}
+
+/// Who the answering Console says the caller is; only a token's holder
+/// matters to pairing.
+#[derive(Default, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub(super) enum WhoamiIdentity {
+    Token {
+        holder: String,
+    },
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+/// What the Console at `address` says of `token`, for pairing. `what` names
+/// the Console in refusals: a Fleet machine, or a report destination.
+pub(super) fn whoami(address: &str, token: &str, what: &str) -> Result<Whoami> {
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?
+        .get(format!("{}/api/v1/whoami", address.trim_end_matches('/')))
+        .bearer_auth(token)
+        .send()
+        .map_err(|_| anyhow::anyhow!("{what} unreachable: {address}"))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        bail!("{what} too old: {address} has no /api/v1/whoami");
+    }
+    ensure!(
+        status.is_success(),
+        "{what} pairing refused by {address} (HTTP {status})"
+    );
+    let identity: Whoami = response
+        .json()
+        .map_err(|_| anyhow::anyhow!("{what} too old or incompatible: invalid whoami response"))?;
+    ensure!(
+        identity.version == 1 && identity.api_version == "v1",
+        "{what} too old or incompatible: unsupported whoami version"
+    );
+    Ok(identity)
 }
 
 pub(super) fn effective_scopes(
@@ -191,29 +244,7 @@ pub(super) fn effective_scopes(
 
 fn check(name: String, address: String, token: &str) -> Result<Entry> {
     pairing_address(&address)?;
-    let response = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?
-        .get(format!("{}/api/v1/whoami", address.trim_end_matches('/')))
-        .bearer_auth(token)
-        .send()
-        .map_err(|_| anyhow::anyhow!("Fleet machine unreachable: {address}"))?;
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        bail!("Fleet machine too old: {address} has no /api/v1/whoami");
-    }
-    ensure!(
-        status.is_success(),
-        "Fleet pairing refused by {address} (HTTP {status})"
-    );
-    let identity: Whoami = response.json().map_err(|_| {
-        anyhow::anyhow!("Fleet machine too old or incompatible: invalid whoami response")
-    })?;
-    ensure!(
-        identity.version == 1 && identity.api_version == "v1",
-        "Fleet machine too old or incompatible: unsupported whoami version"
-    );
+    let identity = whoami(&address, token, "Fleet machine")?;
     Ok(Entry {
         name,
         address,

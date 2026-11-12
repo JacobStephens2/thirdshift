@@ -17,7 +17,7 @@ use crate::logs::{self, Work};
 use crate::pull_request::PullRequest;
 use crate::recovery::Continuation;
 use crate::review::Reservation;
-use crate::run::Ended;
+use crate::run::{Ended, Goal};
 use crate::session::Logs;
 use crate::worktree::Worktree;
 
@@ -62,14 +62,31 @@ pub(crate) fn run(
                     }
                 }
             }
+            let mut passed_over = Vec::new();
             for pr in github.fix_candidates(&launch.repo, base, author.as_deref())? {
-                if !github.needs_fix(&pr, base, author.as_deref(), false)? {
+                let Some(branch) =
+                    github.fix_candidate_branch(&pr, base, author.as_deref(), false)?
+                else {
+                    continue;
+                };
+                if let Some(path) = Worktree::occupying_checkout(launch.directory.git(), &branch)? {
+                    let reason = format!(
+                        "passed over {}: head branch {} is checked out at {}",
+                        pr.url,
+                        branch,
+                        path.display()
+                    );
+                    crate::progress::step(&reason);
+                    passed_over.push(reason);
                     continue;
                 }
                 let Some(held) = Reservation::take(launch.directory.git(), &github, &pr)? else {
                     continue;
                 };
-                if !github.needs_fix(&pr, base, author.as_deref(), true)? {
+                if github
+                    .fix_candidate_branch(&pr, base, author.as_deref(), true)?
+                    .is_none()
+                {
                     continue;
                 }
                 let selected = FixArgs {
@@ -84,13 +101,14 @@ pub(crate) fn run(
                     Some(held),
                 )));
             }
-            return Ok(skipped(
-                &launch.repo,
-                format!(
-                    "no eligible pull request targeting {base} on {}",
-                    launch.repo.slug()
-                ),
-            ));
+            let mut reason = format!(
+                "no eligible pull request targeting {base} on {}",
+                launch.repo.slug()
+            );
+            if !passed_over.is_empty() {
+                reason.push_str(&format!("; {}", passed_over.join("; ")));
+            }
+            return Ok(skipped(&launch.repo, reason));
         }
         Ok(crate::command::Ending::Run(targeted(
             command, config, harness, started, None,
@@ -178,15 +196,22 @@ fn targeted(
         // Acquisition samples origin independently of PR metadata. Evidence
         // must cover the head actually adopted before Delivery begins.
         let adopted_head = worktree.head()?;
-        let reviewed = asks.goal != crate::run::Goal::Merged
-            || github.authored_or_reviewed_head(&pr, &adopted_head)?;
+        let reviewed =
+            asks.goal != Goal::Merged || github.authored_or_reviewed_head(&pr, &adopted_head)?;
         let mut target =
             PullRequest::on_pull_request(&pr, &snapshot.branch, &snapshot.base, github);
         if !reviewed {
-            target.hold_self_merge(format!(
+            let reason = format!(
                 "PR {} stays ready for review: adopted head {} has no recorded agent review; run thirdshift review {} before retrying Self-merge",
                 pr.url, adopted_head, pr.url
-            ));
+            );
+            // A Pass or User config merge default may hand off for review.
+            // An explicit targeted merge must still report its unmet goal.
+            if pass || command.flags.goal != Some(Goal::Merged) {
+                crate::progress::step(format!("Self-merge held: {reason}"));
+                asks.goal = Goal::ReadyForReview;
+            }
+            target.hold_self_merge(reason);
         }
         let result = Delivery {
             security_review: false,

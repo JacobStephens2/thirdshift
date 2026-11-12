@@ -133,6 +133,30 @@ fn config_reads_defaults_and_sets_one_value_without_changing_layout() {
 }
 
 #[test]
+fn config_sets_the_disk_minimum_and_reads_its_default() {
+    let scenario = Scenario::new();
+    let path = scenario.user_config_is("[resources]\nmin_available_memory_mb = 2048\n");
+    let one = scenario.run(&["config", "resources.min_available_disk_mb", "--json"]);
+    assert_eq!(one.code, Some(0), "{}", one.stderr);
+    let one: serde_json::Value = serde_json::from_str(&one.stdout).unwrap();
+    assert_eq!(one["value"], 5120);
+    assert_eq!(one["default"], 5120);
+    let set = scenario.run(&["config", "resources.min_available_disk_mb", "0"]);
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(text.contains("min_available_disk_mb = 0"), "{text}");
+    let one = scenario.run(&["config", "resources.min_available_disk_mb"]);
+    assert!(
+        one.stdout.contains("resources.min_available_disk_mb = 0")
+            && one.stdout.contains("default: 5120"),
+        "{}",
+        one.stdout
+    );
+    let invalid = scenario.run(&["config", "resources.min_available_disk_mb", "-1"]);
+    assert_ne!(invalid.code, Some(0), "{}", invalid.stdout);
+}
+
+#[test]
 fn config_preserves_dotted_inline_and_map_comments() {
     for original in [
         "# Machine\nspec.parallel = 3 # Tickets\n",

@@ -52,7 +52,8 @@ impl SkillWorktree {
         Ok(Self {
             launch: Git::new(root),
             checkout,
-            untracked: UntrackedFiles::Preserve,
+            // Even an undelivered Review run's named validation output is disposable.
+            untracked: UntrackedFiles::DiscardNamedValidationArtifacts,
             recovered,
         })
     }
@@ -103,11 +104,12 @@ impl SkillWorktree {
         self.checkout.path()
     }
 
-    /// A delivered Review run may discard its disposable validation output.
+    /// A delivered Review run may discard all of its untracked validation
+    /// output, not only the named entries every Review checkout may discard.
     /// Cleanup still preserves tracked edits and unpushed commits, and verifies
     /// ownership under the disposal locks before removing the acquired checkout.
     pub fn discard_validation_artifacts(&mut self) {
-        self.untracked = UntrackedFiles::DiscardValidationArtifacts;
+        self.untracked = UntrackedFiles::DiscardAllUntracked;
     }
 
     /// Observe only the acquired checkout, even if an agent replaced its path.

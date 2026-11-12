@@ -1042,3 +1042,68 @@ fn other_accounts_cli_sets_shows_and_validates_without_changing_other_settings()
         assert_eq!(fs::read_to_string(&config).unwrap(), saved);
     }
 }
+
+#[test]
+fn other_account_commands_count_in_metrics_tagged_by_account() {
+    let machine = Machine::new();
+    record(&machine.home("serving"), 7, Some("merged"), 0);
+    record(&machine.home("conductor"), 8, Some("failed"), 0);
+    let metrics = |args: &[&str]| -> Value {
+        let output = machine.run(args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let accounts = |report: &Value| -> Vec<(String, u64)> {
+        report["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["account"].as_str().unwrap().to_owned(),
+                    row["failed"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        accounts(&metrics(&["metrics", "--json"])),
+        [("serving".to_owned(), 0)]
+    );
+    machine.setting("readable");
+    let before = retained_files(&machine.home("conductor"));
+    let all = metrics(&["metrics", "--json"]);
+    assert_eq!(
+        accounts(&all),
+        [("conductor".to_owned(), 1), ("serving".to_owned(), 0)]
+    );
+    assert!(
+        all["weeks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["account"] == "conductor"),
+        "{all:#}"
+    );
+    assert_eq!(
+        accounts(&metrics(&["metrics", "--account", "conductor", "--json"])),
+        [("conductor".to_owned(), 1)]
+    );
+    assert_eq!(retained_files(&machine.home("conductor")), before);
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    let api: Value = console
+        .get("/api/v1/metrics?account=conductor")
+        .json()
+        .unwrap();
+    assert_eq!(accounts(&api), [("conductor".to_owned(), 1)]);
+    let html = console.get("/metrics").text().unwrap();
+    assert!(html.contains("<td>conductor</td>"), "{html}");
+}

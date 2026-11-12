@@ -330,3 +330,26 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
     .one-line .row-head:has(> .ticket-progress) > .pr-checks { grid-row: 5; }
   }
 }
+.metrics-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin: 12px 0; }
+.metrics-filters label { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 100%; color: var(--dim); }
+.metrics-filters input, .metrics-filters select { max-width: 100%; }
+.metrics-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; list-style: none; }
+.metrics-legend li { display: flex; gap: 6px; align-items: center; }
+.metrics-swatch { width: 12px; height: 12px; }
+.metrics-table { max-width: 100%; overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--panel); }
+.metrics-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.metrics-table th, .metrics-table td { padding: 6px 8px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
+.metrics-table thead th { color: var(--dim); font-weight: var(--head-weight); }
+.metrics-machines { padding-left: 1.2em; }
+.metrics-status { font-weight: var(--head-weight); }
+.metrics-status.cached, .metrics-status.reported, .metrics-status.unavailable { color: var(--look-text); }
+.metrics-status.refused, .metrics-status.incompatible { color: var(--urgent); }
+.metrics-bar { display: block; width: 10em; height: 12px; background: var(--panel-2); }
+.metrics .succeeded { fill: var(--ready); }
+.metrics .failed { fill: var(--urgent); }
+.metrics .paused { fill: var(--look); }
+.metrics .stopped { fill: var(--dim); }
+.metrics-spark { display: block; width: 6em; height: 20px; background: var(--panel-2); overflow: visible; }
+.metrics-spark path { fill: none; stroke: var(--link); stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.metrics h3 { margin: 16px 0 4px; }
+.metrics-table tr.metrics-change th, .metrics-table tr.metrics-change td { color: var(--link); font-weight: var(--head-weight); background: var(--panel-2); }

@@ -27,7 +27,9 @@ use super::effects::OnMachine;
 use super::pass_starts::{self, PassStart};
 pub(super) use super::usual_range::UsualRange;
 use super::{Pass, activity};
-pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
+pub(super) use attribution::{
+    CommandIdentity, PullRequestAttribution, identity as pull_request_key,
+};
 pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Departure, Group, InboxItem, NeedsYouKind, RowOrder};
@@ -55,7 +57,22 @@ impl Snapshot {
         config: &crate::config::UserConfig,
         now: DateTime<Local>,
     ) -> Result<Self> {
-        Self::user_capture(config, now, None)
+        Self::user_capture(config, now, None, false)
+    }
+
+    /// Past metrics and Session signals for every Command, opted-in accounts
+    /// included.
+    pub(super) fn metrics_for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        let mut snapshot = Self::user_capture(config, now, None, true)?;
+        for entry in &mut snapshot.commands {
+            if let Entry::Record(command) = entry {
+                command.add_session_signals(None);
+            }
+        }
+        Ok(snapshot)
     }
 
     pub(super) fn details_for_user(
@@ -63,20 +80,22 @@ impl Snapshot {
         now: DateTime<Local>,
         input: &str,
     ) -> Result<Self> {
-        Self::user_capture(config, now, Some(input))
+        Self::user_capture(config, now, Some(input), true)
     }
 
     fn user_capture(
         config: &crate::config::UserConfig,
         now: DateTime<Local>,
         input: Option<&str>,
+        // Reconstruct metrics for past records that never saved theirs.
+        past_metrics: bool,
     ) -> Result<Self> {
         let mut snapshot = Self::capture_records(
             Arc::new(inventory::Native),
             &config.logs_dir,
             now,
             config.silent_interval,
-            input.is_some(),
+            past_metrics,
         )?;
         let sources = super::accounts::discover(config);
         snapshot.unavailable_accounts = sources.unavailable;
@@ -86,7 +105,7 @@ impl Snapshot {
                 &source.root,
                 now,
                 config.silent_interval,
-                input.is_some(),
+                past_metrics,
             ) else {
                 if matches!(
                     config.console.other_accounts,
@@ -423,16 +442,24 @@ impl Command {
     /// parent's record path. Usual ranges and health already include every record.
     fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
         let enrich = selected.is_none_or(|identity| identity.matches(self));
+        let signals = if self.account.is_some() {
+            cache::readonly_session_signals
+        } else {
+            cache::session_signals
+        };
         if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
-            metrics.add_session_signals(
-                &self.record,
-                if self.account.is_some() {
-                    cache::readonly_session_signals
-                } else {
-                    cache::session_signals
-                },
-            );
+            metrics.add_session_signals(&self.record, signals);
             self.record.run_metrics = Some(metrics);
+        }
+        // An older record names no release: its first Session trace that
+        // does supplies it, through the same retained signals, in memory only.
+        if enrich && self.record.thirdshift_version.is_none() {
+            let recovered = self
+                .record
+                .session_references()
+                .find_map(|log| signals(log)?.service_version);
+            self.record.thirdshift_version = recovered;
+            self.record.version_recovered = self.record.thirdshift_version.is_some();
         }
         let nested = if enrich { None } else { selected };
         for child in self.dispatched.iter_mut().chain(&mut self.children) {

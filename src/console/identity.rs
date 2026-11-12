@@ -58,7 +58,7 @@ pub(super) async fn show(Extension(viewer): Extension<Viewer>) -> Json<Whoami> {
 }
 
 pub fn whoami(json: bool) -> Result<String> {
-    let view = Whoami::new(Identity::local(), Scope::ALL.to_vec());
+    let view = Whoami::new(Identity::local(), Scope::PERSON.to_vec());
     if json {
         return Ok(serde_json::to_string(&view)?);
     }

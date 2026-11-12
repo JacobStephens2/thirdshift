@@ -34,6 +34,23 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// The Command record stage this one reports in, as the Delivery's stage
+    /// table records it; a Base fix wait has none of its own.
+    pub fn recorded(self) -> Option<crate::logs::Stage> {
+        use crate::logs::Stage as Recorded;
+        match self {
+            Self::Implementation => Some(Recorded::Implement),
+            Self::Tickets => Some(Recorded::Tickets),
+            Self::SpecReview => Some(Recorded::SpecReview),
+            Self::SecurityReview => Some(Recorded::SecurityReview),
+            Self::Push | Self::PullRequest => Some(Recorded::PullRequest),
+            Self::Repair => Some(Recorded::Repair),
+            Self::Ci => Some(Recorded::CiWatch),
+            Self::SelfMerge => Some(Recorded::SelfMerge),
+            Self::BaseFix => None,
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Self::Implementation => "Implementation",
@@ -110,6 +127,8 @@ pub struct Recovery {
     /// The Spec PR changed under the Spec run, so no command resumes it.
     spec_pr_changed: bool,
     fix_run: bool,
+    /// The host ran out of disk space, which retrying needs freed first.
+    out_of_disk: bool,
 }
 
 impl Recovery {
@@ -124,11 +143,11 @@ impl Recovery {
             local_child_work: Vec::new(),
             spec_pr_changed: false,
             fix_run: false,
+            out_of_disk: false,
         }
     }
 
-    /// Only tests read the stage: its rules live here.
-    #[cfg(test)]
+    /// The stage its `Stopped at:` line reports, which the Command record keeps.
     pub fn stage(&self) -> Stage {
         self.stage
     }
@@ -171,6 +190,11 @@ impl Recovery {
         self.spec_pr_changed = true;
     }
 
+    /// The host ran out of disk space: free some before retrying.
+    pub fn add_out_of_disk(&mut self) {
+        self.out_of_disk = true;
+    }
+
     /// The Security review's Harness when `security.harness` chose one
     /// different from the Run's; the Recovery command still names the Run's.
     pub fn add_security_review_harness(&mut self, harness: Harness) {
@@ -184,6 +208,12 @@ impl Recovery {
             let review = if reviewed { "complete" } else { "incomplete" };
             lines.push(format!(
                 "{PROGRESS}{landed}/{total} Tickets landed; final review {review}"
+            ));
+        }
+        if self.out_of_disk {
+            lines.push(format!(
+                "{BEFORE_RETRYING}{}",
+                crate::failed_run::OUT_OF_DISK
             ));
         }
         let Some(context) = &self.continuation else {

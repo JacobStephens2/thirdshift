@@ -9,7 +9,8 @@
 //! with its [`Ending`]: the Factory skills it wrote out for its sessions
 //! removed, then the Activity log's end line, the terminal display and the
 //! Run notification, in that order, only the display of those three for a
-//! skipped pass.
+//! skipped pass; then, best effort, its Run metrics pushed to any report
+//! destination.
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -137,6 +138,11 @@ pub fn start(
 }
 
 impl Started {
+    /// Whether this is the top-level command, not a child Run it started.
+    fn top_level(&self) -> bool {
+        self.started.is_some()
+    }
+
     /// Take note that the command's sessions run on `harness`, which its Run
     /// notification names.
     pub fn built_with(&mut self, harness: &Choice) {
@@ -205,17 +211,26 @@ impl Started {
             eprintln!("{diagnostic}");
         }
         let code = account.show(elapsed);
+        let top_level = self.top_level();
         if let Some(notification) = self.notification {
             notification.finish(&account);
+        }
+        // Only the top-level Command reports, once its own record is written.
+        if top_level {
+            crate::console::report::after_command();
         }
         code
     }
 }
 
-/// `error` on stderr, after any lines a pass held from the terminal, and the
-/// exit code of a failure.
+/// `error` on stderr, after any lines a pass held from the terminal, then
+/// what to do when the host running out of disk space caused it, and the exit
+/// code of a failure.
 pub fn failure(error: &anyhow::Error) -> ExitCode {
     logs::show_held();
     progress::step(format_args!("{error:#}"));
+    if crate::failed_run::out_of_disk(error) {
+        progress::step(crate::failed_run::OUT_OF_DISK);
+    }
     ExitCode::FAILURE
 }
