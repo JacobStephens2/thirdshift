@@ -441,10 +441,7 @@ impl GitHub {
     /// metadata read that fails or has no `has_issues` setting is an error,
     /// never a guess.
     pub fn has_issues(&self, repo: &str) -> Result<bool> {
-        if !valid_repo_slug(repo) {
-            bail!("invalid repository name");
-        }
-        self.gh_json(&["api", &format!("repos/{repo}")])?["has_issues"]
+        self.repository(repo)?["has_issues"]
             .as_bool()
             .context(CommandFailure::InvalidResponse(
                 "gh api repository metadata has no has_issues setting".into(),
@@ -622,6 +619,14 @@ impl GitHub {
         Ok(named(known.as_array().context(
             CommandFailure::InvalidResponse("gh label list did not return a list".into()),
         )?))
+    }
+
+    /// The repository `repo`, an `owner/repo`, as the REST API describes it.
+    fn repository(&self, repo: &str) -> Result<Value> {
+        if !valid_repo_slug(repo) {
+            bail!("invalid repository name");
+        }
+        self.gh_json(&["api", &format!("repos/{repo}")])
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
