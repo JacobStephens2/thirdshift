@@ -8,7 +8,20 @@ use axum::response::Response;
 use super::auth::Viewer;
 use crate::args::{MetricsArgs, MetricsWindow};
 use crate::config::UserConfig;
-use crate::logs::metrics::{Class, Trends};
+use crate::logs::metrics::{Bucket, Class, Ending, Stopped, Timeline, Trends};
+
+/// The query keys that are `metrics` filters and window, each a `--<key>` flag.
+const FILTERS: [&str; 10] = [
+    "window", "grain", "from", "through", "repo", "kind", "harness", "model", "version", "account",
+];
+
+/// The keys a failure drilldown adds to the view's own filters: a Where runs
+/// failed row's stage and category, or a Failed bucket's day, kind and account.
+const STOPPED_AT: &str = "stopped_at";
+const CATEGORY: &str = "category";
+const FAILED_ON: &str = "failed_on";
+const FAILED_KIND: &str = "failed_kind";
+const FAILED_ACCOUNT: &str = "failed_account";
 
 #[derive(Template)]
 #[template(path = "console/metrics.html")]
@@ -20,6 +33,54 @@ struct MetricsPage {
     kinds: [&'static str; 9],
     windows: [(&'static str, MetricsWindow); 4],
     classes: [Class; 4],
+    /// The page's own filters and window, as given, for links that keep them.
+    view: Vec<(String, String)>,
+}
+
+impl MetricsPage {
+    /// `path` with this view's filters, less any of `replaced`, and `added`.
+    fn link(&self, path: &str, replaced: &[&str], added: &[(&str, &str)]) -> String {
+        let mut url = reqwest::Url::parse("http://localhost").expect("fixed URL");
+        url.set_path(path);
+        url.query_pairs_mut()
+            .extend_pairs(
+                self.view
+                    .iter()
+                    .filter(|(key, _)| !replaced.contains(&key.as_str())),
+            )
+            .extend_pairs(added);
+        format!("{}?{}", url.path(), url.query().unwrap_or_default())
+    }
+
+    /// History showing a Where runs failed row's Commands. The link names the
+    /// row, not its Commands, so it stays short however many failed.
+    fn row_history(&self, row: &Stopped) -> String {
+        let category = [(CATEGORY, row.ending.category())];
+        match &row.stopped_at {
+            Some(stage) => self.link("/history", &[], &[(STOPPED_AT, stage), category[0]]),
+            None => self.link("/history", &[], &category),
+        }
+    }
+
+    /// History showing a bucket's Failed Commands.
+    fn bucket_history(&self, bucket: &Bucket) -> String {
+        let day = bucket.bucket.to_string();
+        let mut added = vec![(FAILED_ON, day.as_str()), (FAILED_KIND, bucket.kind)];
+        if let Some(account) = &bucket.account {
+            added.push((FAILED_ACCOUNT, account));
+        }
+        self.link("/history", &[], &added)
+    }
+
+    /// This view narrowed to one `thirdshift` version.
+    fn version_slice(&self, version: &str) -> String {
+        self.link("/metrics", &["version"], &[("version", version)])
+    }
+
+    /// A Failed Command's Console details.
+    fn details(&self, selector: &str) -> String {
+        crate::logs::status::inspect::url("/peek", selector, None)
+    }
 }
 
 /// The filters as asked, to fill the form again. A repeated filter shows one
@@ -34,6 +95,7 @@ struct Form {
     kind: Vec<String>,
     harness: Vec<String>,
     model: Vec<String>,
+    version: Vec<String>,
     account: Vec<String>,
 }
 
@@ -63,9 +125,79 @@ impl Form {
             kind: fields(&asked.kinds),
             harness: fields(&asked.harnesses),
             model: fields(&asked.models),
+            version: fields(&asked.versions),
             account: fields(&asked.accounts),
         }
     }
+}
+
+/// The non-empty query pairs among `keys`, in order.
+fn pairs(query: &Option<String>, keys: &[&str]) -> Result<Vec<(String, String)>> {
+    Ok(reqwest::Url::parse(&format!(
+        "http://localhost/?{}",
+        query.as_deref().unwrap_or_default()
+    ))?
+    .query_pairs()
+    .filter(|(key, value)| !value.is_empty() && keys.contains(&key.as_ref()))
+    .map(|(key, value)| (key.into_owned(), value.into_owned()))
+    .collect())
+}
+
+/// A drilldown link's query pairs: the view and the cluster it names.
+pub(super) fn drilldown(query: &Option<String>) -> Result<Vec<(String, String)>> {
+    let mut keys = FILTERS.to_vec();
+    keys.extend([STOPPED_AT, CATEGORY, FAILED_ON, FAILED_KIND, FAILED_ACCOUNT]);
+    pairs(query, &keys)
+}
+
+/// The Failed Commands a drilldown link from the Metrics page names, by
+/// reading the same view again; `None` when the query is no drilldown.
+pub(super) fn chosen(config: &UserConfig, query: &Option<String>) -> Result<Option<Vec<String>>> {
+    let drill = pairs(
+        query,
+        &[STOPPED_AT, CATEGORY, FAILED_ON, FAILED_KIND, FAILED_ACCOUNT],
+    )?;
+    let value = |key: &str| {
+        drill
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    };
+    if value(CATEGORY).is_none() && value(FAILED_ON).is_none() {
+        return Ok(None);
+    }
+    let view = pairs(query, &FILTERS)?;
+    let view = reqwest::Url::parse_with_params("http://localhost/", &view)?;
+    let trends =
+        crate::logs::metrics::trends(config, &arguments(&view.query().map(str::to_owned))?)?;
+    if let Some(category) = value(CATEGORY) {
+        let ending = Ending::named(category)
+            .ok_or_else(|| anyhow::anyhow!("unknown failure category: {category}"))?;
+        return Ok(Some(
+            trends
+                .where_runs_failed
+                .rows
+                .iter()
+                .filter(|row| {
+                    row.ending == ending && row.stopped_at.as_deref() == value(STOPPED_AT)
+                })
+                .flat_map(Stopped::selectors)
+                .cloned()
+                .collect(),
+        ));
+    }
+    Ok(Some(
+        trends
+            .outcomes
+            .iter()
+            .filter(|bucket| {
+                value(FAILED_ON) == Some(bucket.bucket.to_string().as_str())
+                    && value(FAILED_KIND) == Some(bucket.kind)
+                    && value(FAILED_ACCOUNT) == bucket.account.as_deref()
+            })
+            .flat_map(|bucket| bucket.failed_commands.iter().cloned())
+            .collect(),
+    ))
 }
 
 /// Query parameters become the same `metrics` arguments the CLI parses. The
@@ -81,8 +213,7 @@ fn arguments(query: &Option<String>) -> Result<MetricsArgs> {
             }
             match key.as_ref() {
                 "command" => arguments.push(value.into_owned()),
-                "window" | "grain" | "from" | "through" | "repo" | "kind" | "harness" | "model"
-                | "account" => {
+                key if FILTERS.contains(&key) => {
                     arguments.push(format!("--{key}"));
                     arguments.push(value.into_owned());
                 }
@@ -119,6 +250,12 @@ pub(super) async fn show(
                 ))
             });
         }
+        // A refused query shows the unfiltered view, so its links carry none.
+        let view = if error.is_none() {
+            pairs(&query, &FILTERS)?
+        } else {
+            Vec::new()
+        };
         format.render(crate::logs::metrics::trends(&config, &asked)?, |trends| {
             Ok(MetricsPage {
                 page: super::PageContext::new(&config, &viewer.scopes),
@@ -128,6 +265,7 @@ pub(super) async fn show(
                 kinds: crate::logs::metrics::COUNTED.map(crate::logs::display_name),
                 windows: MetricsWindow::NAMES,
                 classes: Class::ENDED,
+                view,
             }
             .render()?)
         })

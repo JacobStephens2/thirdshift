@@ -218,6 +218,7 @@ pub struct MetricsArgs {
     pub kinds: Vec<String>,
     pub harnesses: Vec<String>,
     pub models: Vec<String>,
+    pub versions: Vec<String>,
     pub accounts: Vec<String>,
 }
 
@@ -1021,7 +1022,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {
     use chrono::Datelike;
-    let usage = "usage: thirdshift metrics [<command>] [--json] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--account <account>]";
+    let usage = "usage: thirdshift metrics [<command>] [--json] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--version <thirdshift version>] [--account <account>]";
     let mut asked = MetricsArgs::default();
     let mut words = args.iter();
     while let Some(word) = words.next() {
@@ -1074,13 +1075,14 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
                 );
                 asked.repositories.push(value.clone());
             }
-            "--kind" | "--harness" | "--model" | "--account" => {
+            "--kind" | "--harness" | "--model" | "--version" | "--account" => {
                 let value = words.next().context(usage)?;
                 anyhow::ensure!(!value.trim().is_empty(), "{word} needs a value");
                 match word.as_str() {
                     "--kind" => &mut asked.kinds,
                     "--harness" => &mut asked.harnesses,
                     "--model" => &mut asked.models,
+                    "--version" => &mut asked.versions,
                     _ => &mut asked.accounts,
                 }
                 .push(value.clone());
@@ -1121,6 +1123,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
                 && asked.kinds.is_empty()
                 && asked.harnesses.is_empty()
                 && asked.models.is_empty()
+                && asked.versions.is_empty()
                 && asked.accounts.is_empty()),
         "window and filters apply only to metrics trends"
     );

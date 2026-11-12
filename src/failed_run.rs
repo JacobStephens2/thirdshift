@@ -61,6 +61,28 @@ impl FailedRun {
     }
 }
 
+/// The failure category a Command record keeps for an ending that failed
+/// with `error`. A hold or a waiting Spec run is the error itself; a failed
+/// Harness Session may be wrapped by the stage that ran it.
+pub fn category(error: &anyhow::Error) -> crate::logs::FailureCategory {
+    use crate::logs::FailureCategory;
+    if is_hold(error) {
+        FailureCategory::Held
+    } else if error
+        .downcast_ref::<crate::spec_run::TicketsNotDone>()
+        .is_some_and(|not_done| not_done.only_waiting)
+    {
+        FailureCategory::Waiting
+    } else if error
+        .chain()
+        .any(|layer| layer.is::<crate::harness::interpretation::SessionFailure>())
+    {
+        FailureCategory::Crashed
+    } else {
+        FailureCategory::StageFailed
+    }
+}
+
 /// Whether `error` is a policy, security or merge hold: a Self-merge held
 /// with its pull request already ready.
 pub fn is_hold(error: &anyhow::Error) -> bool {
@@ -133,5 +155,46 @@ pub fn interrupted_or(error: anyhow::Error, interrupted: bool) -> anyhow::Error 
         anyhow!("interrupted")
     } else {
         error
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Context;
+
+    use super::*;
+    use crate::logs::FailureCategory;
+
+    #[test]
+    fn the_failure_category_comes_from_the_typed_error_not_its_words() {
+        let crashed = Err::<(), _>(anyhow::Error::new(
+            crate::harness::interpretation::SessionFailure::exited("claude", 1),
+        ))
+        .context("Code review failed")
+        .unwrap_err();
+        for (error, category) in [
+            (
+                anyhow::Error::new(MergeHold {
+                    reason: "protected path".into(),
+                }),
+                FailureCategory::Held,
+            ),
+            (
+                anyhow::Error::new(PolicyRefusal::NothingToFix),
+                FailureCategory::Held,
+            ),
+            (
+                anyhow::Error::new(crate::spec_run::TicketsNotDone::waiting()),
+                FailureCategory::Waiting,
+            ),
+            (crashed, FailureCategory::Crashed),
+            // A cause that only names a hold or a crash is not one.
+            (
+                anyhow!("held: claude exited 1"),
+                FailureCategory::StageFailed,
+            ),
+        ] {
+            assert_eq!(super::category(&error), category, "{error:#}");
+        }
     }
 }

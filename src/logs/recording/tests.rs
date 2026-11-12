@@ -136,6 +136,7 @@ impl Outside for Scripted {
         observed.then(|| crate::logs::session_signals::SessionSignals {
             harness: Some("claude".into()),
             harness_version: None,
+            service_version: None,
             signals: crate::logs::session_signals::Signals {
                 tool_errors: 1,
                 ..Default::default()
@@ -472,6 +473,94 @@ fn completion_metrics_place_each_stage_against_repository_history() {
                 .unwrap_or(serde_json::Value::Null)
         );
     }
+}
+
+#[test]
+fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end() {
+    let ending = |failure: anyhow::Error,
+                  recovery: Option<crate::recovery::Stage>,
+                  outcome: &str| {
+        let memory = Scripted::default();
+        let mut record = Record::new(memory.clone());
+        record.begin(Begin::Run(&issue()));
+        record.configured(&config(false));
+        record.started(Work::Run(&issue()), &harness());
+        let path = record.record_path().unwrap();
+        let started: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
+        assert_eq!(started["thirdshift_version"], env!("CARGO_PKG_VERSION"));
+        assert!(started.get("stopped_at").is_none() && started.get("failure_category").is_none());
+        record.stage(StageName::CiWatch, None);
+        let ended = crate::run::Ended {
+            outcome: Err(crate::failed_run::FailedRun {
+                recovery: recovery.map(|stage| {
+                    Box::new(crate::recovery::Recovery::new(
+                        stage,
+                        crate::recovery::Preservation::Remote,
+                    ))
+                }),
+                error: failure,
+                pr_url: None,
+                log: None,
+                interrupted: false,
+                ticket_lines: Vec::new(),
+            }),
+            base_fix: None,
+            advice: Vec::new(),
+        };
+        let account = crate::run_ending::Account::of_run(&ended);
+        assert_eq!(account.outcome, outcome);
+        record.finished(&account);
+        let saved: serde_json::Value = serde_json::from_str(&memory.file(path)).unwrap();
+        assert_eq!(saved["thirdshift_version"], env!("CARGO_PKG_VERSION"));
+        (
+            saved["stopped_at"].clone(),
+            saved["failure_category"].clone(),
+        )
+    };
+    // A Recovery's stage is kept in the Command record's own stage words.
+    assert_eq!(
+        ending(
+            crate::failed_run::MergeHold {
+                reason: "protected path".into()
+            }
+            .into(),
+            Some(crate::recovery::Stage::SelfMerge),
+            "failed",
+        ),
+        (serde_json::json!("Self-merge"), serde_json::json!("held"))
+    );
+    // Without a Recovery, the stage in force when it ended.
+    assert_eq!(
+        ending(anyhow::anyhow!("origin mismatch"), None, "failed"),
+        (
+            serde_json::json!("CI watch"),
+            serde_json::json!("stage_failed")
+        )
+    );
+    assert_eq!(
+        ending(
+            anyhow::anyhow!("git push failed"),
+            Some(crate::recovery::Stage::Implementation),
+            "failed",
+        ),
+        (
+            serde_json::json!("implement"),
+            serde_json::json!("stage_failed")
+        )
+    );
+    // A plan limit pauses work and attributes no failure.
+    let (stopped_at, category) = ending(
+        crate::session::limits::Reached(crate::session::limits::Limit {
+            harness: None,
+            window: None,
+            utilization: None,
+            resets_at: None,
+        })
+        .into(),
+        None,
+        "paused",
+    );
+    assert!(stopped_at.is_null() && category.is_null());
 }
 
 #[test]

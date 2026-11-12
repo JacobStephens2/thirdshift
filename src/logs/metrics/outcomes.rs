@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use super::super::reading::{Command, Entry, Snapshot};
+use super::super::reading::{Command, Entry, Observation, Snapshot};
 use super::scope::{Filters, Span, Window};
 
 /// Commands that do work. A Pickup run only selects and dispatches one.
@@ -106,6 +106,8 @@ pub(super) struct Counted {
     pub(super) kind: &'static str,
     pub(super) class: Class,
     outcome: String,
+    /// What `thirdshift show` and the Console's Command details select it by.
+    pub(super) selector: String,
 }
 
 /// One counted Command, kept with its record for the signal groups.
@@ -140,7 +142,7 @@ pub(crate) struct Tally {
 }
 
 impl Tally {
-    fn add(&mut self, counted: &Counted) {
+    pub(super) fn add(&mut self, counted: &Counted) {
         self.runs += 1;
         *match counted.class {
             Class::Succeeded => &mut self.succeeded,
@@ -239,6 +241,8 @@ pub(crate) struct Bucket {
     pub(crate) kind: &'static str,
     #[serde(flatten)]
     pub(crate) tally: Tally,
+    /// The Failed Commands' selectors, for `thirdshift show` and History.
+    pub(crate) failed_commands: Vec<String>,
 }
 
 /// The window against the one before it, per OS account and Command kind.
@@ -318,21 +322,25 @@ pub(super) fn facts<'a>(
 
 pub(super) fn read(facts: &[Fact<'_>], window: &Window) -> Outcomes {
     let counted: Vec<_> = facts.iter().map(|fact| &fact.counted).collect();
-    let mut buckets = BTreeMap::<_, Tally>::new();
+    let mut buckets = BTreeMap::<_, (Tally, Vec<String>)>::new();
     for item in counted.iter().filter(|item| window.shows(item.bucket)) {
-        buckets
+        let (tally, failed) = buckets
             .entry((item.bucket, item.account.clone(), item.kind))
-            .or_default()
-            .add(item);
+            .or_default();
+        tally.add(item);
+        if item.class == Class::Failed {
+            failed.push(item.selector.clone());
+        }
     }
     Outcomes {
         buckets: buckets
             .into_iter()
-            .map(|((bucket, account, kind), tally)| Bucket {
+            .map(|((bucket, account, kind), (tally, failed))| Bucket {
                 bucket,
                 account,
                 kind,
                 tally,
+                failed_commands: failed,
             })
             .collect(),
         comparison: window
@@ -400,6 +408,7 @@ fn visit<'a>(
             kind: kind_name(&command.record.kind),
             class,
             outcome,
+            selector: Observation::Record(command).selector().unwrap_or_default(),
         },
         command,
         stop_asked,
@@ -438,6 +447,7 @@ mod tests {
             kind: "Ticket run",
             class,
             outcome: outcome.into(),
+            selector: String::new(),
         }
     }
 

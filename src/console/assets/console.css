@@ -344,3 +344,4 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 .metrics-spark { display: block; width: 6em; height: 20px; background: var(--panel-2); overflow: visible; }
 .metrics-spark path { fill: none; stroke: var(--link); stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .metrics h3 { margin: 16px 0 4px; }
+.metrics-table tr.metrics-change th, .metrics-table tr.metrics-change td { color: var(--link); font-weight: var(--head-weight); background: var(--panel-2); }

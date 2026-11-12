@@ -79,10 +79,13 @@ test('Metrics opens by keyboard, fits a phone and stacks outcomes in every Theme
   await page.getByRole('heading', { name: 'Compared with the preceding window' }).waitFor();
   assert.ok(await page.locator('svg.metrics-bar rect').count() > 0);
   for (const name of ['Yield and pull-request survival', 'Post-merge quality and interventions',
-    'Efficiency, wasted effort and Repair churn', 'Stage bottlenecks and session friction']) {
+    'Efficiency, wasted effort and Repair churn', 'Stage bottlenecks and session friction',
+    'Where runs failed']) {
     await page.getByRole('heading', { name, exact: true }).waitFor();
   }
   assert.ok(await page.locator('svg.metrics-spark path').count() > 0);
+  // Failed Commands open in History straight from their cluster.
+  assert.ok(await page.locator('[aria-label="Where runs failed table"] a[href^="/history?"]').count() > 0);
   assert.equal(await page.locator('main script').count(), 0);
   for (const theme of [...THEMES, 'my-metrics']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);

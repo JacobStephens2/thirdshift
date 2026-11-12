@@ -123,6 +123,7 @@ pub(crate) struct Filters {
     pub(crate) kind: Vec<String>,
     pub(crate) harness: Vec<String>,
     pub(crate) model: Vec<String>,
+    pub(crate) version: Vec<String>,
     pub(crate) account: Vec<String>,
 }
 
@@ -133,6 +134,7 @@ impl Filters {
             kind: asked.kinds.clone(),
             harness: asked.harnesses.clone(),
             model: asked.models.clone(),
+            version: asked.versions.clone(),
             account: asked.accounts.clone(),
         }
     }
@@ -145,12 +147,28 @@ impl Filters {
                 || any(&self.kind, Some(crate::logs::display_name(&record.kind))))
             && any(&self.harness, Some(&record.harness))
             && any(&self.model, record.model.as_deref())
+            && any(&self.version, record.thirdshift_version.as_deref())
             && any(&self.account, account)
     }
 
+    /// Whether any filter narrows the Commands, so that a change of Harness
+    /// or Model between buckets is a change of setup, not of mix.
+    pub(super) fn narrowed(&self) -> bool {
+        [
+            &self.repo,
+            &self.kind,
+            &self.harness,
+            &self.model,
+            &self.version,
+            &self.account,
+        ]
+        .into_iter()
+        .any(|values| !values.is_empty())
+    }
+
     /// A Scoring sample's pull request, by its repository and Built-with
-    /// Harness and Model. Kind and account name Commands, not samples, so
-    /// they leave Scores unfiltered.
+    /// Harness and Model. Kind, version and account name Commands, not
+    /// samples, so they leave Scores unfiltered.
     pub(super) fn admit_scored(&self, repository: &str, harness: &str, model: &str) -> bool {
         any(&self.repo, Some(repository))
             && any(&self.harness, Some(harness))
@@ -251,6 +269,7 @@ mod tests {
             kind: vec![],
             harness: vec![],
             model: vec![],
+            version: vec![],
             account: vec![],
         };
         // admit() compares exactly, so a Command in ACME/Widgets is excluded; its sample must be too.
