@@ -1181,6 +1181,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 [resources]
 min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
 max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
+min_available_disk_mb = 5120  # delay new sessions below this free disk space in MB where worktrees and temporary files go; 0 disables; default 5120
 
 [pass]
 command_limit = 1   # how many Commands running on one repository on this machine stop a Pass starting another; default 1
@@ -1370,16 +1371,22 @@ mod tests {
     }
 
     #[test]
-    fn resource_limits_are_opt_in_and_accept_machine_thresholds() {
+    fn memory_and_load_limits_are_opt_in_and_disk_waits_by_default() {
         let defaults = parse("").unwrap();
         assert_eq!(defaults.resources.min_available_memory_mb, 0);
         assert_eq!(defaults.resources.max_load_per_cpu_percent, 0);
-        let config =
-            parse("[resources]\nmin_available_memory_mb = 2048\nmax_load_per_cpu_percent = 100\n")
-                .unwrap();
+        assert_eq!(defaults.resources.min_available_disk_mb, 5120);
+        let config = parse(
+            "[resources]\nmin_available_memory_mb = 2048\nmax_load_per_cpu_percent = 100\nmin_available_disk_mb = 0\n",
+        )
+        .unwrap();
         assert_eq!(config.resources.min_available_memory_mb, 2048);
         assert_eq!(config.resources.max_load_per_cpu_percent, 100);
+        assert_eq!(config.resources.min_available_disk_mb, 0);
+        let memory_only = parse("[resources]\nmin_available_memory_mb = 2048\n").unwrap();
+        assert_eq!(memory_only.resources.min_available_disk_mb, 5120);
         for text in [
+            "[resources]\nmin_available_disk_mb = -1\n",
             "[resources]\nmin_available_memory_mb = -1\n",
             "[resources]\nmin_available_memory_mb = 1.5\n",
             "[resources]\nmax_load_per_cpu_percent = -1\n",
@@ -1515,6 +1522,7 @@ mod tests {
                 "spec.parallel",
                 "resources.min_available_memory_mb",
                 "resources.max_load_per_cpu_percent",
+                "resources.min_available_disk_mb",
                 "pass.command_limit",
                 "pickup.failure_limit",
                 "pickup.wait_minutes",
