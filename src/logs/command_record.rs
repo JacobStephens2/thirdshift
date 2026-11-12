@@ -104,11 +104,15 @@ pub(super) struct CommandRecord {
     #[serde(skip)]
     pub end_time_estimated: bool,
     pub stages: Vec<Stage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_wait_until: Option<String>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
     #[serde(default)]
     pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<crate::session::limits::Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -289,6 +293,7 @@ stage_names! {
     /// A fixed finding's proof-of-concept recheck against the merged Base
     /// branch, before its private record is closed.
     SecurityCloseCheck => "Security close check",
+    WaitingForCommands => "Waiting for Commands",
     ArmBuilds => "Arm builds",
     EvalTasks => "Eval tasks",
     Trials => "Trials",
@@ -305,6 +310,7 @@ impl StageName {
     /// The stage a pass enters while `work`, the Command it dispatched, runs.
     pub(super) fn dispatched(work: Work<'_>) -> Self {
         match work {
+            Work::Starting { .. } => Self::ProcessStep,
             Work::SpecRun(_) => Self::DispatchedSpecRun,
             Work::Run(_)
             | Work::BaseFix(_)
@@ -314,7 +320,7 @@ impl StageName {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
-            | Work::TriageRun(_)
+            | Work::TriageRun { .. }
             | Work::Experiment(_)
             | Work::Process { .. } => Self::DispatchedRun,
         }
@@ -333,6 +339,7 @@ impl StageName {
     pub(super) fn is_session(name: &str) -> bool {
         [
             Self::Implement,
+            Self::CodeReview,
             Self::Resume,
             Self::Repair,
             Self::SpecReview,
@@ -411,15 +418,22 @@ impl CommandRecord {
     ) {
         self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
-        self.cause = account
-            .ended
-            .as_ref()
-            .err()
-            .map(|cause| cause.full().into());
+        // A Quota wait may already have opened this record. Pre-audit GitHub
+        // diagnostics stay on the terminal; the record keeps the fixed cause.
+        self.cause = account.pre_audit_failure.map(str::to_owned).or_else(|| {
+            account
+                .ended
+                .as_ref()
+                .err()
+                .map(|cause| cause.full().to_owned())
+        });
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
-        if matches!(self.kind.as_str(), "Run" | "Spec run" | "Base fix") {
+        if matches!(
+            self.kind.as_str(),
+            "Run" | "Spec run" | "Base fix" | "Review run" | "Triage run" | "Fix run"
+        ) {
             self.run_metrics = Some(super::run_metrics::RunMetrics::of(
                 self,
                 ranges,
@@ -442,7 +456,8 @@ impl CommandRecord {
             // The Ready issue listing named a Pickup run's issue before it started.
             title: match work {
                 Work::PickupRun(listed) => Some(listed.title.clone()),
-                Work::Run(_)
+                Work::Starting { .. }
+                | Work::Run(_)
                 | Work::BaseFix(_)
                 | Work::SpecRun(_)
                 | Work::ArchitectRun(_)
@@ -450,18 +465,22 @@ impl CommandRecord {
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
-                | Work::TriageRun(_)
+                | Work::TriageRun { .. }
                 | Work::Experiment(_)
                 | Work::Process { .. } => None,
             },
         });
         let name = match work {
+            Work::Starting { command, issue, .. } => match issue {
+                Some(issue) => format!("{}#{}", issue.repo_slug(), issue.number),
+                None => format!("{}-{stamp}", command.folder()),
+            },
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::ReviewRun(_) => format!("review-{stamp}"),
             Work::FixRun(_) => format!("fix-{stamp}"),
-            Work::TriageRun(_) => format!("triage-{stamp}"),
+            Work::TriageRun { .. } => format!("triage-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
             Work::Process { name, .. } => format!("process-{name}-{stamp}"),
@@ -490,10 +509,12 @@ impl CommandRecord {
             ended_at: None,
             end_time_estimated: false,
             stages: Vec::new(),
+            quota_wait_until: None,
             session_log: None,
             outcome: None,
             run_metrics: None,
             cause: None,
+            waiting_for: Vec::new(),
             limit: None,
             resume_command: None,
             issue_branch: None,

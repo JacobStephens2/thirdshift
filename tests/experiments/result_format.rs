@@ -91,8 +91,8 @@ fn documented_format_matches_real_experiment_results() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     assert_eq!(
-        experiment["format"], 11,
-        "format 11 marks suspended Trials and excludes their time"
+        experiment["format"], 12,
+        "format 12 marks suspended Trials and excludes their time, retaining format 11's host wait"
     );
     let schema = fixture.scenario.run(&["console", "openapi"]);
     assert_eq!(schema.code, Some(0), "{}", schema.stderr);

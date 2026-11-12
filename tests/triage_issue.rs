@@ -14,6 +14,159 @@ fn recommend(scenario: &Scenario, recommendation: &str) {
 }
 
 #[test]
+fn security_finding_triage_uses_repository_categories_instead_of_its_factory_label() {
+    for existing_category in [false, true] {
+        for recommend_only in [false, true] {
+            let scenario = Scenario::new();
+            scenario.repo_has_labels(&["bug", "enhancement", "security-finding", "needs-triage"]);
+            let labels = if existing_category {
+                vec!["security-finding", "enhancement", "needs-triage"]
+            } else {
+                vec!["security-finding", "needs-triage"]
+            };
+            scenario.issue_labelled(7, &labels);
+            let mut before = scenario.gh_state();
+            before["private"] = json!(true);
+            scenario.write_gh_state(&before);
+            // Model the reported response: copy the finding's marker unless
+            // the session is supplied the repository's usable categories.
+            let invalid = RECOMMENDATION.replace("\"bug\"", "\"security-finding\"");
+            scenario.agent_does(&format!(
+                "case \"$FAKE_CLAUDE_PROMPT\" in\n\
+                 *'Available repository categories (JSON): [\"bug\",\"enhancement\"]'*) recommendation='{RECOMMENDATION}' ;;\n\
+                 *) recommendation='{invalid}' ;;\n\
+                 esac\n\
+                 printf 'Triage recommendation: %s\\n' \"$recommendation\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
+            ));
+            let mut args = vec!["triage", "7", "base", "main"];
+            if recommend_only {
+                args.push("--recommend-only");
+            }
+            let result = scenario.run(&args);
+            assert_eq!(
+                result.code,
+                Some(0),
+                "existing_category={existing_category}, recommend_only={recommend_only}: {}\nlabels: {:?}\ncomments: {}",
+                result.stderr,
+                scenario.issue_labels(7),
+                scenario.gh_state()["comments"]["7"]
+            );
+            if recommend_only {
+                assert_eq!(scenario.gh_state(), before);
+            } else {
+                let expected_category = if existing_category {
+                    "enhancement"
+                } else {
+                    "bug"
+                };
+                let labels = scenario.issue_labels(7);
+                assert_eq!(labels.len(), 3, "{labels:?}");
+                for expected in ["security-finding", expected_category, "ready-for-human"] {
+                    assert!(labels.iter().any(|label| label == expected), "{labels:?}");
+                }
+                let after = scenario.gh_state();
+                assert_eq!(after["comments"]["7"].as_array().unwrap().len(), 1);
+                assert!(scenario.gh_calls_of("issue", "create").is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn finding_category_guidance_uses_actual_names_and_filters_factory_labels() {
+    let scenario = Scenario::new();
+    let category = "Maintenance \"urgent\"";
+    scenario.repo_has_labels(&[
+        category,
+        "SECURITY-FINDING",
+        "needs-triage",
+        "needs-info",
+        "ready-for-human",
+        "ready-for-agent",
+        "wontfix",
+        "in-progress",
+        "agent-failed",
+        "architect-idea",
+        "architect-plan",
+        "base-fix",
+        "security-fix",
+        "flaky-test",
+        "comma,separated",
+    ]);
+    scenario.issue_labelled(7, &["security-finding", "needs-triage"]);
+    let mut recommendation: serde_json::Value = serde_json::from_str(RECOMMENDATION).unwrap();
+    recommendation["category"] = json!(category);
+    recommend(&scenario, &recommendation.to_string());
+    let before = scenario.gh_state();
+    let result = scenario.run(&["triage", "7", "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    let categories = prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("Available repository categories (JSON): "))
+        .expect("existing-issue Triage must supply usable category names");
+    let categories: Vec<String> = serde_json::from_str(categories).unwrap();
+    assert_eq!(categories, [category]);
+    assert_eq!(scenario.gh_state(), before);
+}
+
+#[test]
+fn existing_finding_category_preservation_does_not_accept_a_factory_recommendation() {
+    for recommend_only in [false, true] {
+        let scenario = Scenario::new();
+        scenario.repo_has_labels(&["bug", "enhancement", "security-finding"]);
+        scenario.issue_labelled(7, &["enhancement", "security-finding", "needs-triage"]);
+        recommend(
+            &scenario,
+            &RECOMMENDATION.replace("\"bug\"", "\"security-finding\""),
+        );
+        let before = scenario.gh_state();
+        let mut args = vec!["triage", "7"];
+        if recommend_only {
+            args.push("--recommend-only");
+        }
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("the Triage category must be a repository category label")
+        );
+        assert!(scenario.issue_comments(7).is_empty());
+        if recommend_only {
+            assert_eq!(scenario.gh_state(), before);
+        } else {
+            assert_eq!(
+                scenario.issue_labels(7),
+                [
+                    "enhancement",
+                    "security-finding",
+                    "ready-for-human",
+                    "agent-failed"
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn failed_issue_triage_retains_its_target_in_status() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
+    scenario.agent_does("exit 1");
+    let result = scenario.run(&["triage", "7"]);
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let command = &status["commands"][0];
+    assert_eq!(command["kind"], "Triage run");
+    assert_eq!(command["issue"]["number"], 7, "{command}");
+    assert_eq!(command["issue"]["url"], scenario.issue_url(7));
+    assert_eq!(command["outcome"], "failed");
+}
+
+#[test]
 fn issue_triage_updates_the_target_and_holds_readiness_for_the_day_shift() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug", "enhancement"]);

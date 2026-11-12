@@ -2,7 +2,7 @@ use super::*;
 
 const ID: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
-fn verdict(outcome: &str) -> Value {
+pub(super) fn verdict(outcome: &str) -> Value {
     json!({
         "id": ID, "state": "completed", "pending_rechecks": [],
         "verdict": {"verdict": outcome, "suites": {"code-review": {
@@ -12,7 +12,11 @@ fn verdict(outcome: &str) -> Value {
     })
 }
 
-fn cargo_reports(release: &Release, views: &[Value]) {
+pub(super) fn cargo_reports(release: &Release, views: &[Value]) {
+    let driver = release.bin().join("cargo-driver");
+    if !driver.exists() {
+        fs::copy(release.bin().join("cargo"), driver).unwrap();
+    }
     fs::write(
         release.root().join("experiment-views.json"),
         json!(views).to_string(),
@@ -21,12 +25,19 @@ fn cargo_reports(release: &Release, views: &[Value]) {
     fs::write(release.bin().join("cargo"), r#"#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
 args = sys.argv[sys.argv.index('--') + 1:]
-if args == ['--release-summary']:
-    os.execv(os.environ['THIRDSHIFT_TEST_BINARY'], [os.environ['THIRDSHIFT_TEST_BINARY'], *args])
 root = pathlib.Path(os.environ['FAKE_GH_STATE']).parent
+if args == ['--release-summary'] or args[0] == 'fix':
+    driver = str(root / 'bin/cargo-driver')
+    os.execv(driver, [driver, *sys.argv[1:]])
 branch = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/release-0.2.0'], text=True).strip()
 with (root / 'experiment-calls.jsonl').open('a') as calls:
     calls.write(json.dumps(dict(args=args, branch=branch)) + '\n')
+# A concrete release-race fixture mutates the PR during the first Experiment.
+action = root / 'during-experiment.sh'
+if action.exists():
+    consumed = action.with_suffix('.ran')
+    action.rename(consumed)
+    subprocess.check_call(['bash', str(consumed)])
 views = root / 'experiment-views.json'
 remaining = json.loads(views.read_text())
 assert remaining, 'unexpected Experiment call'
@@ -38,7 +49,7 @@ print(json.dumps(view))
 "#).unwrap();
 }
 
-fn calls(release: &Release) -> Vec<Value> {
+pub(super) fn calls(release: &Release) -> Vec<Value> {
     fs::read_to_string(release.root().join("experiment-calls.jsonl"))
         .unwrap_or_default()
         .lines()

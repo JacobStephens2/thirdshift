@@ -735,7 +735,7 @@ impl GitHub {
 
     pub(crate) fn inbox_findings(&self, repo: &str) -> Result<BTreeMap<String, bool>> {
         self.list_security_records(repo, || {
-            if let Some(warning) = self.inbox_quotas()?.warning() {
+            if let Some(warning) = super::QuotaWait::warning(&self.inbox_quotas()?) {
                 bail!(warning);
             }
             Ok(())

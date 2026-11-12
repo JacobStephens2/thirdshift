@@ -13,6 +13,7 @@ use crate::issue::{IssueInput, IssueUrl, Repo};
 use crate::labels::{self, Label};
 use crate::{command_limit, launch, logs, prompt, session, worktree};
 
+mod correction;
 mod existing;
 mod images;
 mod pass;
@@ -287,6 +288,16 @@ fn is_factory_label(name: &str) -> bool {
         || crate::github::is_security_finding_label(name)
 }
 
+/// Guidance and publication share the same usable repository categories.
+fn repository_categories(repo: &Repo, github: &GitHub) -> Result<Vec<String>> {
+    Ok(github
+        .repository_labels(&repo.slug())?
+        .names()
+        .filter(|name| !is_factory_label(name) && !name.contains(','))
+        .map(str::to_owned)
+        .collect())
+}
+
 /// The result retained by stdout, the Command record and Run notification.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Ended {
@@ -381,16 +392,15 @@ fn check_publication(
             targets,
         });
     }
-    let categories = github.repository_labels(&repo.slug())?;
+    let categories = repository_categories(repo, github)?;
     let filings = recommendation
         .issues
         .iter()
         .map(|issue| {
             let wanted = issue.category.as_deref().unwrap_or(&recommendation.category);
             let category = categories
-                .names()
+                .iter()
                 .find(|name| name.eq_ignore_ascii_case(wanted))
-                .filter(|name| !is_factory_label(name) && !name.contains(','))
                 .context(
                     "the Triage category must be a repository category label, not a triage state or another factory label",
                 )?;
@@ -399,7 +409,7 @@ fn check_publication(
                 .expect("parse_recommendation resolves every proposed issue's state");
             let readiness_held = triaged == labels::READY_FOR_AGENT && !allow_ready_for_agent;
             Ok(Filing {
-                category: category.into(),
+                category: category.clone(),
                 state: if readiness_held {
                     labels::NEEDS_TRIAGE
                 } else {
@@ -510,11 +520,17 @@ pub fn run(
 ) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
-    logs::started(logs::Work::TriageRun(&repo), harness);
     let target = match input {
         Input::Issue(issue) => Some(issue),
         Input::Report(_) => None,
     };
+    logs::started(
+        logs::Work::TriageRun {
+            repo: &repo,
+            issue: target,
+        },
+        harness,
+    );
     let base = match target {
         Some(issue) => {
             let directory = launch::LaunchDirectory::open_for_run(issue)?;
@@ -561,19 +577,12 @@ fn investigate(
             Input::Issue(issue) => {
                 existing::check_trust(issue, &GitHub::new())?;
                 images::hand_over(issue, checkout.path())?;
-                prompt::triage_issue(&skill.path, issue, options.read_machine)
+                let categories = repository_categories(repo, &GitHub::new())?;
+                prompt::triage_issue(&skill.path, issue, &categories, options.read_machine)
             }
         };
-        let message = sessions.run_to_final_message(
-            session::Purpose::Ordinary,
-            session::Kind::Triage,
-            &session_prompt,
-        )?;
-        let mut recommendation = parse_recommendation(message.as_deref())?;
+        let mut recommendation = correction::recommendation(sessions, &session_prompt, target)?;
         let github = GitHub::new();
-        if let Some(target) = target {
-            existing::check_recommendation(&mut recommendation, target)?;
-        }
         let publication = check_publication(
             &recommendation,
             repo,

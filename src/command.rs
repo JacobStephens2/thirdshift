@@ -116,6 +116,9 @@ pub fn start(
     // First, so no interrupt can end the command once its notification is
     // checked.
     interrupt::install().map_err(|error| failure(&error))?;
+    if let About::Issue(issue) = &about {
+        logs::preflight_issue(issue);
+    }
     let notification = if started.is_some() {
         Some(
             RunNotification::new(ask(&config), &config.email, about)
@@ -147,6 +150,13 @@ impl Started {
     pub fn took(&mut self, issue: &IssueUrl, title: String, is_spec: bool) {
         if let Some(notification) = &mut self.notification {
             notification.took(issue, title, is_spec);
+        }
+    }
+
+    /// Retain a Fix run's PR snapshot before Delivery can fail or be interrupted.
+    pub fn pull_request(&mut self, pr: &crate::review::PullRequestUrl, title: &str) {
+        if let Some(notification) = &mut self.notification {
+            notification.pull_request(pr, title);
         }
     }
 
@@ -186,6 +196,14 @@ impl Started {
             | Ending::Security(_)
             | Ending::Skipped(_) => None,
         };
+        // progress::step keeps lines in a Command log a Quota wait may already
+        // have opened. The raw pre-audit diagnostic stays on the terminal.
+        if let Some(diagnostic) = account
+            .pre_audit_failure
+            .and(account.ended.as_ref().err().map(|cause| cause.full()))
+        {
+            eprintln!("{diagnostic}");
+        }
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {
             notification.finish(&account);

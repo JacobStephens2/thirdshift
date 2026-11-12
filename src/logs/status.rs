@@ -29,6 +29,7 @@ struct Status<'a> {
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
     pass_starts: &'a [PassStart],
+    github_quota_wait: Option<String>,
     /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
     /// no answer is kept: with no ready pull requests to read, or before
     /// the first read.
@@ -71,6 +72,7 @@ impl Read {
                 .into_rows(all),
             idle_passes: &self.snapshot.idle_passes,
             pass_starts: &self.snapshot.pass_starts,
+            github_quota_wait: self.kept.quota_wait(),
             github_answer_age_seconds: self.kept.age.map(|age| age.as_secs()),
             github_last_answered_at: self.kept.last_answered_at(),
             github_failure: self.kept.failure.as_deref(),
@@ -261,6 +263,9 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         for pass in status.pass_starts.iter().filter(|_| include_local) {
             println!("{}", pass.line());
         }
+        if include_local && let Some(wait) = status.github_quota_wait {
+            println!("{wait}");
+        }
     }
     Ok(())
 }
@@ -276,6 +281,7 @@ pub(super) fn stage_text(command: &Command) -> String {
         command.state,
         command.stage.as_ref(),
         command.health.as_ref(),
+        &command.record.waiting_for,
     )
 }
 
@@ -284,6 +290,7 @@ fn stage_details(
     state: &str,
     stage: Option<&super::reading::CurrentStage>,
     health: Option<&super::reading::Health>,
+    waiting_for: &[String],
 ) -> String {
     if let Some(outcome) = outcome {
         return outcome.to_owned();
@@ -308,6 +315,9 @@ fn stage_details(
             }
         },
     );
+    if state == "live" && !waiting_for.is_empty() {
+        text.push_str(&format!(" · {}", waiting_for.join(", ")));
+    }
     if let Some(health) = health.and_then(super::reading::Health::text) {
         text.push_str(&format!(" · {health}"));
     }

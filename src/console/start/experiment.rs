@@ -50,7 +50,7 @@ pub(in crate::console) fn properties() -> Value {
     ] {
         properties.insert(key.into(), json!({"type":"integer"}));
     }
-    for key in ["release", "yes"] {
+    for key in ["release", "yes", "no_wait"] {
         properties.insert(key.into(), json!({"type":"boolean"}));
     }
     for key in ["suite", "panel_seat", "people_reader"] {
@@ -89,7 +89,7 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
             args.push(candidate.into());
         } else if value.is_boolean() {
             if value == true {
-                args.push(format!("--{key}"));
+                args.push(format!("--{}", key.replace('_', "-")));
             }
         } else if let Some(items) = value.as_array() {
             let flag = format!("--{}", key.replace('_', "-"));

@@ -17,6 +17,21 @@ pub struct Reservation {
 }
 
 impl Reservation {
+    /// Observe an issue's reservation without acquiring or changing it. A
+    /// linked issue in another repository must be read from that repository,
+    /// never from a same-numbered ref on the Launch directory's origin.
+    pub fn is_held(launch: &Git, issue: &IssueUrl) -> Result<bool> {
+        let origin = launch.run(&["config", "remote.origin.url"])?;
+        let remote = if issue.matches_origin(&origin) {
+            "origin".to_owned()
+        } else {
+            format!("https://github.com/{}.git", issue.repo_slug())
+        };
+        Ok(!launch
+            .run(&["ls-remote", "--refs", &remote, &reference(issue.number)])?
+            .is_empty())
+    }
+
     /// Create a unique commit and atomically reserve `issue` with an empty
     /// lease. Existing reservations are never adopted, expired or overwritten.
     /// Errors with an uncertain remote outcome retain the ref for recovery.

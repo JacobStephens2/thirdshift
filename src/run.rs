@@ -57,28 +57,45 @@ impl Goal {
 }
 
 /// A successful Ticket run ending: a PR, a bug handed back for information,
-/// or a Custom process's Architecture review ending before Delivery.
+/// a Base branch CI-fix with no commit, or a Custom process's Architecture
+/// review ending before Delivery.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolution {
-    PullRequest { url: String, goal: Goal },
-    NotReproduced { comment_url: String },
-    ArchitectureReview { url: String, reason: String },
+    PullRequest {
+        url: String,
+        goal: Goal,
+    },
+    NotReproduced {
+        comment_url: String,
+    },
+    ArchitectureReview {
+        url: String,
+        reason: String,
+    },
+    BaseCiUnchanged {
+        url: String,
+        base: String,
+        commit: String,
+    },
 }
 
 impl Resolution {
     pub fn goal(&self) -> Option<Goal> {
         match self {
             Self::PullRequest { goal, .. } => Some(*goal),
-            Self::NotReproduced { .. } | Self::ArchitectureReview { .. } => None,
+            Self::NotReproduced { .. }
+            | Self::ArchitectureReview { .. }
+            | Self::BaseCiUnchanged { .. } => None,
         }
     }
 
-    /// The PR, triage comment or Architecture review issue the ending points to.
+    /// The PR, triage comment, review issue or unchanged Base branch commit.
     pub fn url(&self) -> &str {
         match self {
             Self::PullRequest { url, .. } => url,
             Self::NotReproduced { comment_url } => comment_url,
             Self::ArchitectureReview { url, .. } => url,
+            Self::BaseCiUnchanged { url, .. } => url,
         }
     }
 }
@@ -366,7 +383,9 @@ fn claim_ending(outcome: &Result<Reached, FailedRun>) -> claim::Ending {
         Ok(reached) => match &reached.resolution {
             Resolution::PullRequest { goal, .. } => claim::Ending::Reached(*goal),
             Resolution::NotReproduced { .. } => claim::Ending::NotReproduced,
-            Resolution::ArchitectureReview { .. } => claim::Ending::BeforeDelivery,
+            Resolution::ArchitectureReview { .. } | Resolution::BaseCiUnchanged { .. } => {
+                claim::Ending::BeforeDelivery
+            }
         },
         Err(failed) if failed.held() => claim::Ending::Held,
         Err(failed) if failed.waiting() => claim::Ending::Waiting,
@@ -777,13 +796,14 @@ mod tests {
             let spec_run = match work {
                 Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
-                Work::PickupRun(_)
+                Work::Starting { .. }
+                | Work::PickupRun(_)
                 | Work::ArchitectRun(_)
                 | Work::SecurityRun(_)
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
-                | Work::TriageRun(_)
+                | Work::TriageRun { .. }
                 | Work::Experiment(_)
                 | Work::Process { .. } => {
                     panic!("not a Run's work")

@@ -1,4 +1,4 @@
-# Experiment results (format 11)
+# Experiment results (format 12)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 11` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 11.
+`format: 12` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 12.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -19,6 +19,9 @@ and the contents of review reports are not stable. Dynamic map keys (suite names
 Model names and Void causes) vary with the Experiment. Unknown measurements are
 `null`, never zero. Timestamps are RFC 3339 strings; paths are JSON strings local
 to the machine retaining the Experiment.
+
+Format 11 adds `waiting_for`, `no_wait` and `commands_at_start`: the live host
+wait and the number of other live Commands at a start using `--no-wait`.
 
 The private `experiment.json` already has `format: 1`. The CLI view projects its
 metadata and retained evidence; it is not a copy of that internal storage file.
@@ -213,6 +216,13 @@ change in any state without changing the Experiment's identity, Bar or results.
 true on later resumes. These fields do not participate in Experiment identity
 or the Bar.
 
+`waiting_for` lists the other live Commands this invocation is waiting for on
+the same machine and OS account; it is empty outside that wait. `no_wait` says
+whether the latest invocation bypassed the wait. `commands_at_start` counts its
+other live Commands at startup with `--no-wait`, zero otherwise. These facts
+are saved on each start or resume and displayed beside the Verdict; older
+Experiments default to an empty list, false and zero.
+
 `running_trials` gives active Trial IDs and start times. `sessions` inventories
 retained Trial Sessions: opaque Session ID, Trial ID, zero-based attempt index
 and whether the readable file is an OTLP trace. Read one with
@@ -243,7 +253,7 @@ shortest cache-write TTL; provide a table for your billing tier or other Models.
 After any Trial starts, prices cannot change. Resuming without `--prices` keeps
 the saved table; passing it again checks that the contents still match.
 
-Format 11 records each attempt's optional `timings.suspended_seconds`, measured
+Format 12 records each attempt's optional `timings.suspended_seconds`, measured
 by the owning Command; an absent field means zero. A Trial with any Suspended
 time, including in an earlier attempt, is marked `suspended` in
 `accounting.trials`. Its original Trial, role and Session times remain there as
@@ -447,7 +457,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 11,
+    "format": 12,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -467,6 +477,9 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "resume_command": "string?",
     "command_log": "string?",
     "release": "boolean",
+    "waiting_for": ["string"],
+    "no_wait": "boolean",
+    "commands_at_start": "integer",
     "created_at": "string",
     "tasks": [{"suite": "string", "name": "string"}],
     "running_trials": [{"id": "string", "started_at": "string"}],

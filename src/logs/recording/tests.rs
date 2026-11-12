@@ -27,6 +27,8 @@ struct Memory {
     terminal_fails: bool,
     record_write_fails: bool,
     reused_pid: bool,
+    /// Session traces that read as observed, each with one tool error.
+    observed_sessions: Vec<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -137,9 +139,23 @@ impl Outside for Scripted {
 
     fn session_signals(
         &mut self,
-        _log: &Path,
+        log: &Path,
     ) -> Option<crate::logs::session_signals::SessionSignals> {
-        None
+        let observed = self
+            .0
+            .lock()
+            .unwrap()
+            .observed_sessions
+            .iter()
+            .any(|seen| seen == log);
+        observed.then(|| crate::logs::session_signals::SessionSignals {
+            harness: Some("claude".into()),
+            harness_version: None,
+            signals: crate::logs::session_signals::Signals {
+                tool_errors: 1,
+                ..Default::default()
+            },
+        })
     }
 
     fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>> {
@@ -415,7 +431,13 @@ fn every_command_kind_records_suspension_in_its_live_stage() {
         (Begin::PickupRun, Work::PickupRun(&listed)),
         (Begin::SecurityRun, Work::SecurityRun(&repo)),
         (Begin::ScoringRun, Work::ScoringRun(&repo)),
-        (Begin::TriageRun { pass: false }, Work::TriageRun(&repo)),
+        (
+            Begin::TriageRun { pass: false },
+            Work::TriageRun {
+                repo: &repo,
+                issue: None,
+            },
+        ),
         (Begin::FixRun { pass: false }, Work::FixRun(&repo)),
         (Begin::ReviewRun { pass: false }, Work::ReviewRun(&repo)),
         (Begin::Experiment, Work::Experiment(&repo)),
@@ -500,6 +522,36 @@ fn a_stop_request_in_the_file_adapter_is_logged_before_the_ending() {
         .find("Run #7 stopped from the CLI by jacob")
         .expect(&activity);
     assert!(stopped < activity.find("Run #7 ended: interrupted").unwrap());
+}
+
+#[test]
+fn quota_wait_restores_the_previous_stage_without_restarting_its_clock() {
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    record.stage(StageName::CiWatch, None);
+    let stages_before = memory.command_record().stages.len();
+    let began = memory
+        .command_record()
+        .current_stage()
+        .unwrap()
+        .began_at
+        .clone();
+    record.quota_wait(Some("2026-11-11T12:01:37Z"));
+    let waiting = memory.command_record();
+    assert_eq!(
+        waiting.quota_wait_until.as_deref(),
+        Some("2026-11-11T12:01:37Z")
+    );
+    assert_eq!(waiting.current_stage().unwrap().began_at, began);
+    record.quota_wait(None);
+    let resumed = memory.command_record();
+    assert!(resumed.quota_wait_until.is_none());
+    assert_eq!(resumed.current_stage().unwrap().name, "CI watch");
+    assert_eq!(resumed.current_stage().unwrap().began_at, began);
+    assert_eq!(resumed.stages.len(), stages_before);
 }
 
 #[test]
@@ -641,6 +693,137 @@ fn completion_metrics_place_each_stage_against_repository_history() {
                 }))
                 .unwrap_or(serde_json::Value::Null)
         );
+    }
+}
+
+#[test]
+fn review_triage_and_fix_runs_save_their_run_metrics_at_completion() {
+    let time = |value: &str| DateTime::parse_from_rfc3339(value).unwrap();
+    let repo = issue().repo();
+    let review = Path::new("/sessions/review.jsonl");
+    let triage = Path::new("/sessions/triage.jsonl");
+    let repairs = [
+        Path::new("/sessions/repair-1.jsonl"),
+        Path::new("/sessions/repair-2.jsonl"),
+    ];
+    struct Case<'a> {
+        begin: Begin<'a>,
+        work: Work<'a>,
+        kind: &'a str,
+        stages: Vec<(StageName, Option<&'a Path>)>,
+        observed: usize,
+        repairs: usize,
+        ci_rounds: usize,
+        // The first stage's Session's review findings.
+        review_findings: serde_json::Value,
+    }
+    let cases = [
+        Case {
+            begin: Begin::ReviewRun { pass: false },
+            work: Work::ReviewRun(&repo),
+            kind: "Review run",
+            stages: vec![
+                (StageName::CodeReview, Some(review)),
+                (StageName::PullRequest, None),
+            ],
+            observed: 1,
+            repairs: 0,
+            ci_rounds: 0,
+            review_findings: serde_json::json!({"standards": 2, "spec": 1}),
+        },
+        Case {
+            begin: Begin::TriageRun { pass: false },
+            work: Work::TriageRun {
+                repo: &repo,
+                issue: None,
+            },
+            kind: "Triage run",
+            stages: vec![(StageName::Triage, Some(triage))],
+            observed: 1,
+            repairs: 0,
+            ci_rounds: 0,
+            review_findings: serde_json::Value::Null,
+        },
+        Case {
+            begin: Begin::FixRun { pass: false },
+            work: Work::FixRun(&repo),
+            kind: "Fix run",
+            stages: vec![
+                (StageName::Repair, Some(repairs[0])),
+                (StageName::CiWatch, None),
+                (StageName::Repair, Some(repairs[1])),
+                (StageName::CiWatch, None),
+            ],
+            observed: 2,
+            repairs: 2,
+            ci_rounds: 2,
+            review_findings: serde_json::Value::Null,
+        },
+    ];
+    for case in cases {
+        // Moving these fields out leaves the expectations readable on `case`.
+        let Case {
+            begin,
+            work,
+            kind,
+            stages,
+            ..
+        } = case;
+        let memory = Scripted::default();
+        {
+            let mut memory = memory.0.lock().unwrap();
+            memory.observed_sessions = [review, triage, repairs[0], repairs[1]]
+                .map(PathBuf::from)
+                .to_vec();
+            memory.files.insert(
+                "/sessions/review.review-summary.json".into(),
+                r#"{"standards": 2, "spec": 1}"#.into(),
+            );
+            memory.now = Some(time("2026-10-03T12:00:00-04:00"));
+        }
+        let mut record = Record::new(memory.clone());
+        record.begin(begin);
+        record.configured(&config(false));
+        record.started(work, &harness());
+        for (minute, (stage, log)) in stages.iter().enumerate() {
+            memory.0.lock().unwrap().now = Some(time(&format!("2026-10-03T12:0{minute}:00-04:00")));
+            record.stage(*stage, *log);
+        }
+        memory.0.lock().unwrap().now = Some(time("2026-10-03T12:08:00-04:00"));
+        let ended = crate::run::Ended {
+            outcome: Ok(crate::run::Reached {
+                resolution: crate::run::Resolution::PullRequest {
+                    url: "https://github.com/acme/widgets/pull/1".into(),
+                    goal: crate::run::Goal::ReadyForReview,
+                },
+                log: None,
+                ticket_lines: Vec::new(),
+            }),
+            base_fix: None,
+            advice: Vec::new(),
+        };
+        record.finished(&crate::run_ending::Account::of_run(&ended));
+        let path = record.record_path().unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&memory.file(path)).unwrap();
+        assert_eq!(saved["kind"], kind);
+        let metrics = &saved["run_metrics"];
+        assert_eq!(metrics["total_minutes"], 8.0, "{kind}: {metrics}");
+        // A Fix run opens in its pull request stage, before any Session.
+        let name = stages[0].0.name();
+        let session = metrics["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stage| stage["name"] == name)
+            .unwrap_or_else(|| panic!("{kind}: no {name} stage in {metrics}"));
+        assert_eq!(session["session_signals"]["harness"], "claude", "{kind}");
+        let summary = &metrics["session_signals"][name];
+        assert_eq!(summary["missing_sessions"], 0, "{kind}");
+        assert_eq!(summary["observed_sessions"], case.observed, "{kind}");
+        assert_eq!(summary["signals"]["tool_errors"], case.observed, "{kind}");
+        assert_eq!(metrics["repairs"], case.repairs, "{kind}");
+        assert_eq!(metrics["ci_rounds"], case.ci_rounds, "{kind}");
+        assert_eq!(session["review_findings"], case.review_findings, "{kind}");
     }
 }
 

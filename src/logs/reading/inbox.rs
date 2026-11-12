@@ -926,7 +926,7 @@ pub(super) fn active_runs(entries: &[Entry]) -> usize {
         .count()
 }
 
-fn active(command: &Command) -> bool {
+pub(super) fn active(command: &Command) -> bool {
     command.state == "live"
         || command
             .dispatched
@@ -938,7 +938,7 @@ fn active(command: &Command) -> bool {
 fn live_problem(command: &Command) -> Option<NeedsYouKind> {
     let own = match command.health {
         Some(Health::Silent { .. }) => Some(NeedsYouKind::Silent),
-        Some(Health::Slow { .. }) => Some(NeedsYouKind::Slow),
+        Some(Health::Slow { step: 2, .. }) => Some(NeedsYouKind::Slow),
         _ => None,
     };
     own.into_iter()
