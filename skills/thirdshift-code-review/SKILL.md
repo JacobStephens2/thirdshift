@@ -65,7 +65,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 Include this shared reporting instruction in **both sub-agent prompts**:
 
-> List the files you read, using repository-relative paths, including supporting files. For a deleted file, read its removed contents in the pinned diff and list the deleted path. For every finding that says behaviour is wrong, include a test or command, written out in full, that fails if the finding is right. Keep the prose under 800 words; written-out tests, commands and files-read lists are outside that limit.
+> Report only actionable findings that warrant a change or human follow-up. Omit declined, rejected or accepted-as-is observations from the findings list. List the files you read, using repository-relative paths, including supporting files. For a deleted file, read its removed contents in the pinned diff and list the deleted path. For every finding that says behaviour is wrong, include a test or command, written out in full, that fails if the finding is right. Keep the prose under 800 words; written-out tests, commands and files-read lists are outside that limit.
 
 Also include in both prompts: "Prioritize changed hunks and supporting symbols, using searches and bounded reads before widening. Check applicable standards and ADRs. For any generated-output exclusion you accept, list the path, reviewed sources, regeneration command/result and meaningful behavior validation separately; never count excluded output as read. Report gaps in the exclusion evidence as unread unless you inspect the output."
 
@@ -99,7 +99,7 @@ Include the final files-read list for each reviewer, separately list every confi
 
 If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, confirmed generated-output exclusions with evidence, and any remaining unread changed files (or explicitly none). Write both reports even when there are no findings.
 
-Beside those reports, write `summary.json` with exactly two keys: `{"standards":2,"spec":1}`. Each value is that axis's nonnegative integer finding count across its initial review and follow-up, counting each finding once, including findings later fixed or declined. Use `0` when the axis found nothing and `null` when it was skipped or could not report a count. These counts describe what the reviewers raised, before the implementing agent decides findings. When the prompt names no report directory, report in the conversation only.
+Beside those reports, write `summary.json` with exactly two keys: `{"standards":2,"spec":1}`. Each value is that axis's nonnegative integer actionable finding count across its initial review and follow-up, counting each actionable finding once, including findings later fixed. Use `0` when no change or human follow-up is needed and `null` when the axis was skipped or could not report a count. Exclude declined or accepted observations that require no change. These counts describe what the reviewers raised, before the implementing agent decides findings. When the prompt names no report directory, report in the conversation only.
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
