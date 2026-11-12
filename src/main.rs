@@ -216,8 +216,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json] [--machine <name>]  Show a Command, its tree or a span
-       thirdshift metrics [<command>] [--fleet | --machine <name>] [--window <7d|30d|12w|all>] [<filters>] [--json]  Show Run metrics, outcome stacks or trends, here or across the Fleet
-       thirdshift metrics --push [<destination>] [--window <7d|30d|12w|all>] [<filters>]  Send this machine's trends to its report destinations
+       thirdshift metrics [<command>] [--fleet | --machine <name> | --push [<destination>]] [--window <7d|30d|12w|all>] [<filters>] [--json]  Show Run metrics, outcome stacks or trends, here or across the Fleet; --push sends this machine's
        thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
