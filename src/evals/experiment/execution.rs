@@ -215,6 +215,7 @@ impl<'a> Execution<'a> {
         // The unit name stays in the attempt for `journalctl --user -u` after.
         fs::write(attempt.join("scope"), launched.unit())?;
         trace.inherit(launched.command())?;
+        let suspended_before = logs::suspended_seconds();
         let output = process::output_until(
             &mut launched,
             None,
@@ -235,6 +236,7 @@ impl<'a> Execution<'a> {
                 Ok(())
             },
         );
+        let suspended_seconds = logs::suspended_seconds().saturating_sub(suspended_before);
         let stopped_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
@@ -299,6 +301,7 @@ impl<'a> Execution<'a> {
                 Err(error) => return Err(error),
             }
         };
+        protocol.timings.suspended_seconds = suspended_seconds;
         if protocol.outcome == Outcome::Failed && cap_killed() {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::MemoryCap);

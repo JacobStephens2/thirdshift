@@ -97,6 +97,14 @@ impl Started {
 }
 
 impl<O: Outside> Record<O> {
+    pub(super) fn suspended_seconds(&self) -> u64 {
+        self.command_record.as_ref().map_or(0, |(_, tree)| {
+            tree.command.stages.iter().fold(0, |total, stage| {
+                total.saturating_add(stage.suspended_seconds)
+            })
+        })
+    }
+
     /// Called by the periodic sampler and before transitions. Each reading
     /// replaces the baseline, so smaller clock corrections never accumulate.
     pub(super) fn check_suspension(&mut self) {

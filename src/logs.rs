@@ -685,3 +685,9 @@ fn record() -> MutexGuard<'static, Record<OnMachine>> {
     record.check_suspension();
     record
 }
+
+/// Cumulative Suspended time measured by this Command. Taking both readings
+/// under the recorder's lock also samples the clocks at a Trial's endpoints.
+pub(crate) fn suspended_seconds() -> u64 {
+    record().suspended_seconds()
+}

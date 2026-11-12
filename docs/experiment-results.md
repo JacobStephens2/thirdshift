@@ -1,4 +1,4 @@
-# Experiment results (format 10)
+# Experiment results (format 11)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 10` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 10.
+`format: 11` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 11.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -222,7 +222,8 @@ IDs are opaque: use the returned ID rather than constructing a filename.
 
 `results` holds terminal Trials. `unfinished_trials` holds checkpointed attempts
 awaiting continuation; a paused Experiment can have both. `minutes` sums each
-Arm's completed attempt durations, including voids and timeouts. Time spent
+Arm's completed attempt durations, including voids and timeouts, excluding
+Trials with Suspended time. Time spent
 paused between invocations at a usage limit is outside those durations.
 `voids` counts
 completed Void attempts and groups them by cause, including unfinished Trials.
@@ -242,6 +243,16 @@ shortest cache-write TTL; provide a table for your billing tier or other Models.
 After any Trial starts, prices cannot change. Resuming without `--prices` keeps
 the saved table; passing it again checks that the contents still match.
 
+Format 11 records each attempt's optional `timings.suspended_seconds`, measured
+by the owning Command; an absent field means zero. A Trial with any Suspended
+time, including in an earlier attempt, is marked `suspended` in
+`accounting.trials`. Its original Trial, role and Session times remain there as
+evidence. Its time is excluded from Arm and role summaries, Arm `minutes`,
+paired time ratios, time ceilings and future timing estimates. Outcomes, Scores,
+costs, tokens and Session counts still count. Suspension never reruns a Trial.
+Each Arm's `timing_excluded_trials` reports how many Trials were excluded;
+text and Console reports mention exclusions only when the count is nonzero.
+
 `accounting` reports each Trial's cost and active attempt time, its sessions with
 their attempt indices, observed Models, and the role of the Step that started
 them. Resumes and fallback sessions belong to that same Step. Arm totals and
@@ -256,7 +267,10 @@ budget. Completed interrupted Voids retain the saved Bar's retry policy.
 
 `paired_median_ratios` pairs terminal, non-Void Trials by suite, task and Trial
 index, divides Candidate by Baseline within each pair, then takes the median.
-It includes failed quality outcomes when their accounting is complete. Zero
+It includes failed quality outcomes when their accounting is complete. `pairs`
+counts non-Void pairs; `time_pairs` counts eligible time ratios. A pair with a
+suspended Trial contributes no time ratio, while its cost ratio still counts.
+Zero
 Baseline denominators are omitted for that metric; no eligible ratios means
 null. Old Experiments without a price table keep their original outcomes and
 show unknown priced costs. Pre-run estimates use the suite and the exact Arm
@@ -433,7 +447,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 10,
+    "format": 11,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -479,11 +493,11 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "Rate": {"input":"number", "output":"number", "cache_read":"number", "cache_write":"number"},
   "Accounting": {
     "baseline":"ArmAccounting", "candidate":"ArmAccounting", "trials":["TrialAccounting"],
-    "paired_median_ratios":{"cost":"number?", "time":"number?", "pairs":"integer"}
+    "paired_median_ratios":{"cost":"number?", "time":"number?", "pairs":"integer", "time_pairs":"integer"}
   },
   "TotalAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer"},
-  "ArmAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}},
-  "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
+  "ArmAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}, "timing_excluded_trials":"integer"},
+  "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "suspended":"boolean", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
   "SessionAccounting": {"attempt?":"integer", "path":"string", "role":"string", "time_ms":"integer", "models":{"*":"Measurement"}, "cost_usd":"number?", "gap":"string?"},
   "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
   "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string"},
@@ -535,7 +549,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "Attempt": {
     "version": 1, "outcome": "succeeded|delivered|stopped_to_ask|failed|void",
-    "timings": {"total_ms": "integer", "session_ms": "integer"},
+    "timings": {"total_ms": "integer", "session_ms": "integer", "suspended_seconds?": "integer"},
     "void_cause": "VoidCause?", "cause": "string?", "session_id": "string?",
     "log": "string?", "model_evidence": "string?",
     "reports": {"standards": "string?", "spec": "string?"},

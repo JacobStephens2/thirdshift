@@ -88,6 +88,7 @@ impl Monitor {
             timings: Timings {
                 total_ms,
                 session_ms: total_ms,
+                suspended_seconds: 0,
             },
             void_cause: Some(VoidCause::UsageLimit),
             cause: Some(Reached(Limit::default()).to_string()),

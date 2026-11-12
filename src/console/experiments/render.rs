@@ -299,6 +299,10 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
     }
     html.push_str(&leaks(view, csrf, can_act));
     html.push_str(&verdict(view));
+    let timing_note = view.accounting.timing_note();
+    if !timing_note.is_empty() {
+        html.push_str(&format!("<p>{}</p>", esc(&timing_note)));
+    }
     html.push_str(&people(view));
     if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
         html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
@@ -1064,6 +1068,9 @@ impl<'a> Cell<'a> {
             html.push_str(&format!("<div class=\"experiment-callout\"><p>Waiting on your recheck: {}.</p><code>{}</code><button type=\"button\" data-copy=\"{}\">Copy command</button><p data-copy-status role=\"status\"></p></div>", esc(&recheck_why(pending)), esc(&command), esc(&command)));
         }
         if let Some(result) = self.result {
+            if result.suspended() {
+                html.push_str("<p><strong>Suspended</strong> · left out of timing; outcome and cost still count.</p>");
+            }
             if let Some(score) = &result.score {
                 html.push_str("<dl><dt>Model Grader</dt><dd>");
                 if let Some(model) = &score.model {
