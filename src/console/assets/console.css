@@ -338,7 +338,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 .metrics-table thead th { color: var(--dim); font-weight: var(--head-weight); }
 .metrics-machines { padding-left: 1.2em; }
 .metrics-status { font-weight: var(--head-weight); }
-.metrics-status.cached, .metrics-status.unavailable { color: var(--look-text); }
+.metrics-status.cached, .metrics-status.reported, .metrics-status.unavailable { color: var(--look-text); }
 .metrics-status.refused, .metrics-status.incompatible { color: var(--urgent); }
 .metrics-bar { display: block; width: 10em; height: 12px; background: var(--panel-2); }
 .metrics .succeeded { fill: var(--ready); }

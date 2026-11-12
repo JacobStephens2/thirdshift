@@ -34,6 +34,7 @@ mod evals;
 #[cfg(test)]
 mod parity;
 mod peek;
+pub(crate) mod report;
 mod resources;
 mod restart;
 mod scoring;
@@ -125,15 +126,29 @@ pub(crate) enum Scope {
     Act,
     Run,
     Admin,
+    /// Upload only the token holder's own Run metrics summary; never a
+    /// person's scope (ADR 0026, #2036 Q4.2).
+    Report,
 }
 
 impl Scope {
+    /// The five scopes a person on the sign-in list can hold.
     pub(crate) const ALL: [Self; 5] = [
         Self::Read,
         Self::Security,
         Self::Act,
         Self::Run,
         Self::Admin,
+    ];
+
+    /// Every scope a token can carry: a person's five and `report`.
+    pub(crate) const TOKEN: [Self; 6] = [
+        Self::Read,
+        Self::Security,
+        Self::Act,
+        Self::Run,
+        Self::Admin,
+        Self::Report,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -143,18 +158,38 @@ impl Scope {
             Self::Act => "act",
             Self::Run => "run",
             Self::Admin => "admin",
+            Self::Report => "report",
         }
     }
 
+    /// A person's scopes, from a comma-separated list.
     pub(crate) fn parse(value: &str) -> Result<Vec<Self>> {
+        Self::parse_from(value, &Self::ALL)
+    }
+
+    /// A token's scopes: a person's, or `report` alone.
+    pub(crate) fn parse_token(value: &str) -> Result<Vec<Self>> {
+        let scopes = Self::parse_from(value, &Self::TOKEN)?;
+        ensure!(
+            !scopes.contains(&Self::Report) || scopes.len() == 1,
+            "the report scope cannot be combined with other scopes"
+        );
+        Ok(scopes)
+    }
+
+    fn parse_from(value: &str, known: &[Self]) -> Result<Vec<Self>> {
+        let expected = known
+            .iter()
+            .map(|scope| scope.name())
+            .collect::<Vec<_>>()
+            .join(",");
         let mut scopes = Vec::new();
         for name in value.split(',').filter(|_| !value.is_empty()) {
-            let scope = Self::ALL
-                .into_iter()
+            let scope = known
+                .iter()
+                .copied()
                 .find(|scope| scope.name() == name)
-                .with_context(|| {
-                    format!("unknown scope {name:?}; expected read,security,act,run,admin")
-                })?;
+                .with_context(|| format!("unknown scope {name:?}; expected {expected}"))?;
             if !scopes.contains(&scope) {
                 scopes.push(scope);
             }
@@ -209,6 +244,7 @@ enum View {
     Resources,
     ResourceStatus,
     Metrics,
+    ReportMetrics,
     Inbox,
     Inspect,
     Spans,
@@ -283,6 +319,7 @@ impl PageRoute {
                 | View::Resources
                 | View::ResourceStatus
                 | View::Metrics
+                | View::ReportMetrics
                 | View::Inbox
                 | View::Inspect
                 | View::Spans
@@ -562,6 +599,16 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift metrics --json"],
         method: Method::GET,
         view: View::Metrics,
+    },
+    // The receiving end of `metrics --push`: a `report` token uploads its
+    // holder's own summary, and nothing else (ADR 0026, #2036 Q4.2).
+    PageRoute {
+        path: "/api/v1/metrics/report",
+        api: "/api/v1/metrics/report",
+        scope: Some(Scope::Report),
+        cli: &["thirdshift metrics --push"],
+        method: Method::POST,
+        view: View::ReportMetrics,
     },
     PageRoute {
         path: "/bug-origins",
@@ -1094,6 +1141,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Resources, Method::GET) => get(resources::show),
             (View::ResourceStatus, Method::GET) => get(resources::status),
             (View::Metrics, Method::GET) => get(metrics::show),
+            // A summary outgrows the Console's 16 KiB form limit.
+            (View::ReportMetrics, Method::POST) => {
+                post(metrics::receive).layer(DefaultBodyLimit::max(metrics::REPORT_LIMIT))
+            }
             (View::Inbox, Method::GET) => {
                 get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
             }

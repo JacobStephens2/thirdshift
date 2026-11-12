@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use crate::console::Scope;
 
 pub mod fleet;
+pub mod report;
 pub mod themes;
 
 pub const THEME_FAMILIES: &[&str] = &["focus", "plain", "press", "signal", "garden", "factory"];
@@ -140,6 +141,7 @@ pub struct ConsoleSettings {
     #[serde(skip_serializing)]
     pub address_scopes: BTreeMap<String, Vec<Scope>>,
     pub fleet: Vec<fleet::Entry>,
+    pub report: Vec<report::Destination>,
     #[serde(skip_serializing)]
     pub(crate) other_consoles: Vec<String>,
     pub other_accounts: OtherAccounts,
@@ -155,6 +157,7 @@ impl Default for ConsoleSettings {
             allowed_emails: Vec::new(),
             address_scopes: BTreeMap::new(),
             fleet: Vec::new(),
+            report: Vec::new(),
             other_consoles: Vec::new(),
             other_accounts: OtherAccounts::default(),
             theme: "focus-auto".into(),
@@ -239,9 +242,16 @@ impl ConsoleSettings {
                 "console.{key}: {email:?} is not an email address"
             );
         }
+        for (email, scopes) in &self.address_scopes {
+            ensure!(
+                !scopes.contains(&Scope::Report),
+                "console.address_scopes: {email:?} cannot hold report, a machine token's scope"
+            );
+        }
         validate_theme(&self.theme)?;
         validate_sections(&self.hidden_sections)?;
         fleet::validate(&self.fleet)?;
+        report::validate(&self.report)?;
         Ok(())
     }
 }

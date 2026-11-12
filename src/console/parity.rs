@@ -28,6 +28,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ConsoleLog", "console log"),
     ("ConsoleToken", "console token list"),
     ("ConsoleFleet", "console fleet list"),
+    ("ConsoleReport", "console report list"),
     ("ConsoleScopes", "console scopes"),
     ("ConsoleWhoami", "console whoami"),
     ("ConsoleOpenApi", "console openapi"),
@@ -95,11 +96,21 @@ const FLEET: &[(&str, &str)] = &[
     ("Remove", "console fleet remove other"),
 ];
 
+const REPORT: &[(&str, &str)] = &[
+    (
+        "Add",
+        "console report add console https://console.example.com",
+    ),
+    ("List", "console report list"),
+    ("Remove", "console report remove console"),
+];
+
 // Distinct actions represented by fields of a CLI command, rather than enums.
 const ACTIONS: &[&str] = &[
     "cronjobs --fleet",
     "metrics --fleet",
     "metrics --machine other",
+    "metrics --push",
     "update --check",
     "config spec.parallel",
     "config spec.parallel 3",
@@ -128,6 +139,22 @@ const EXCLUSIONS: &[(&str, &str)] = &[
     (
         "metrics --fleet",
         "Fleet metrics aggregation is an explicit client of owning-machine metrics and cached peer snapshots; the API stays local and cannot lend saved Fleet credentials.",
+    ),
+    (
+        "metrics --push",
+        "Outbound metrics reporting sends this machine's local summary to a configured Console using saved credentials; the receiving Console exposes the report endpoint directly.",
+    ),
+    (
+        "console report add console https://console.example.com",
+        "Report destination pairing stays in the shell so the API cannot change where this machine's metrics go or the tokens they carry.",
+    ),
+    (
+        "console report list",
+        "Report destinations are inspected through the shell alongside pairing and removal.",
+    ),
+    (
+        "console report remove console",
+        "Report destination removal stays in the shell alongside pairing and its Credentials changes.",
     ),
     (
         "console token list",
@@ -221,11 +248,19 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
         Command::Process(action) => format!("{:?}", discriminant(action)),
         Command::Evals(action) => format!("{:?}", discriminant(action)),
         Command::ConsoleFleet(action) => format!("{:?}", discriminant(action)),
+        Command::ConsoleReport(action) => format!("{:?}", discriminant(action)),
         Command::Update { check, .. } => check.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
         Command::CronJobs { fleet, .. } => fleet.to_string(),
-        // `--machine` reads one Fleet machine through the same client.
-        Command::Metrics(asked) => (asked.fleet || asked.machine.is_some()).to_string(),
+        // `--machine` reads one Fleet machine through the same client;
+        // `--push` sends this machine's own summary out.
+        Command::Metrics(asked) => {
+            if asked.push {
+                "push".to_owned()
+            } else {
+                (asked.fleet || asked.machine.is_some()).to_string()
+            }
+        }
         Command::ConsoleOtherAccounts { value, .. } => value.is_some().to_string(),
         Command::ConsoleTheme { name, .. } => name.is_some().to_string(),
         Command::ConsoleSections { hide, show, .. } => {
@@ -332,6 +367,7 @@ fn every_cli_command_has_an_api_twin_or_reasoned_exclusion() {
     inventory(include_str!("../args.rs"), "ProcessAction", PROCESSES);
     inventory(include_str!("../evals.rs"), "Action", EVALS);
     inventory(include_str!("fleet.rs"), "Action", FLEET);
+    inventory(include_str!("report.rs"), "Action", REPORT);
     let description = super::openapi::document();
     let twins = description["paths"]
         .as_object()
@@ -352,6 +388,7 @@ fn every_cli_command_has_an_api_twin_or_reasoned_exclusion() {
             .chain(PROCESSES)
             .chain(EVALS)
             .chain(FLEET)
+            .chain(REPORT)
             .map(|(_, words)| words.to_string())
             .chain(ACTIONS.iter().map(|s| s.to_string())),
         twins,

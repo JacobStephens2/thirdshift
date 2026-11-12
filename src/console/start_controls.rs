@@ -291,6 +291,7 @@ fn pass_choices<'a>(
             | args::Command::ConsoleLog { .. }
             | args::Command::ConsoleToken(_)
             | args::Command::ConsoleFleet(_)
+            | args::Command::ConsoleReport(_)
             | args::Command::ConsoleScopes(_)
             | args::Command::ConsoleWhoami { .. }
             | args::Command::ConsoleOpenApi

@@ -73,7 +73,7 @@ impl Action {
                 // Reject invalid local files before prompting or contacting a machine.
                 UserConfig::load()?;
                 Credentials::read()?;
-                let token = read_token()?;
+                let token = read_secret("Fleet token")?;
                 let entry = check(name, address, &token)?;
                 let _lock = lock()?;
                 let credentials = Credentials::read()?;
@@ -92,7 +92,8 @@ impl Action {
     }
 }
 
-fn lock() -> Result<std::fs::File> {
+/// Serializes Fleet and report pairing writes to User config and Credentials.
+pub(super) fn lock() -> Result<std::fs::File> {
     let root = config::home()?.join(".thirdshift");
     fs::create_dir_all(&root)?;
     let lock = OpenOptions::new()
@@ -105,20 +106,21 @@ fn lock() -> Result<std::fs::File> {
     Ok(lock)
 }
 
-fn read_token() -> Result<String> {
+/// A token from stdin, unechoed on a terminal, named `what` in its prompt.
+pub(super) fn read_secret(what: &str) -> Result<String> {
     crate::interrupt::install()?;
     let terminal = std::io::stdin().is_terminal();
     let _echo = terminal.then(crate::terminal::EchoOff::new).transpose()?;
     if terminal {
-        eprint!("Fleet token: ");
+        eprint!("{what}: ");
         std::io::stderr().flush()?;
     }
-    let token = crate::terminal::line()?.context("Fleet token input ended")?;
+    let token = crate::terminal::line()?.with_context(|| format!("{what} input ended"))?;
     if terminal {
         eprintln!();
     }
     let token = token.trim().to_owned();
-    ensure!(!token.is_empty(), "Fleet token is empty");
+    ensure!(!token.is_empty(), "{what} is empty");
     Ok(token)
 }
 

@@ -9,7 +9,8 @@
 //! with its [`Ending`]: the Factory skills it wrote out for its sessions
 //! removed, then the Activity log's end line, the terminal display and the
 //! Run notification, in that order, only the display of those three for a
-//! skipped pass.
+//! skipped pass; then, best effort, its Run metrics pushed to any report
+//! destination.
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -200,6 +201,10 @@ impl Started {
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {
             notification.finish(&account);
+        }
+        // Only the top-level Command reports, once its own record is written.
+        if self.started.is_some() {
+            crate::console::report::after_command();
         }
         code
     }

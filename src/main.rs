@@ -344,6 +344,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
         Ok(Command::ConsoleFleet(action)) => return printed(action.run()),
+        Ok(Command::ConsoleReport(action)) => return printed(action.run()),
         Ok(Command::ConsoleScopes(command)) => return printed(command.run()),
         Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
@@ -405,6 +406,9 @@ fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
+        }
+        Ok(Command::Metrics(asked)) if asked.push => {
+            return printed(console::report::push_by_hand(&asked));
         }
         Ok(Command::Metrics(asked)) => {
             return match logs::metrics::show(&asked) {
