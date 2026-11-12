@@ -1666,7 +1666,7 @@ fn cancellation_during_a_ci_check_read_starts_no_further_request() {
             ));
             let started = Instant::now();
             let error = crate::ci::Watch::new(&issue())
-                .assess("abc", None, &mut || Ok(()), &mut |_| Ok(false))
+                .assess("abc", None, &mut || Ok(None), &mut |_| Ok(false))
                 .err()
                 .unwrap();
 

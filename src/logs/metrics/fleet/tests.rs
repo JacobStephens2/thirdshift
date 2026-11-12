@@ -79,6 +79,7 @@ fn machine(name: &str, status: Status) -> Machine {
         address: None,
         local: name == "here",
         status,
+        unavailable_accounts: BTreeSet::new(),
         last_seen: None,
         pushed_at: None,
         error: None,

@@ -348,6 +348,7 @@ impl BaseFix {
             local_work: Vec::new(),
             reached: false,
         });
+        let mut backoff = poll::Backoff::new();
         let closed = loop {
             // Before the issue is read: a Base fix closes it before it ends.
             let ended = watch.as_ref().is_some_and(|watch| outside.has_ended(watch));
@@ -355,7 +356,7 @@ impl BaseFix {
             if closed || ended {
                 break closed;
             }
-            outside.pause()?;
+            outside.pause(backoff.observe((closed, ended), std::time::Instant::now()))?;
         };
         if !closed {
             bail!(
@@ -459,7 +460,7 @@ trait Outside {
     fn run_base_fix(&mut self, fix: &IssueUrl, base: &str) -> Result<Ended>;
     /// Wait one poll interval. Fails with `interrupted` as soon as the Run
     /// is interrupted.
-    fn pause(&mut self) -> Result<()>;
+    fn pause(&mut self, delay: std::time::Duration) -> Result<()>;
     /// Write the progress line `line`.
     fn step(&mut self, line: String);
 }
@@ -555,8 +556,8 @@ impl Outside for LaunchAndGitHub<'_> {
         child_run::start(fix, kind, BaseFixAsk::Forbid, self.asks)?.wait()
     }
 
-    fn pause(&mut self) -> Result<()> {
-        poll::pause()
+    fn pause(&mut self, delay: std::time::Duration) -> Result<()> {
+        poll::sleep(delay)
     }
 
     fn step(&mut self, line: String) {
@@ -844,7 +845,7 @@ mod tests {
             }))
         }
 
-        fn pause(&mut self) -> Result<()> {
+        fn pause(&mut self, _: std::time::Duration) -> Result<()> {
             self.push(Did::Pause);
             if self.script.interrupted {
                 return Err(anyhow!("interrupted"));

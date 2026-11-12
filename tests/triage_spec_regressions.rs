@@ -80,7 +80,7 @@ fn private_security_finding_triage_does_not_email_its_write_up() {
             &scenario,
             &json!({
                 "category": "bug",
-                "state": "ready-for-human",
+                "state": "needs-info",
                 "issues": [{
                     "title": "Private finding",
                     "body": "Investigated the private finding; evidence stays on this private issue.",
