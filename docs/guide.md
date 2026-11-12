@@ -3409,7 +3409,13 @@ account thirdshift acts as, covering the exact adopted head. A completed Ticket,
 Spec or Base CI Delivery records its delivered head for later Fix runs, as a
 Review run records the head it reviewed. Simply repairing an adopted PR without
 an opening review does not grant that evidence. Without it, Delivery still repairs
-the PR and checks CI, then holds Self-merge with the PR ready for review. Run
+the PR and checks CI, then holds Self-merge with the PR ready for review. A Fix
+Pass, including one started with `merge`, finishes successfully as **Ready for
+review** (exit `0`), with a logged explanation of the review hold. A targeted
+Fix run whose merge goal comes only from `merge.always = true` does the same.
+An explicit `thirdshift fix <PR URL or number> merge` still exits non-zero with
+the Self-merge hold, because that command asked to merge that specific PR.
+Once the repaired PR is mergeable and green, a later Fix Pass skips it. Run
 `thirdshift review <PR URL>` before retrying the Fix run with `merge`; a Fix run
 never adds an opening review session for an existing PR. A newly authored Base
 branch CI fix has its own CI-fix session instead of adopting another PR's head.
