@@ -61,7 +61,7 @@ fn an_unnecessary_questionnaire_gets_one_correction_and_keeps_the_investigation(
     );
     assert_eq!(
         evidence["validation_error"],
-        "the Triage questionnaire is required only for needs-info or ready-for-human issues: Handle an empty cache"
+        "the Triage questionnaire is required only for needs-info issues: Handle an empty cache"
     );
     assert_eq!(calls[0]["cwd"], calls[1]["cwd"]);
     let traces = scenario.log_files(LOGS, "jsonl");
@@ -95,8 +95,7 @@ fn malformed_reports_are_corrected_completely_before_any_publication() {
             let mut rejected = corrected.clone();
             match malformed {
                 "missing-questionnaire" => {
-                    corrected["issues"][0]["confirmation_blocked"] =
-                        json!("Production access required.");
+                    corrected["state"] = json!("needs-info");
                     rejected = corrected.clone();
                     corrected["issues"][0]["questionnaire"] =
                         json!("For the operator: share a redacted cache trace.");
@@ -184,7 +183,7 @@ fn malformed_reports_are_corrected_completely_before_any_publication() {
                 assert_eq!(
                     scenario.issue_labels(8),
                     if malformed == "missing-questionnaire" {
-                        vec!["bug", "ready-for-human"]
+                        vec!["bug", "needs-info"]
                     } else {
                         vec!["bug", "needs-triage"]
                     }
@@ -408,7 +407,8 @@ fn corrected_existing_issue_output_still_passes_every_validation_gate() {
             "brief" => corrected["issues"][0]["body"] = json!("No heading."),
             "needs-triage" => corrected["state"] = json!("needs-triage"),
             "confirmation" => {
-                corrected["issues"][0]["confirmation_blocked"] = json!("Production access needed.")
+                corrected["issues"][0]["confirmation_blocked"] = json!("Production access needed.");
+                corrected["issues"][0]["questionnaire"] = json!("Which production tenant?");
             }
             "category" => corrected["category"] = json!("agent-failed"),
             "self-comment" | "foreign-comment" | "closed-comment" => {
