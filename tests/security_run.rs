@@ -1442,107 +1442,6 @@ fn a_dispatched_fix_holds_off_no_audit_and_is_not_dispatched_again() {
     assert_eq!(scenario.gh_state()["issues"], issues);
 }
 
-/// #2094: a repository with issues turned off cannot hold a fix Ticket.
-fn with_issues_disabled(scenario: &Scenario) {
-    let mut state = scenario.gh_state();
-    state["has_issues"] = json!(false);
-    scenario.write_gh_state(&state);
-}
-
-#[test]
-fn a_repository_with_issues_off_audits_and_skips_fixing_without_a_publishing_session() {
-    let scenario = with_reproduced_findings(&["critical"]);
-    with_issues_disabled(&scenario);
-    // Whichever session comes first: a publishing session would stage a
-    // fix, as in the reported runs.
-    scenario.agent_does(&format!(
-        "if grep -q 'Output directory' prompt.txt 2>/dev/null || printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'Output directory'; then\n{}\nelse\n{}\nfi\n",
-        audit_script(&json!([finding("finding-0")]).to_string()),
-        stage_fix("GHSA-finding-0")
-    ));
-    let before = scenario.gh_state();
-    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
-    let result = scenario.run_with_env(
-        &["secure", "security-fix", "email", "day@example.com"],
-        &resend_env(&resend),
-    );
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert!(
-        result
-            .stderr
-            .contains("Security fixing skipped: acme/widgets has issues turned off"),
-        "{}",
-        result.stderr
-    );
-    let (subject, body) = the_one_notification(&resend);
-    assert_eq!(
-        subject,
-        "[thirdshift] acme/widgets Security run: findings recorded"
-    );
-    assert!(
-        body.contains(
-            "Security fixing skipped: acme/widgets has issues turned off, so no Security fix Ticket can be filed"
-        ),
-        "{body}"
-    );
-    assert!(!body.contains("Private candidate write-up"), "{body}");
-    assert!(
-        result
-            .stderr
-            .contains("0 new finding(s), 1 already recorded"),
-        "{}",
-        result.stderr
-    );
-    let calls = scenario.claude_calls();
-    assert_eq!(calls.len(), 1, "only the audit runs: {calls:?}");
-    assert!(
-        !calls[0]["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("Proposed public issue")
-    );
-    let after = scenario.gh_state();
-    assert_eq!(after["advisories"], before["advisories"]);
-    assert_eq!(after["issues"], before["issues"]);
-}
-
-/// #2094: findings this run's audit records and reproduces are not fixed
-/// either, and the run ends successfully.
-#[test]
-fn findings_a_new_audit_reproduces_are_not_fixed_when_issues_are_off() {
-    let scenario = Scenario::new();
-    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
-    with_issues_disabled(&scenario);
-    scenario.agent_does_in_session(
-        1,
-        &audit_script(&json!([finding("first"), finding("second")]).to_string()),
-    );
-    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
-    scenario.agent_does_in_session(3, &reproduction_script("reproduced critical spec"));
-    scenario.agent_does_in_session(
-        4,
-        &stage_spec("https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002"),
-    );
-    let before = scenario.gh_state();
-    let result = scenario.run(&["secure", "security-fix"]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert!(
-        result.stderr.contains(
-            "2 new finding(s), 0 already recorded; Security fixing skipped: acme/widgets has issues turned off"
-        ),
-        "{}",
-        result.stderr
-    );
-    assert_eq!(scenario.claude_calls().len(), 3, "{}", result.stderr);
-    let after = scenario.gh_state();
-    assert_eq!(after["issues"], before["issues"]);
-    for advisory in after["advisories"].as_array().unwrap() {
-        let description = advisory["description"].as_str().unwrap();
-        assert!(description.contains("Outcome: reproduced"), "{description}");
-        assert!(!description.contains("Fix Ticket:"), "{description}");
-    }
-}
-
 /// Unreadable repository metadata is never taken for issues turned off.
 #[test]
 fn malformed_issues_metadata_fails_before_the_audit() {
@@ -2859,6 +2758,82 @@ fn advisory_errors_never_record_findings_in_a_public_repository_or_on_non_404_fa
         assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
         assert!(!result.stderr.contains("Private candidate write-up."));
     }
+}
+
+#[test]
+fn a_repository_with_issues_off_fails_before_any_session_and_says_so() {
+    for fixing in [false, true] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["has_issues"] = json!(false);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let mut args = vec!["secure", "email", "me@example.com"];
+        if fixing {
+            args.push("security-fix");
+        }
+        let result = scenario.run_with_env(&args, &resend_env(&resend));
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(
+                "acme/widgets has Issues turned off; turn on Issues for acme/widgets \
+                 or remove its Security schedule"
+            ),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(scenario.codex_calls().is_empty());
+        assert!(scenario.gh_calls_of("issue", "create").is_empty());
+        let (subject, text) = the_one_notification(&resend);
+        assert_eq!(
+            subject,
+            "[thirdshift] acme/widgets Security run: pre-audit failed"
+        );
+        assert!(text.contains("Audit:        not started"), "{text}");
+        assert!(text.contains("Cause:        Issues turned off"), "{text}");
+    }
+}
+
+#[test]
+fn a_repository_with_issues_on_audits_as_before() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["has_issues"] = json!(true);
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn a_private_fallback_reads_the_repository_once_before_failing_on_issues_off() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["private"] = json!(true);
+    github["has_issues"] = json!(false);
+    github["advisory_error"] = json!("gh: Not Found (HTTP 404)");
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("acme/widgets has Issues turned off"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    let repository_reads = scenario
+        .gh_calls()
+        .into_iter()
+        .filter(|call| call == &["api".to_string(), "repos/acme/widgets".to_string()])
+        .count();
+    assert_eq!(
+        repository_reads, 1,
+        "the 404 fallback already read the repository"
+    );
 }
 
 #[test]

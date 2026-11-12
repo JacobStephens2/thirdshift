@@ -79,19 +79,19 @@ fn a_finding_waiting_for_the_day_shift_does_not_hold_off_the_audit() {
                     matches!(outcome, Outcome::Audited(Ended { outcome: Ok(_), .. })),
                     "fixing {fixing}, private {private}: {description}"
                 );
-                let mut expected = vec![
-                    Call::ReadySearch,
-                    Call::AdvisoryList,
-                    Call::AuditHistory,
-                    Call::HarnessCheck,
-                    Call::NodeCheck,
-                    Call::Started(None),
-                    Call::SecurityAudit("main".to_string()),
-                ];
-                if fixing {
-                    expected.insert(2, Call::HasIssues);
-                }
-                assert_eq!(outside.calls[..expected.len()], expected);
+                assert_eq!(
+                    outside.calls[..8],
+                    [
+                        Call::ReadySearch,
+                        Call::AdvisoryList,
+                        Call::AuditHistory,
+                        Call::HasIssues,
+                        Call::HarnessCheck,
+                        Call::NodeCheck,
+                        Call::Started(None),
+                        Call::SecurityAudit("main".to_string())
+                    ]
+                );
             }
         }
     }
@@ -111,6 +111,7 @@ fn checks_prerequisites_then_audits_without_pulling() {
             Call::ReadySearch,
             Call::AdvisoryList,
             Call::AuditHistory,
+            Call::HasIssues,
             Call::HarnessCheck,
             Call::NodeCheck,
             Call::Started(None),
@@ -247,6 +248,7 @@ fn each_failed_prerequisite_prevents_later_operations() {
                 Call::ReadySearch,
                 Call::AdvisoryList,
                 Call::AuditHistory,
+                Call::HasIssues,
                 Call::HarnessCheck,
             ],
         ),
@@ -256,6 +258,7 @@ fn each_failed_prerequisite_prevents_later_operations() {
                 Call::ReadySearch,
                 Call::AdvisoryList,
                 Call::AuditHistory,
+                Call::HasIssues,
                 Call::HarnessCheck,
                 Call::NodeCheck,
             ],
@@ -272,90 +275,41 @@ fn each_failed_prerequisite_prevents_later_operations() {
     }
 }
 
-/// #2094: a repository with issues turned off cannot hold a fix Ticket. Its
-/// reproduced findings, single or Spec-sized, take no publishing session
-/// and hold off no audit, which ends successfully, saying why.
 #[test]
-fn issues_turned_off_skip_fixing_and_audit_instead() {
-    for size in ["single", "spec"] {
+fn issues_turned_off_fail_after_the_skip_gates_and_before_any_session() {
+    let reproduced = serde_json::json!({
+        "state":"draft", "severity":"critical", "ghsa_id":"GHSA-first",
+        "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
+        "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
+    });
+    for fixing in [false, true] {
         let mut outside = InMemory::default()
-            .advisories(vec![serde_json::json!({
-                "state": "draft", "severity": "critical", "ghsa_id": "GHSA-first",
-                "summary": "Bound input",
-                "html_url": "https://github.com/acme/widgets/security/advisories/GHSA-first",
-                "description": format!("Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical {size}\n")
-            })])
-            .has_issues(Ok(false))
-            .dispatched_ending(crate::pass::ready_for_review());
-        let outcome = run_through(&mut outside, &widgets(), "main", true, false, None);
+            .advisories(vec![reproduced.clone()])
+            .has_issues(Ok(false));
         let Outcome::Audited(Ended {
-            outcome: Ok(_),
-            fixing_skipped: Some(reason),
+            outcome: Err(failed),
+            audit_started: false,
             ..
-        }) = outcome
+        }) = run_through(&mut outside, &widgets(), "main", fixing, false, None)
         else {
-            panic!("{size}: expected a successful audit that skipped fixing");
+            panic!("a Security run on a repository with Issues off should fail");
         };
-        assert_eq!(
-            reason,
-            "Security fixing skipped: acme/widgets has issues turned off, so no Security fix Ticket can be filed"
-        );
-        assert_eq!(
-            outside.calls[..8],
-            [
-                Call::ReadySearch,
-                Call::AdvisoryList,
-                Call::HasIssues,
-                Call::AuditHistory,
-                Call::Step(reason.clone()),
-                Call::HarnessCheck,
-                Call::NodeCheck,
-                Call::Started(None),
-            ],
-            "{size}"
-        );
-        assert!(
-            !outside
-                .calls
-                .iter()
-                .any(|call| matches!(call, Call::PublishSecurityFix(_))),
-            "{size}: {:?}",
-            outside.calls
-        );
+        assert_eq!(issues_off_cause(&failed.error), Some("Issues turned off"));
+        assert_eq!(outside.calls.last(), Some(&Call::HasIssues));
+        assert!(!outside.calls.contains(&Call::HarnessCheck));
     }
-}
-
-/// On an unchanged Base branch, the finding a repository with issues turned
-/// off cannot fix leaves a repeated run a quiet skip, not a failure.
-#[test]
-fn issues_turned_off_leave_an_unchanged_base_skipped() {
-    let mut outside = InMemory::default()
-        .advisories(vec![serde_json::json!({
-            "state": "draft", "severity": "critical", "ghsa_id": "GHSA-first",
-            "description": "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
-        })])
-        .has_issues(Ok(false))
-        .unchanged_base();
+    let mut skipped = InMemory::default().has_issues(Ok(false)).unchanged_base();
     assert!(matches!(
-        run_through(&mut outside, &widgets(), "main", true, false, None),
+        run_through(&mut skipped, &widgets(), "main", false, false, None),
         Outcome::Skipped(Skipped::UnchangedBase(_))
     ));
-    assert!(matches!(
-        &outside.calls[..],
-        [
-            Call::ReadySearch,
-            Call::AdvisoryList,
-            Call::HasIssues,
-            Call::AuditHistory,
-            Call::Skipped(_)
-        ]
-    ));
+    assert!(!skipped.calls.contains(&Call::HasIssues));
 }
 
 /// A failed or malformed repository metadata read is a pre-audit failure,
-/// never taken for issues turned off; a report-only run never reads it.
+/// never taken for Issues turned off.
 #[test]
-fn an_unreadable_issues_setting_fails_before_work_and_report_only_runs_skip_it() {
+fn an_unreadable_issues_setting_fails_before_any_session() {
     let mut outside =
         InMemory::default().has_issues(Err("gh api repository metadata has no has_issues setting"));
     let outcome = run_through(&mut outside, &widgets(), "main", true, false, None);
@@ -372,19 +326,14 @@ fn an_unreadable_issues_setting_fails_before_work_and_report_only_runs_skip_it()
         "{:#}",
         failed.error
     );
+    assert_eq!(issues_off_cause(&failed.error), None);
     assert_eq!(
         outside.calls,
-        [Call::ReadySearch, Call::AdvisoryList, Call::HasIssues]
+        [
+            Call::ReadySearch,
+            Call::AdvisoryList,
+            Call::AuditHistory,
+            Call::HasIssues
+        ]
     );
-    let mut outside = InMemory::default().has_issues(Ok(false));
-    let outcome = run_through(&mut outside, &widgets(), "main", false, false, None);
-    assert!(matches!(
-        outcome,
-        Outcome::Audited(Ended {
-            outcome: Ok(_),
-            fixing_skipped: None,
-            ..
-        })
-    ));
-    assert!(!outside.calls.contains(&Call::HasIssues));
 }
