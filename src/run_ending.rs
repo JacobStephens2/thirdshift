@@ -145,10 +145,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
             let account = match &audited.outcome {
                 Ok(recorded) => Account {
                     outcome: "findings recorded",
-                    ended: Ok(match &audited.fixing_skipped {
-                        Some(reason) => format!("{recorded}; {reason}"),
-                        None => recorded.to_string(),
-                    }),
+                    ended: Ok(recorded.to_string()),
                     interrupted: false,
                     pr_url: None,
                     advice: &[],
@@ -182,6 +179,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     audited.outcome.as_ref().err().map(|failed| {
                         crate::github::operational_cause(&failed.error)
                             .or_else(|| crate::launch::base_branch_cause(&failed.error))
+                            .or_else(|| crate::security::issues_off_cause(&failed.error))
                             .unwrap_or("pre-audit checks failed")
                     })
                 } else {

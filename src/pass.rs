@@ -122,8 +122,8 @@ pub trait Outside {
     fn audit(&mut self, base: &str) -> crate::security::audit::Attempt;
     /// Private advisory or issue records in every state.
     fn security_records(&mut self) -> Result<SecurityRecords>;
-    /// Whether the repository accepts issues, and so can hold a Security
-    /// fix Ticket.
+    /// Whether the repository has Issues turned on, and so can hold a
+    /// Security fix Ticket; a Security run reads it before its first session.
     fn has_issues(&mut self) -> Result<bool>;
     /// Whether origin's prepared Base branch is the last completed audit's commit.
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool>;
