@@ -66,17 +66,10 @@ impl<'a> ChildLine<'a> {
     /// What `line` is: a progress line if it starts with their prefix,
     /// relayed if its message then starts as [`relayed`] starts one.
     pub fn of(line: &'a str) -> Self {
-        let Some(rest) = line.strip_prefix(PREFIX) else {
+        let Some(message) = progress_message(line) else {
             return ChildLine::Continuation;
         };
-        let message = split_stamp(rest).map_or(rest, |(_, message)| message);
-        let from_its_own_child = message
-            .strip_prefix('#')
-            .and_then(|rest| rest.split_once(": "))
-            .is_some_and(|(number, _)| {
-                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-            });
-        if from_its_own_child {
+        if relayed_message(message).is_some() {
             ChildLine::Relayed
         } else {
             ChildLine::Own(message)
@@ -89,6 +82,27 @@ impl<'a> ChildLine<'a> {
 pub fn relay(number: u64, line: &str) -> ChildLine<'_> {
     logs::eprint(&relayed(number, line));
     ChildLine::of(line)
+}
+
+/// The wake annotation stays informational through any number of relays.
+pub(crate) fn is_suspension_annotation(line: &str) -> bool {
+    let Some(mut message) = progress_message(line) else {
+        return false;
+    };
+    while let Some(rest) = relayed_message(message) {
+        message = rest;
+    }
+    message.starts_with("host was suspended ")
+}
+
+fn progress_message(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix(PREFIX)?;
+    Some(split_stamp(rest).map_or(rest, |(_, message)| message))
+}
+
+fn relayed_message(message: &str) -> Option<&str> {
+    let (number, rest) = message.strip_prefix('#')?.split_once(": ")?;
+    (!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())).then_some(rest)
 }
 
 /// The progress line that relays `line`, from the stderr of the child
