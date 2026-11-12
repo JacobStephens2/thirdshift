@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::{Context, Publishing, Recommendation, is_factory_label};
+use super::{Captured, Publishing, Recommendation, is_factory_label};
 use crate::issue::IssueUrl;
 use crate::labels;
 use crate::triage::{Input, Report};
@@ -30,7 +30,7 @@ fn interpret(
     let message = format!("Investigated.\nTriage recommendation: {line}");
     Recommendation::interpret(
         Some(&message),
-        &Context {
+        &Captured {
             categories: &CATEGORIES,
             input,
             allow_ready_for_agent,
@@ -300,7 +300,7 @@ fn incomplete_recommendations_and_unreadable_lines_are_diagnosed() {
         let error = interpret(&input, true, line).err().unwrap();
         assert_eq!(format!("{error}"), incomplete);
     }
-    let context = Context {
+    let context = Captured {
         categories: &CATEGORIES,
         input: &input,
         allow_ready_for_agent: true,
@@ -357,8 +357,7 @@ fn recorded_publication_reaches_output_and_notification() {
     else {
         panic!("a Report recommendation publishes as a Report");
     };
-    let category = issues[0].filing().category().to_owned();
-    issues[0].record_published(&filed, "Filed body".into(), category);
+    issues[0].record_filed(&filed, "Filed body".into());
     comments[0].record_posted("Posted body".into());
 
     let serialized = output(&recommendation);
@@ -383,4 +382,103 @@ fn workflow_labels_are_factory_labels_whatever_their_case() {
     assert!(is_factory_label("Ready-For-Agent"));
     assert!(is_factory_label("in-progress"));
     assert!(!is_factory_label("Bug"));
+}
+
+#[test]
+fn a_report_category_error_is_reported_with_an_incomplete_issue() {
+    let input = report();
+    let error = interpret(
+        &input,
+        true,
+        json!({
+            "category": "Bug",
+            "state": "ready-for-human",
+            "issues": [{"title": " ", "body": "b"}, {"title": "t", "body": "b", "category": "wontfix"}],
+            "investigation": "x"
+        }),
+    )
+    .err()
+    .unwrap();
+
+    assert_eq!(
+        format!("{error:#}"),
+        "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments; the Triage category must be a repository category label, not a triage state or another factory label"
+    );
+}
+
+#[test]
+fn existing_target_keeps_permitted_readiness() {
+    let input = existing();
+    let mut recommendation = interpret(
+        &input,
+        true,
+        json!({
+            "category": "Bug",
+            "state": "ready-for-agent",
+            "issues": [{"title": "Export", "body": "## Agent Brief\nDo it."}],
+            "investigation": "Found it."
+        }),
+    )
+    .unwrap();
+
+    let Publishing::Existing { issue, .. } = recommendation.publishing() else {
+        panic!("an existing-issue recommendation publishes in place");
+    };
+    assert_eq!(issue.filing().state(), labels::READY_FOR_AGENT);
+    assert!(!issue.filing().readiness_held());
+    assert_eq!(issue.notes(), "");
+}
+
+#[test]
+fn notes_name_the_held_state_each_mode_applies() {
+    let line = json!({
+        "category": "Bug",
+        "state": "ready-for-agent",
+        "issues": [{"title": "Export", "body": "## Agent Brief"}],
+        "investigation": "Found it."
+    });
+    let notes = |input: &Input| {
+        let mut recommendation = interpret(input, false, line.clone()).unwrap();
+        match recommendation.publishing() {
+            Publishing::Report { issues, .. } => issues[0].notes(),
+            Publishing::Existing { issue, .. } => issue.notes(),
+        }
+    };
+
+    assert_eq!(
+        notes(&report()),
+        "\n\nready-for-agent was recommended; needs-triage is applied until the Day shift permits readiness."
+    );
+    assert_eq!(
+        notes(&existing()),
+        "\n\nready-for-agent was recommended; ready-for-human is applied until the Day shift permits readiness."
+    );
+}
+
+#[test]
+fn notes_carry_a_confirmation_block_then_a_questionnaire() {
+    let input = report();
+    let mut recommendation = interpret(
+        &input,
+        true,
+        json!({
+            "category": "Bug",
+            "state": "ready-for-human",
+            "issues": [
+                {"title": "Blocked", "body": "b", "confirmation_blocked": "needs production access"},
+                {"title": "Ask", "body": "b", "state": "needs-info", "questionnaire": "Which browser?"}
+            ],
+            "investigation": "x"
+        }),
+    )
+    .unwrap();
+
+    let Publishing::Report { issues, .. } = recommendation.publishing() else {
+        panic!("a Report recommendation publishes as a Report");
+    };
+    assert_eq!(
+        issues[0].notes(),
+        "\n\nConfirmation needs the Day shift: needs production access"
+    );
+    assert_eq!(issues[1].notes(), "\n\n## Questionnaire\n\nWhich browser?");
 }

@@ -4,7 +4,7 @@
 //! category, state and readiness, and each proposed comment its target.
 //! GitHub reads and writes stay with the callers.
 
-use anyhow::{Context as _, Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::{Input, Report};
@@ -13,7 +13,7 @@ use crate::labels::{self, Label};
 
 /// Everything interpretation needs besides the session's message, all
 /// captured before the session.
-pub(super) struct Context<'a> {
+pub(super) struct Captured<'a> {
     /// The repository's category labels, as captured for the session.
     pub categories: &'a [String],
     /// The Report to file from, or the existing issue to triage in place.
@@ -123,22 +123,19 @@ impl<'a> Recommendation<'a> {
     /// Interpret the session's final `Triage recommendation:` line. A
     /// category error is reported with any other error, so one correction
     /// turn hears about both.
-    pub fn interpret(message: Option<&str>, context: &Context<'a>) -> Result<Self> {
+    pub fn interpret(message: Option<&str>, captured: &Captured<'a>) -> Result<Self> {
         let wire = read(message)?;
         let categories = wire
             .issues
             .iter()
             .map(|issue| {
                 repository_category(
-                    context.categories,
+                    captured.categories,
                     issue.category.as_deref().unwrap_or(&wire.category),
                 )
             })
             .collect::<Result<Vec<_>>>();
-        let target = match context.input {
-            Input::Report(_) => None,
-            Input::Issue(target) => Some(target),
-        };
+        let target = captured.input.issue();
         let (resolved, categories) = match (resolve(wire, target), categories) {
             (Ok(resolved), Ok(categories)) => (resolved, categories),
             (Err(error), Ok(_)) | (Ok(_), Err(error)) => return Err(error),
@@ -146,11 +143,12 @@ impl<'a> Recommendation<'a> {
         };
         // An unpermitted readiness waits for the Day shift: a Report's issue
         // is triaged again, an existing issue goes to a human.
-        let held = match context.input {
-            Input::Report(_) => labels::NEEDS_TRIAGE,
-            Input::Issue(_) => labels::READY_FOR_HUMAN,
+        let held = match target {
+            None => labels::NEEDS_TRIAGE,
+            Some(_) => labels::READY_FOR_HUMAN,
         };
-        let issues =
+        // Both are built from the same proposed issues, one entry each.
+        let mut issues =
             resolved
                 .issues
                 .into_iter()
@@ -161,7 +159,7 @@ impl<'a> Recommendation<'a> {
                         category: category.clone(),
                         triaged,
                         state: if triaged == labels::READY_FOR_AGENT
-                            && !context.allow_ready_for_agent
+                            && !captured.allow_ready_for_agent
                         {
                             held
                         } else {
@@ -169,15 +167,15 @@ impl<'a> Recommendation<'a> {
                         },
                     },
                 });
-        let proposals = match context.input {
+        let proposals = match captured.input {
             Input::Report(report) => Proposals::Report {
                 report,
                 issues: issues.collect(),
             },
             Input::Issue(target) => {
-                let [mut issue] = <[Issue; 1]>::try_from(issues.collect::<Vec<_>>())
-                    .ok()
-                    .context(ONE_ISSUE)?;
+                let mut issue = issues
+                    .next()
+                    .expect("resolve gives an existing target exactly one issue");
                 issue.proposed.url = Some(target.url.clone());
                 Proposals::Existing {
                     target,
@@ -307,23 +305,43 @@ impl Issue {
         &self.proposed.body
     }
 
-    pub fn confirmation_blocked(&self) -> Option<&str> {
-        self.proposed.confirmation_blocked.as_deref()
-    }
-
-    /// A nonblank questionnaire, present exactly when filing asks for `needs-info`.
-    pub fn questionnaire(&self) -> Option<&str> {
-        self.proposed.questionnaire.as_deref()
+    /// What publication adds after the proposed body: a held readiness, a
+    /// confirmation only the Day shift can make and any questionnaire.
+    pub fn notes(&self) -> String {
+        let mut notes = String::new();
+        if self.filing.readiness_held() {
+            notes.push_str(&format!(
+                "\n\nready-for-agent was recommended; {} is applied until the Day shift permits readiness.",
+                self.filing.state
+            ));
+        }
+        if let Some(reason) = &self.proposed.confirmation_blocked {
+            notes.push_str(&format!("\n\nConfirmation needs the Day shift: {reason}"));
+        }
+        if let Some(questionnaire) = &self.proposed.questionnaire {
+            notes.push_str(&format!("\n\n## Questionnaire\n\n{questionnaire}"));
+        }
+        notes
     }
 
     pub fn filing(&self) -> &Filing {
         &self.filing
     }
 
-    /// Record a landed publication: the issue it is now, the body it was
-    /// given, its category and the applied state.
-    pub fn record_published(&mut self, issue: &IssueUrl, body: String, category: String) {
+    /// Record a Report's issue once filed: its URL, the body it was filed
+    /// with, and the category and state it was filed under.
+    pub fn record_filed(&mut self, issue: &IssueUrl, body: String) {
         self.proposed.url = Some(issue.url.clone());
+        self.record(body, self.filing.category.clone());
+    }
+
+    /// Record an existing issue once relabelled: the comment it was given
+    /// and the category it keeps.
+    pub fn record_in_place(&mut self, body: String, category: String) {
+        self.record(body, category);
+    }
+
+    fn record(&mut self, body: String, category: String) {
         self.proposed.body = body;
         self.proposed.category = Some(category);
         self.proposed.state = Some(self.filing.state.name().into());
@@ -480,9 +498,7 @@ fn check_existing(
     }
     ensure!(
         comments.iter().all(|comment| {
-            comment.target.number != target.number
-                || !comment.target.owner.eq_ignore_ascii_case(&target.owner)
-                || !comment.target.repo.eq_ignore_ascii_case(&target.repo)
+            comment.target.number != target.number || !comment.target.in_same_repo(target)
         }),
         "the target issue's single recommendation entry supplies its comment"
     );

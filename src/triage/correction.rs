@@ -1,19 +1,19 @@
 //! Correct invalid session output once; GitHub checks and publication stay outside this loop.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context, Result};
 
-use super::recommendation::{Context, Recommendation};
+use super::recommendation::{Captured, Recommendation};
 use crate::prompt;
 use crate::session::{Kind, Purpose, Sessions};
 
 pub(super) fn recommendation<'a>(
     sessions: &Sessions<'_>,
     instructions: &str,
-    context: &Context<'a>,
+    captured: &Captured<'a>,
 ) -> Result<Recommendation<'a>> {
     // An execution failure is not invalid recommendation output.
     let message = sessions.run_to_final_message(Purpose::Ordinary, Kind::Triage, instructions)?;
-    let error = match Recommendation::interpret(message.as_deref(), context) {
+    let error = match Recommendation::interpret(message.as_deref(), captured) {
         Ok(recommendation) => return Ok(recommendation),
         Err(error) => error,
     };
@@ -29,7 +29,7 @@ pub(super) fn recommendation<'a>(
     let corrected = sessions
         .run_to_final_message(Purpose::Ordinary, Kind::TriageCorrection, &correction)
         .with_context(|| format!("Triage correction could not complete. {retained}"))?;
-    Recommendation::interpret(corrected.as_deref(), context).with_context(|| {
+    Recommendation::interpret(corrected.as_deref(), captured).with_context(|| {
         let correction_trace = sessions
             .last_log_of(Kind::TriageCorrection)
             .map(|path| path.display().to_string())
