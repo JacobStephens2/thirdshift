@@ -1430,7 +1430,7 @@ impl repair_loop::Outside for RunOutside<'_> {
         self.ci_watch.assess(
             head,
             base_commit,
-            &mut || self.pull_request.ensure_actionable(true),
+            &mut || self.pull_request.actionable_head(true),
             &mut |watched| Ok(self.worktree.new_commits_on_origin()?.origin_head() != watched),
         )
     }
