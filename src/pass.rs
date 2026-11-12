@@ -124,6 +124,9 @@ pub trait Outside {
     fn security_records(&mut self) -> Result<SecurityRecords>;
     /// Whether origin's prepared Base branch is the last completed audit's commit.
     fn base_unchanged_since_security_audit(&mut self) -> Result<bool>;
+    /// Whether the repository has Issues turned on, read before a Security
+    /// run's first session.
+    fn issues_enabled(&mut self) -> Result<bool>;
     /// Record one finding in the repository's private storage.
     fn create_security_record(
         &mut self,
@@ -318,6 +321,10 @@ impl Outside for LaunchAndGitHub<'_> {
         )
     }
 
+    fn issues_enabled(&mut self) -> Result<bool> {
+        GitHub::new().issues_enabled(&self.repo.slug())
+    }
+
     fn create_security_record(
         &mut self,
         records: &SecurityRecords,
@@ -508,6 +515,8 @@ mod in_memory {
         AdvisoryList,
         /// It compared the Base branch with the completed audit history.
         AuditHistory,
+        /// It read whether the repository has Issues turned on.
+        IssuesCheck,
         /// It recorded this fingerprint privately.
         CreateAdvisory(String),
         /// It tried to reproduce this private record, in sequence.
@@ -596,6 +605,8 @@ mod in_memory {
         advisories: Vec<Value>,
         finding_issues: Option<Vec<Value>>,
         unchanged_base: bool,
+        /// Whether the repository has Issues turned off.
+        issues_off: bool,
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
@@ -633,6 +644,7 @@ mod in_memory {
                 advisories: Vec::new(),
                 finding_issues: None,
                 unchanged_base: false,
+                issues_off: false,
                 review: Ok(None),
                 session_log: None,
                 ending: None,
@@ -745,6 +757,12 @@ mod in_memory {
 
         pub fn unchanged_base(mut self) -> Self {
             self.unchanged_base = true;
+            self
+        }
+
+        /// Turn the repository's Issues off.
+        pub fn issues_off(mut self) -> Self {
+            self.issues_off = true;
             self
         }
 
@@ -976,6 +994,11 @@ mod in_memory {
         fn base_unchanged_since_security_audit(&mut self) -> Result<bool> {
             self.calls.push(Call::AuditHistory);
             Ok(self.unchanged_base)
+        }
+
+        fn issues_enabled(&mut self) -> Result<bool> {
+            self.calls.push(Call::IssuesCheck);
+            Ok(!self.issues_off)
         }
 
         fn create_security_record(

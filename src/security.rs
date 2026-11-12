@@ -123,6 +123,33 @@ impl fmt::Display for Skipped {
     }
 }
 
+/// A Security run's repository has Issues turned off, so it can take no
+/// finding issue or fix issue.
+#[derive(Debug)]
+pub(crate) struct IssuesOff {
+    repo: String,
+}
+
+impl fmt::Display for IssuesOff {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let repo = &self.repo;
+        write!(
+            f,
+            "{repo} has Issues turned off; turn on Issues for {repo} or remove its Security schedule"
+        )
+    }
+}
+
+impl std::error::Error for IssuesOff {}
+
+/// The fixed Run notification Cause for a Security run that failed because
+/// its repository has Issues turned off.
+pub(crate) fn issues_off_cause(error: &anyhow::Error) -> Option<&'static str> {
+    error
+        .downcast_ref::<IssuesOff>()
+        .map(|_| "Issues turned off")
+}
+
 #[derive(Default)]
 pub struct Recorded {
     pub created: usize,
@@ -229,6 +256,15 @@ fn run_through(
             Ok(false) => {}
             Err(error) => return Outcome::Audited(error.into()),
         }
+    }
+    // Fixes, and a private repository's findings, are filed as issues, so a
+    // repository that takes none fails here, before any session is paid for.
+    match outside.issues_enabled() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Outcome::Audited(anyhow::Error::new(IssuesOff { repo: repo.slug() }).into());
+        }
+        Err(error) => return Outcome::Audited(error.into()),
     }
     crate::processes::security::run(
         outside,

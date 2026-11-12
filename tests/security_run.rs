@@ -2744,6 +2744,54 @@ fn advisory_errors_never_record_findings_in_a_public_repository_or_on_non_404_fa
 }
 
 #[test]
+fn a_repository_with_issues_off_fails_before_any_session_and_says_so() {
+    for fixing in [false, true] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["has_issues"] = json!(false);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
+        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+        let mut args = vec!["secure", "email", "me@example.com"];
+        if fixing {
+            args.push("security-fix");
+        }
+        let result = scenario.run_with_env(&args, &resend_env(&resend));
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(
+                "acme/widgets has Issues turned off; turn on Issues for acme/widgets \
+                 or remove its Security schedule"
+            ),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(scenario.codex_calls().is_empty());
+        assert!(scenario.gh_calls_of("issue", "create").is_empty());
+        let (subject, text) = the_one_notification(&resend);
+        assert_eq!(
+            subject,
+            "[thirdshift] acme/widgets Security run: pre-audit failed"
+        );
+        assert!(text.contains("Audit:        not started"), "{text}");
+        assert!(text.contains("Cause:        Issues turned off"), "{text}");
+    }
+}
+
+#[test]
+fn a_repository_with_issues_on_audits_as_before() {
+    let scenario = Scenario::new();
+    let mut github = scenario.gh_state();
+    github["has_issues"] = json!(true);
+    scenario.write_gh_state(&github);
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn reads_the_package_from_an_npm_manifest() {
     let scenario = Scenario::new();
     scenario.origin_has_commit(

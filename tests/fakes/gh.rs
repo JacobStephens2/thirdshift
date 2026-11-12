@@ -5,6 +5,7 @@
 //! ```text
 //! {"repo": "owner/repo",
 //!  "private"?: true,
+//!  "has_issues"?: false,
 //!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "issue_closed_at"?: {"<number>": "<ISO 8601 time>"},
@@ -1504,6 +1505,10 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 (
                     "private",
                     Bool(state.get("private").is_some_and(Json::truthy))
+                ),
+                (
+                    "has_issues",
+                    Bool(state.get("has_issues").is_none_or(Json::truthy))
                 )
             ])
         );

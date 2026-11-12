@@ -610,6 +610,20 @@ impl GitHub {
         )?))
     }
 
+    /// Whether the repository `repo`, an `owner/repo`, has Issues turned on,
+    /// as its `has_issues` says.
+    pub fn issues_enabled(&self, repo: &str) -> Result<bool> {
+        if !valid_repo_slug(repo) {
+            bail!("invalid repository name");
+        }
+        let repository = self.gh_json(&["api", &format!("repos/{repo}")])?;
+        repository["has_issues"]
+            .as_bool()
+            .context(CommandFailure::InvalidResponse(
+                "gh api output has no has_issues".into(),
+            ))
+    }
+
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
     /// of `issue`, and return it. See [`GitHub::create_issue_in`].
     pub fn create_issue(

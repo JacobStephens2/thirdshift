@@ -80,11 +80,12 @@ fn a_finding_waiting_for_the_day_shift_does_not_hold_off_the_audit() {
                     "fixing {fixing}, private {private}: {description}"
                 );
                 assert_eq!(
-                    outside.calls[..7],
+                    outside.calls[..8],
                     [
                         Call::ReadySearch,
                         Call::AdvisoryList,
                         Call::AuditHistory,
+                        Call::IssuesCheck,
                         Call::HarnessCheck,
                         Call::NodeCheck,
                         Call::Started(None),
@@ -110,6 +111,7 @@ fn checks_prerequisites_then_audits_without_pulling() {
             Call::ReadySearch,
             Call::AdvisoryList,
             Call::AuditHistory,
+            Call::IssuesCheck,
             Call::HarnessCheck,
             Call::NodeCheck,
             Call::Started(None),
@@ -246,6 +248,7 @@ fn each_failed_prerequisite_prevents_later_operations() {
                 Call::ReadySearch,
                 Call::AdvisoryList,
                 Call::AuditHistory,
+                Call::IssuesCheck,
                 Call::HarnessCheck,
             ],
         ),
@@ -255,6 +258,7 @@ fn each_failed_prerequisite_prevents_later_operations() {
                 Call::ReadySearch,
                 Call::AdvisoryList,
                 Call::AuditHistory,
+                Call::IssuesCheck,
                 Call::HarnessCheck,
                 Call::NodeCheck,
             ],
@@ -269,4 +273,40 @@ fn each_failed_prerequisite_prevents_later_operations() {
         ));
         assert_eq!(outside.calls, expected);
     }
+}
+
+#[test]
+fn issues_turned_off_fail_after_the_skip_gates_and_before_any_session() {
+    let reproduced = serde_json::json!({
+        "state":"draft", "severity":"critical", "ghsa_id":"GHSA-first",
+        "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
+        "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
+    });
+    for fixing in [false, true] {
+        let mut outside = InMemory::default()
+            .advisories(vec![reproduced.clone()])
+            .issues_off();
+        let Outcome::Audited(Ended {
+            outcome: Err(failed),
+            audit_started: false,
+            ..
+        }) = run_through(&mut outside, &widgets(), "main", fixing, false, None)
+        else {
+            panic!("a Security run on a repository with Issues off should fail");
+        };
+        assert_eq!(
+            failed.error.to_string(),
+            "acme/widgets has Issues turned off; turn on Issues for acme/widgets \
+             or remove its Security schedule"
+        );
+        assert_eq!(issues_off_cause(&failed.error), Some("Issues turned off"));
+        assert_eq!(outside.calls.last(), Some(&Call::IssuesCheck));
+        assert!(!outside.calls.contains(&Call::HarnessCheck));
+    }
+    let mut skipped = InMemory::default().issues_off().unchanged_base();
+    assert!(matches!(
+        run_through(&mut skipped, &widgets(), "main", false, false, None),
+        Outcome::Skipped(Skipped::UnchangedBase(_))
+    ));
+    assert!(!skipped.calls.contains(&Call::IssuesCheck));
 }
