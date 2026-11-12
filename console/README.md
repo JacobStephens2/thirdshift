@@ -204,7 +204,8 @@ after a change notice, preserving the open section, selected row and scroll. If 
 stream drops or is unavailable, the page polls every five seconds until it
 reconnects. The heartbeat only beats for observed log growth, stays flat while
 Silent and respects reduced motion. The tab counts Needs you and its favicon
-marks urgent items (Slow alone is not urgent). Each row shows the same state
+marks every Needs you row as urgent, including step-2 Slow. Step-1 Slow stays
+in Working or Landing with its health text visible, including on phones. Each row shows the same state
 word as `thirdshift status`: Landing and Ready rows take their Theme's Landing
 and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause

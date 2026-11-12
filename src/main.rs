@@ -554,7 +554,7 @@ fn fix(args: args::FixArgs) -> ExitCode {
         Err(failure) => return failure,
     };
     let mut harness = args.flags.harness(&config);
-    let ended = fix::run(&args, &config, &mut harness);
+    let ended = fix::run(&args, &config, &mut harness, &mut started);
     started.built_with(&harness);
     started.finish(ended)
 }

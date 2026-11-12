@@ -159,6 +159,13 @@ impl Started {
         }
     }
 
+    /// Retain a Fix run's PR snapshot before Delivery can fail or be interrupted.
+    pub fn pull_request(&mut self, pr: &crate::review::PullRequestUrl, title: &str) {
+        if let Some(notification) = &mut self.notification {
+            notification.pull_request(pr, title);
+        }
+    }
+
     /// Finish the command that ended as `ending`: remove the Factory skills
     /// it wrote out for its sessions, if it did, write the Activity log's
     /// end line, show how it ended, then save its Run notification and
