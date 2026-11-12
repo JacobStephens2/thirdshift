@@ -711,6 +711,90 @@ fi
     assert_eq!(review["effort"], evidence["effort"], "{review:#}");
 }
 
+#[test]
+fn review_triage_and_fix_runs_read_back_their_saved_metrics_and_session_rows() {
+    let scenario = Scenario::new();
+    let signals = json!({
+        "tokens_by_model": [], "cost_usd": null, "tool_errors": 1,
+        "permission_denials": 0, "killed_work": 0, "repeated_tool_calls": 0
+    });
+    let session = json!({"harness": "codex", "harness_version": "1.0", "signals": signals});
+    let cases = [
+        ("review", "Review run", "Code review", 0, 0),
+        ("triage", "Triage run", "Triage", 0, 0),
+        ("fix", "Fix run", "Repair", 1, 1),
+    ];
+    for (prefix, kind, stage, repairs, ci_rounds) in cases {
+        let mut saved = record(0);
+        saved["version"] = 2.into();
+        saved["kind"] = kind.into();
+        saved["name"] = format!("{prefix}-20261018T233000-0400").into();
+        saved["issue"] = Value::Null;
+        saved["stages"] = json!([{
+            "name": stage, "began_at": "2026-10-19T03:30:00Z",
+            "session_log": format!("/missing/{prefix}.logs.jsonl")
+        }]);
+        saved["run_metrics"] = json!({
+            "outcome": "ready for review", "repairs": repairs, "ci_rounds": ci_rounds,
+            "total_minutes": 30.0,
+            "stages": [{
+                "name": stage, "seconds": 1800.0, "minutes": 30.0, "usual_range": null,
+                "position": "too_few_runs", "review_findings": null,
+                "session_signals": session
+            }],
+            "session_signals": {stage: {
+                "observed_sessions": 1, "missing_sessions": 0, "signals": signals
+            }}
+        });
+        let folder = scenario.path(LOGS).with_file_name(prefix);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("20261018T233000-0400~owner.command.json"),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        let shown = metrics(
+            &scenario,
+            &[
+                "metrics",
+                &format!("{prefix}-20261018T233000-0400"),
+                "--json",
+            ],
+        );
+        let metrics = &shown["command"]["metrics"];
+        assert_eq!(shown["command"]["kind"], kind);
+        assert_eq!(metrics["total_minutes"], 30.0, "{shown:#}");
+        assert_eq!(metrics["repairs"], repairs);
+        assert_eq!(metrics["ci_rounds"], ci_rounds);
+        assert_eq!(
+            metrics["session_signals"][stage]["observed_sessions"], 1,
+            "{shown:#}"
+        );
+    }
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let rows = trends["weeks"].as_array().unwrap();
+    for (_, kind, stage, _, _) in cases {
+        let run = rows
+            .iter()
+            .find(|row| row["kind"] == kind && row["session_kind"].is_null())
+            .unwrap_or_else(|| panic!("no {kind} row in {trends:#}"));
+        assert_eq!(run["runs"], 1, "{run:#}");
+        assert_eq!(
+            run["total_minutes"],
+            json!({"observed": 1, "missing": 0, "sum": 30.0, "mean": 30.0})
+        );
+        let session = rows
+            .iter()
+            .find(|row| row["kind"] == kind && row["session_kind"] == stage)
+            .unwrap_or_else(|| panic!("no {kind} {stage} row in {trends:#}"));
+        assert_eq!(
+            session["session_signals"]["tool_errors"],
+            json!({"observed": 1, "missing": 0, "sum": 1.0, "mean": 1.0}),
+            "{session:#}"
+        );
+    }
+}
+
 fn record(number: u32) -> Value {
     json!({
         "version": 1, "kind": "Run", "repository": "acme/widgets",
