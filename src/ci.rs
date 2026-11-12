@@ -510,8 +510,23 @@ impl RerunChecks<'_> {
         }
     }
 
-    fn missing_attempts(&self, checks: &[Check]) -> usize {
-        self.checks
+    /// How many requested failed jobs still await their new attempts on
+    /// `checks`: old attempts still listed, and jobs absent from the listing.
+    /// Either may last until the jobs a dependent job needs have finished.
+    fn awaiting_attempts(&self, checks: &[Check]) -> Awaiting {
+        let old = checks
+            .iter()
+            .filter(|check| {
+                self.is_requested(check)
+                    && self.is_previous_attempt(check)
+                    && self
+                        .checks
+                        .iter()
+                        .any(|expected| same_workflow_check(check, expected))
+            })
+            .count();
+        let absent = self
+            .checks
             .iter()
             .filter(|expected| {
                 self.is_requested(expected)
@@ -520,20 +535,14 @@ impl RerunChecks<'_> {
                         .iter()
                         .any(|check| same_workflow_check(check, expected))
             })
-            .count()
+            .count();
+        Awaiting { old, absent }
     }
 
-    /// A requested failed job's old attempt remains pending until GitHub
-    /// lists its replacement, even after its dependencies have finished.
-    fn awaiting_attempt(&self, check: &Check) -> bool {
-        self.is_requested(check)
-            && check
-                .job
-                .is_some_and(|job| self.previous_attempt.contains(&job.check_run))
-            && self
-                .checks
-                .iter()
-                .any(|expected| same_workflow_check(check, expected))
+    fn is_previous_attempt(&self, check: &Check) -> bool {
+        check
+            .job
+            .is_some_and(|job| self.previous_attempt.contains(&job.check_run))
     }
 
     fn check_is_listed(&self, expected: &Check, checks: &[Check]) -> bool {
@@ -551,16 +560,30 @@ impl RerunChecks<'_> {
         checks.iter().any(|check| {
             check.name == expected.name
                 && (!self.is_requested(expected)
-                    || check.job.is_some_and(|job| {
-                        scoped_workflow_run(check) == scoped_workflow_run(expected)
-                            && !self.previous_attempt.contains(&job.check_run)
-                    }))
+                    || (same_workflow_check(check, expected) && !self.is_previous_attempt(check)))
         })
     }
 }
 
+/// Requested failed jobs of a Check re-run whose new attempts are not yet
+/// listed.
+#[derive(Clone, Copy, Default)]
+struct Awaiting {
+    /// Listed with the attempt before the re-run.
+    old: usize,
+    /// Not listed at all, never yet replaced.
+    absent: usize,
+}
+
+impl Awaiting {
+    fn total(self) -> usize {
+        self.old + self.absent
+    }
+}
+
 /// [`watch_through`], once checks have appeared on `sha`, or a Check re-run
-/// whose unseen dependent jobs stay pending until their new attempts appear.
+/// whose unseen dependent jobs stay pending until their new attempts appear,
+/// or for a grace period once nothing else is running.
 fn watch_to_end(
     outside: &mut impl Outside,
     sha: &str,
@@ -569,6 +592,9 @@ fn watch_to_end(
 ) -> Result<Ci> {
     let short = short(sha);
     let mut waiting_line = poll::WaitingLine::new();
+    // Set once only re-run jobs' new attempts are outstanding, with nothing
+    // else running: they should follow soon after what they need finishes.
+    let mut settle = None;
     let checks = until(outside, |outside| {
         let checks = read_checks(outside, sha)?;
         ensure!(
@@ -578,34 +604,42 @@ fn watch_to_end(
                     .is_none_or(|rerun| rerun.listed_in(&checks)),
             "CI checks disappeared on {short}; cannot verify CI"
         );
-        let pending = checks
+        let running = checks
             .iter()
-            .filter(|check| {
-                reading(check) == Reading::Pending
-                    || rerun_checks
-                        .as_ref()
-                        .is_some_and(|rerun| rerun.awaiting_attempt(check))
-            })
+            .filter(|check| reading(check) == Reading::Pending)
             .count();
-        let missing = rerun_checks
-            .as_ref()
-            .map_or(0, |rerun| rerun.missing_attempts(&checks));
-        if pending == 0 && missing == 0 {
+        let awaiting = rerun_checks.as_ref().map_or(Awaiting::default(), |rerun| {
+            rerun.awaiting_attempts(&checks)
+        });
+        if running + awaiting.total() == 0 {
             return Ok(Some(checks));
         }
-        let counts = (pending + missing, checks.len());
-        if waiting_line.should_report(counts) {
-            if missing == 0 {
-                outside.step(format!(
-                    "CI on {short}: {pending} still running out of {} checks listed so far",
-                    checks.len()
-                ));
-            } else {
-                outside.step(format!(
-                    "CI on {short}: {pending} still running, {missing} awaiting new attempts; {} checks listed so far",
-                    checks.len()
-                ));
-            }
+        if running > 0 {
+            settle = None;
+        } else if settle.is_none() {
+            settle = Some(outside.start_grace().1);
+        } else if settle
+            .as_ref()
+            .is_some_and(|deadline| outside.passed(deadline))
+        {
+            // Old failed attempts now count as failed; an absent job cannot
+            // establish green.
+            ensure!(
+                awaiting.absent == 0,
+                "re-run checks never reappeared on {short}; cannot verify CI"
+            );
+            return Ok(Some(checks));
+        }
+        let pending = running + awaiting.old;
+        if waiting_line.should_report((pending + awaiting.absent, checks.len())) {
+            let absent = match awaiting.absent {
+                0 => String::new(),
+                absent => format!(", plus {absent} awaiting new attempts,"),
+            };
+            outside.step(format!(
+                "CI on {short}: {pending} still running{absent} out of {} checks listed so far",
+                checks.len()
+            ));
         }
         Ok(None)
     })?;
@@ -1166,7 +1200,7 @@ mod tests {
     const BASE: &str = "0123456789abcdef";
 
     #[test]
-    fn review_dependent_job_missing_from_latest_attempt_stays_pending() {
+    fn a_dependent_job_absent_from_the_latest_attempt_stays_pending() {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let before = vec![job(red("editors"), 11, 900), job(red("verified"), 12, 900)];
         // Actions jobs with default filter=latest omits verified until its
@@ -1211,6 +1245,68 @@ mod tests {
             github.steps
         );
         assert_eq!(github.reruns, [900]);
+        assert!(
+            github.steps.contains(
+                &"CI on abcdef0: 1 still running, plus 1 awaiting new attempts, out of 1 checks listed so far"
+                    .to_string()
+            ),
+            "steps: {:?}",
+            github.steps
+        );
+    }
+
+    #[test]
+    fn a_dependent_jobs_old_attempt_still_listed_a_grace_period_after_ci_settles_is_red() {
+        let before = vec![job(red("editors"), 11, 900), job(red("verified"), 12, 900)];
+        let mut github = InMemory::new().interrupted_on_pause(20).listing(
+            HEAD,
+            vec![
+                before.clone(),
+                // editors' new attempt fails; verified's old attempt stays listed.
+                vec![job(red("editors"), 21, 900), job(red("verified"), 12, 900)],
+            ],
+        );
+        let failed = FailedChecks {
+            own: before,
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_through(&mut github, HEAD, None, &failed)
+            .expect("the watch must end, not wait for verified forever");
+
+        let failed = failed_of(ci.expect("a re-run to watch"));
+        assert_eq!(
+            listed(&failed.own),
+            [
+                "editors: https://head/editors",
+                "verified: https://head/verified"
+            ]
+        );
+        assert_eq!(github.reruns, [900]);
+    }
+
+    #[test]
+    fn a_dependent_job_still_absent_a_grace_period_after_ci_settles_cannot_verify_ci() {
+        let before = vec![job(red("editors"), 11, 900), job(red("verified"), 12, 900)];
+        let mut github = InMemory::new().interrupted_on_pause(20).listing(
+            HEAD,
+            vec![before.clone(), vec![job(green("editors"), 21, 900)]],
+        );
+        let failed = FailedChecks {
+            own: before,
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let Err(err) = rerun_through(&mut github, HEAD, None, &failed) else {
+            panic!("an absent job must not establish green: {:?}", github.steps);
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "re-run checks never reappeared on abcdef0; cannot verify CI"
+        );
     }
 
     #[test]
