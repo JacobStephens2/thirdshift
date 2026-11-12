@@ -36,7 +36,35 @@ mod synchronization_tests;
 #[derive(Clone, Copy)]
 enum UntrackedFiles {
     Preserve,
-    DiscardValidationArtifacts,
+    /// Only the Review run's named validation output, see [`validation_artifact`].
+    DiscardNamedValidationArtifacts,
+    DiscardAllUntracked,
+}
+
+impl UntrackedFiles {
+    fn status_flag(self) -> &'static str {
+        match self {
+            Self::Preserve | Self::DiscardNamedValidationArtifacts => "--untracked-files=all",
+            Self::DiscardAllUntracked => "--untracked-files=no",
+        }
+    }
+
+    /// Whether one `git status --porcelain -z` field is work cleanup must keep.
+    fn keeps(self, entry: &str) -> bool {
+        match self {
+            Self::DiscardNamedValidationArtifacts => {
+                !entry.strip_prefix("?? ").is_some_and(validation_artifact)
+            }
+            Self::Preserve | Self::DiscardAllUntracked => true,
+        }
+    }
+}
+
+/// Review validation instructions name `.review-logs/`; root `.validation-*`
+/// entries are the other disposable name sessions use (#2049).
+fn validation_artifact(path: &str) -> bool {
+    let root = path.split('/').next().unwrap_or_default();
+    root == ".review-logs" || root.starts_with(".validation-")
 }
 
 /// Failure preservation differs for a Ticket's implementation and an
@@ -443,19 +471,23 @@ fn uncommitted_changes(
     untracked: UntrackedFiles,
 ) -> Result<bool> {
     let entries = run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
-    Ok(index_hides_tracked_work(&entries)
-        || !run(&[
-            "-c",
-            "core.fsmonitor=false",
-            "status",
-            "--porcelain",
-            match untracked {
-                UntrackedFiles::Preserve => "--untracked-files=all",
-                UntrackedFiles::DiscardValidationArtifacts => "--untracked-files=no",
-            },
-            "--ignore-submodules=none",
-        ])?
-        .is_empty())
+    if index_hides_tracked_work(&entries) {
+        return Ok(true);
+    }
+    let status = run(&[
+        "-c",
+        "core.fsmonitor=false",
+        "status",
+        "--porcelain",
+        "-z",
+        untracked.status_flag(),
+        "--ignore-submodules=none",
+    ])?;
+    // A rename's source path is its own field; its entry already counts as work.
+    Ok(status
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| untracked.keeps(entry)))
 }
 
 /// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.
