@@ -134,7 +134,7 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
             serde_json::to_value(fleet)?
         } else {
             // Another machine's text must not start a line of its own.
-            one_line(fleet.text()?)
+            one_line(fleet.with_machine_lines()?)
         }
     } else {
         read(&config, asked)?

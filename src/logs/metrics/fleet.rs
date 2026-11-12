@@ -131,7 +131,7 @@ pub(crate) struct Fleet {
 
 impl Fleet {
     /// The same report, with each machine's diagnostics kept on its own line.
-    pub(super) fn text(&self) -> Result<Value> {
+    pub(super) fn with_machine_lines(&self) -> Result<Value> {
         let mut report = serde_json::to_value(self)?;
         report["machines"] =
             serde_json::to_value(self.machines.iter().map(Machine::text).collect::<Vec<_>>())?;

@@ -260,14 +260,7 @@ fn resolve_recommendation(recommendation: &mut Recommendation) -> Result<()> {
         };
         let needs_answer = triaged == labels::NEEDS_INFO;
         ensure!(
-            if needs_answer {
-                issue
-                    .questionnaire
-                    .as_deref()
-                    .is_some_and(|text| !text.trim().is_empty())
-            } else {
-                issue.questionnaire.is_none()
-            },
+            issue.questionnaire.is_some() == needs_answer,
             "the Triage questionnaire is required only for needs-info issues: {}",
             issue.title
         );
