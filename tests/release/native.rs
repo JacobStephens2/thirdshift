@@ -137,7 +137,9 @@ fn native_release_publishes_green_content_without_reading_the_launch_tree() {
         release.pr("release-0.2.0")["body"]
             .as_str()
             .unwrap()
-            .contains("A sandboxed release summary (#2).")
+            .contains("A sandboxed release summary (#2)."),
+        "{}",
+        stderr(&output)
     );
     assert_eq!(record(&release)["kind"], "Release run");
     assert_eq!(record(&release)["outcome"], "merged");
