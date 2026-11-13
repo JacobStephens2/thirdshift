@@ -631,6 +631,7 @@ fn release(args: args::ReleaseArgs) -> ExitCode {
     started.finish(Ending::Release(release::run(&args.version, &mut harness)))
 }
 
+#[cfg(target_os = "linux")]
 fn triage(args: args::TriageArgs) -> ExitCode {
     let input = match triage::Input::read(args.issue, args.file.as_deref()) {
         Ok(input) => input,
