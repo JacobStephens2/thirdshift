@@ -17,10 +17,10 @@ if sys.version_info < (3, 11):
 import tomllib
 
 
-# Cargo packages src/ and skills/ and dist also includes README and LICENSE.
+# Cargo packages src/, skills/ and processes/; dist includes README and LICENSE.
 # Pipeline/toolchain changes must exercise the full release contract too.
 RELEASE_PATHS = [
-    "src/**", "skills/**", "Cargo.toml", "Cargo.lock", "dist-workspace.toml",
+    "src/**", "skills/**", "processes/**", "Cargo.toml", "Cargo.lock", "dist-workspace.toml",
     "rust-toolchain.toml", "README.md", "LICENSE", ".github/workflows/**",
     "scripts/**",
 ]
@@ -39,6 +39,37 @@ LEAST_PRIVILEGE_PERMISSIONS = (
     '      "actions": "write"\n'
     '      "contents": "read"\n'
 )
+
+
+def fence_tag_pushes(generated):
+    """Gate plan itself: dist host --steps=create can already publish metadata."""
+    anchor = "  plan:\n"
+    if generated.count(anchor) != 1:
+        raise RuntimeError("expected one release plan job")
+    guard = '''  release-tag-guard:
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify release actor
+        if: ${{ github.event_name == 'push' }}
+        env:
+          RELEASE_ACTOR: ${{ github.actor }}
+        run: test "$RELEASE_ACTOR" = JacobStephens2
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name == 'push' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify exact version-only release tree
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          python3 scripts/release-tag-guard.py
+
+'''
+    return generated.replace(anchor, guard + anchor + "    needs: [release-tag-guard]\n", 1)
 
 
 def harden_release_workflow(generated):
@@ -128,6 +159,7 @@ def main():
     generated = generated.replace("  pull_request:\n", "  pull_request:\n" + paths)
     generated = generated.replace("\njobs:\n", "\n" + concurrency + "\njobs:\n")
     generated = harden_release_workflow(generated)
+    generated = fence_tag_pushes(generated)
     generated = "# Regenerate with python3 scripts/generate-release.py; do not edit.\n" + generated
     if args.check:
         previous = original.decode() if original else ""
