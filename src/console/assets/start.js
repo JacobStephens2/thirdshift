@@ -10,8 +10,11 @@ export function initStarts(refresh) {
     const replacement = next?.getElementById('inbox-start');
     // A scope change can introduce or remove the confirmation controls.
     // Otherwise keep the person's form edits and the submission result.
-    if (current && replacement && !sending &&
-        Boolean(current.querySelector('[data-start-area]')) !== Boolean(replacement.querySelector('[data-start-area]'))) {
+    const permission = node => {
+      const controls = node?.querySelector('[data-start-area]');
+      return controls ? `${controls.dataset.startRun}:${controls.dataset.startRelease}` : '';
+    };
+    if (current && replacement && !sending && permission(current) !== permission(replacement)) {
       current.replaceChildren(...replacement.childNodes);
       pending = undefined;
     }
@@ -28,7 +31,7 @@ export function initStarts(refresh) {
     update();
     if (!dialog) return;
     pending = { request, machine };
-    dialog.querySelector('[data-start-description]').textContent = `${request.command ?? 'ticket'} on ${request.repository}${request.issue ? ` issue ${request.issue}` : ''}${request.pull_request ? ` pull request ${request.pull_request}` : ''}, ${harness ? `with Harness ${harness}` : 'using User config and CLI defaults'}${machineName ? ` on machine ${machineName}` : ''}.`;
+    dialog.querySelector('[data-start-description]').textContent = `${request.command ?? 'ticket'}${request.version ? ` ${request.version}` : ''} on ${request.repository}${request.issue ? ` issue ${request.issue}` : ''}${request.pull_request ? ` pull request ${request.pull_request}` : ''}, ${harness ? `with Harness ${harness}` : 'using User config and CLI defaults'}${machineName ? ` on machine ${machineName}` : ''}.`;
     dialog.querySelector('[data-start-summary]').textContent = JSON.stringify(request, null, 2);
     dialog.showModal();
   }
@@ -37,8 +40,8 @@ export function initStarts(refresh) {
     event.preventDefault();
     const values = new FormData(event.target);
     const request = {};
-    for (const field of ['repository', 'issue', 'harness', 'model', 'effort']) {
-      const value = values.get(field).trim();
+    for (const field of ['command', 'repository', 'version', 'issue', 'harness', 'model', 'effort']) {
+      const value = values.get(field)?.trim();
       if (value) request[field] = value;
     }
     for (const field of ['merge', 'base_fix', 'security_review', 'security_fix', 'security_close']) {

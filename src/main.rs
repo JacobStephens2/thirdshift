@@ -98,6 +98,8 @@ mod ready;
 #[cfg(target_os = "linux")]
 mod recovery;
 #[cfg(target_os = "linux")]
+mod release;
+#[cfg(target_os = "linux")]
 mod resend_key;
 #[cfg(target_os = "linux")]
 mod reservation;
@@ -186,6 +188,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
+       thirdshift release <version>                  Publish and merge a thirdshift release from green origin/main
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -473,6 +476,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Release(args)) => return release(args),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
         Ok(Command::Review(command)) => return printed(processes::review::run(command)),
         Ok(Command::Fix(command)) => return fix(command),
@@ -606,6 +610,28 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 }
 
 #[cfg(target_os = "linux")]
+fn release(args: args::ReleaseArgs) -> ExitCode {
+    if let Err(error) = release::outside_session() {
+        return failure(&error);
+    }
+    let flags = asks::Flags {
+        email: args.email,
+        harness: args.harness,
+        ..Default::default()
+    };
+    let (config, mut started) = match command::start(
+        Begin::ReleaseRun,
+        |config| flags.notification(config),
+        About::ReleaseRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = flags.harness(&config);
+    started.built_with(&harness);
+    started.finish(Ending::Release(release::run(&args.version, &mut harness)))
+}
+
 fn triage(args: args::TriageArgs) -> ExitCode {
     let input = match triage::Input::read(args.issue, args.file.as_deref()) {
         Ok(input) => input,

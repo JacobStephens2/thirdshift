@@ -24,6 +24,9 @@ mod ancestry;
 #[path = "release/checks.rs"]
 mod checks;
 
+#[path = "release/native.rs"]
+mod native;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

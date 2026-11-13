@@ -7,7 +7,7 @@ const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const { replaceRecord } = require('./records.cjs');
 
-async function startFixture(extraEnv = {}) {
+async function startFixture(extraEnv = {}, repository = 'acme/widgets') {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-start-page-'));
   let server, exited, browser;
   const close = async () => {
@@ -28,8 +28,8 @@ async function startFixture(extraEnv = {}) {
     git(['-C', repo, 'config', 'user.email', 'fixture@example.test']);
     git(['-C', repo, 'commit', '--allow-empty', '-m', 'Fixture']);
     git(['-C', repo, 'push', 'origin', 'main']);
-    git(['-C', repo, 'remote', 'set-url', 'origin', 'https://github.com/acme/widgets']);
-    git(['-C', repo, 'config', `url.${remote}.insteadOf`, 'https://github.com/acme/widgets']);
+    git(['-C', repo, 'remote', 'set-url', 'origin', `https://github.com/${repository}`]);
+    git(['-C', repo, 'config', `url.${remote}.insteadOf`, `https://github.com/${repository}`]);
     await writeFile(join(home, '.thirdshift/config.toml'), `launch_directories = [${JSON.stringify(repo)}]\n[email]\nalways = false\n[harness]\ndefault = "codex"\n[console]\nport = 0\nallowed_emails = ["owner@example.test"]\n`);
     await writeFile(join(home, '.thirdshift/console-accounts.json'), JSON.stringify({
       'owner@example.test': {

@@ -20,8 +20,8 @@ use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
 use Sender::{
-    ArchitectRun, Experiment, FixRun, Process, ReviewRun, ScoringRun, SecurityRun, TriageRun,
-    Trial, Units,
+    ArchitectRun, Experiment, FixRun, Process, ReleaseRun, ReviewRun, ScoringRun, SecurityRun,
+    TriageRun, Trial, Units,
 };
 
 /// A press unit on the home page, which each prompt and skill links back to.
@@ -107,6 +107,7 @@ enum Sender {
     /// An Architect run, which the press units, a Ticket run's, don't cover.
     ArchitectRun,
     TriageRun,
+    ReleaseRun,
     /// A Security run, before any dispatched Ticket run.
     SecurityRun,
     /// An Experiment's private model Grader.
@@ -268,6 +269,17 @@ fn prompts() -> Vec<Prompt> {
                 "<Report>",
                 &[CATEGORY.into()],
                 false,
+            ),
+        },
+        Prompt {
+            id: "prompt-release-summary",
+            title: "Release summary",
+            when: "A Release run summarizes the fetched release evidence in one tool-less Session inside a fresh-home sandbox, retaining its Session trace under the Command. A failed or empty summary falls back to GitHub generated notes outside the summary markers.",
+            sender: ReleaseRun,
+            text: prompt::release_summary(
+                "<version>",
+                "<version diff>",
+                &[serde_json::json!({"number": "<number>", "title": "<title>", "body": "<body>"})],
             ),
         },
         Prompt {
@@ -909,6 +921,7 @@ fn sent_by(sender: &Sender) -> String {
         Units(units) => unit_links(units),
         ArchitectRun => "an Architect run, before any unit".to_string(),
         TriageRun => "a Triage run".to_string(),
+        ReleaseRun => "a Release run".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
         Experiment => "an Experiment, after its Trials".to_string(),
         ScoringRun => "a Scoring run".to_string(),

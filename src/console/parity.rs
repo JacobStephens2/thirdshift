@@ -52,6 +52,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("LogsExport", "logs widgets#7 --export output"),
     ("LogFile", "logs --file id"),
     ("ReleaseSummary", "--release-summary"),
+    ("Release", "release 1.2.3"),
     ("Skill", "skill to-spec"),
     ("Process", "process list"),
     ("Review", "review https://github.com/acme/widgets/pull/1"),

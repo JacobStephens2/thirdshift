@@ -232,6 +232,7 @@ impl<'a> Observation<'a> {
         } else if facts
             .outcome
             .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
+            || matches!(self, Observation::Record(command) if command.record.kind == "Release run" && facts.outcome == Some("interrupted"))
             || matches!(self, Observation::Record(command) if command.record.kind == "Experiment" && matches!(facts.outcome, Some("fail" | "inconclusive" | "waiting_on_rechecks" | "waiting_on_leaks" | "waiting_on_people")))
         {
             Some(NeedsYouKind::Failed)
@@ -560,6 +561,9 @@ pub(super) fn evaluate<'a>(
             resumed_at(command, &commands_for_resume, ended)
         } else if waited {
             superseded_at(starts, &starts_by_work, ended)
+                .into_iter()
+                .chain(release_taken_up_at(command, &commands_for_resume, ended))
+                .min()
         } else {
             None
         };
@@ -607,12 +611,7 @@ pub(super) fn evaluate<'a>(
         let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
         let dismissal = dismissed_row.as_ref().map(|row| row.view(kind_now));
         let needs_you_kind = live_problem
-            .or_else(|| {
-                problem.filter(|_| {
-                    held && github_moved.is_none()
-                        && (facts.outcome != Some("paused") || taken_up.is_none())
-                })
-            })
+            .or_else(|| problem.filter(|_| held && github_moved.is_none() && taken_up.is_none()))
             .filter(|_| !dismissed);
         let from = if problem.is_some() {
             Some("needs you")
@@ -888,10 +887,13 @@ fn github_work_left(
                     ("needs-triage removed", issue.triaged_at.as_deref())
                 } else {
                     let pull = github.pull_request(&row, record.pull_request.as_deref()?)?;
-                    if pull.state != PrState::Merged {
-                        return None;
+                    match pull.state {
+                        PrState::Merged => (MERGED_REASON, pull.event_time()),
+                        PrState::Closed if record.kind == "Release run" => {
+                            (CLOSED_REASON, pull.closed_at.as_deref())
+                        }
+                        PrState::Open | PrState::Closed => return None,
                     }
-                    (MERGED_REASON, pull.event_time())
                 };
                 time(at)
                     .or(ended)
@@ -1005,6 +1007,52 @@ fn superseded_at(
                     .find(|time| **time > *start && ended.is_none_or(|end| **time >= end))
                     .copied()
             })
+        })
+        .min()
+}
+
+/// A newer Release run takes up an earlier failure when it starts after
+/// that failure, or succeeds after it. An overlapping refused start alone
+/// cannot settle the Release run still holding the release lock.
+fn release_taken_up_at(
+    command: Observation<'_>,
+    all: &[Observation<'_>],
+    ended: Option<DateTime<FixedOffset>>,
+) -> Option<DateTime<FixedOffset>> {
+    let Observation::Record(command) = command else {
+        return None;
+    };
+    if command.record.kind != "Release run" {
+        return None;
+    }
+    let start = time(Some(&command.record.started_at))?;
+    let waiting_since = ended.unwrap_or(start);
+    all.iter()
+        .filter_map(|other| {
+            let Observation::Record(other) = other else {
+                return None;
+            };
+            if other.record.kind != "Release run"
+                || !command
+                    .record
+                    .repository
+                    .eq_ignore_ascii_case(&other.record.repository)
+            {
+                return None;
+            }
+            let at = time(Some(&other.record.started_at))?;
+            if at <= start {
+                return None;
+            }
+            let succeeded = (other.record.outcome.as_deref() == Some("merged"))
+                .then(|| time(other.record.ended_at.as_deref()))
+                .flatten()
+                .filter(|at| *at >= waiting_since);
+            (at >= waiting_since)
+                .then_some(at)
+                .into_iter()
+                .chain(succeeded)
+                .min()
         })
         .min()
 }

@@ -183,6 +183,7 @@ pub enum Command {
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
+    Release(ReleaseArgs),
     Skill {
         name: String,
         issue: Option<IssueInput>,
@@ -1006,6 +1007,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
         Some("triage") => return parse_triage(&args[1..]).map(Command::Triage),
+        Some("release") => return parse_release(&args[1..]).map(Command::Release),
         Some("pickup") => return parse_pass(&args[1..], "pickup").map(Command::Pickup),
         Some("secure") => return parse_pass(&args[1..], "secure").map(Command::Secure),
         _ => {}
@@ -1546,6 +1548,36 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
         base,
         flags,
         plan_only,
+    })
+}
+
+pub struct ReleaseArgs {
+    pub version: String,
+    pub harness: harness::Asked,
+    pub email: Option<NotificationAsk>,
+}
+
+fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
+    let mut version = None;
+    let mut harness = harness::Asked::default();
+    let mut email = None;
+    let mut rest = args.iter().peekable();
+    while let Some(arg) = rest.next() {
+        if take_email_flag(&mut email, arg, &mut rest)?
+            || take_harness_flag(&mut harness, arg, &mut rest)?
+        {
+            continue;
+        }
+        ensure!(
+            version.is_none() && !arg.starts_with('-'),
+            "unexpected argument after release: {arg}"
+        );
+        version = Some(arg.clone());
+    }
+    Ok(ReleaseArgs {
+        version: version.context("release requires <version> (X.Y.Z)")?,
+        harness,
+        email,
     })
 }
 

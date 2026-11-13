@@ -4358,6 +4358,43 @@ cargo test
 
 ## Releasing
 
+### Release runs
+
+From a clone whose `origin` is `JacobStephens2/thirdshift`, run
+`thirdshift release <version>` on Linux. The version must be plain `X.Y.Z`,
+without leading zeros, and greater than the version on freshly fetched `main`.
+The running binary uses Git objects and temporary detached worktrees, leaving
+the Launch directory's checked-out branch and uncommitted work alone.
+
+It chooses the newest `main` commit descending from the last release tag whose
+push CI succeeded. It waits with periodic progress lines while candidates have
+pending CI, and fails when none qualifies after CI completes. One tool-less
+summary Session runs in a fresh-home sandbox with its Session trace attached to
+the Release run. Failed or empty summaries fall back to GitHub generated notes
+outside the summary markers, so the post-release notes job does not repeat them.
+
+The Command pushes `release-<version>`, opens `Release <version>` into `main`,
+waits for checks and mergeability, pushes `v<version>` at that validated bump
+head, waits for the release workflow and merges the bump PR. It does not run
+`thirdshift update`. Existing branches or tags require the Day shift; this
+explicit-version flow does not yet resume releases or select versions itself.
+
+Use `--harness`, `--model`, `--effort`, `--email`, `--email-unless-merged` or
+`--no-email` as on other Commands. A machine-local release lock and atomic
+origin reservation serialize releases independently of the Command limit;
+the bump PR has `in-progress` while the run is live. Factory Sessions cannot
+start releases. `thirdshift stop` releases the locks and live label.
+
+Live Release runs appear in Working. Published and merged runs appear in Done
+and stay quiet under `email-unless-merged`. Failures, including publication
+without merging, appear in Needs you and email even under that policy. They
+settle when the bump PR merges or closes, a later Release run starts, or a
+Dismissal covers them. Cron jobs recognizes `thirdshift release <version>`.
+Console Start controls and `POST /api/v1/start` (also `/api/v1/runs`) require
+`admin` scope for releases; `run` scope and narrowed viewers are refused.
+
+### Legacy release script
+
 Run `scripts/release.sh` on Linux. It refuses other hosts before fetching,
 writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
 such as Lima; on Windows, use WSL2.

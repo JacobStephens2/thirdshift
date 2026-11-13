@@ -9,12 +9,13 @@ use super::super::reading::{Command, Entry, Observation, Snapshot};
 use super::scope::{Filters, Span, Window};
 
 /// Commands that do work. A Pickup run only selects and dispatches one.
-const WORK: [&str; 8] = [
+const WORK: [&str; 9] = [
     "Run",
     "Spec run",
     "Base fix",
     "Review run",
     "Fix run",
+    "Release run",
     "Triage run",
     "Architect run",
     "Security run",
