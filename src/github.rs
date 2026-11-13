@@ -96,6 +96,7 @@ pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
 /// GitHub CLI operations bound to an immutable interruption policy.
 /// Ordinary views stop for Command interruption; completion views finish
 /// independently without changing the recorded request or other views.
+#[derive(Clone)]
 pub struct GitHub {
     interruption: Interruption,
     wait_for_quota: bool,

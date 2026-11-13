@@ -3,6 +3,7 @@
 use super::*;
 use crate::ci::{self, Ci, FailedChecks, Watch};
 use crate::github::review::ReviewInput;
+use crate::pull_request::PullRequest;
 
 pub(super) struct Delivery<'a> {
     pub git: &'a Git,
@@ -221,37 +222,14 @@ impl Delivery<'_> {
         Ok(())
     }
 
+    /// Delegate to the pull-request owner's Review readiness for `head`.
     fn require_mergeable(&self, head: &str) -> Result<()> {
-        let mut backoff = crate::poll::Backoff::new();
-        loop {
-            self.unchanged_head(head)?;
-            let observed = self
-                .github
-                .pr_snapshot(&self.pr.issue, &self.pr.url)?
-                .context("captured pull request disappeared during Review run")?;
-            ensure!(
-                observed.head_commit == head
-                    && observed.pr.number == self.pr.issue.number
-                    && observed.pr.url == self.pr.url
-                    && observed.pr.head == self.snapshot.branch
-                    && observed.pr.base == self.snapshot.base
-                    && observed.pr.is_open()
-                    && !observed.pr.is_draft
-                    && !observed.from_fork,
-                "pull request changed during Review run readiness"
-            );
-            self.unchanged_head(head)?;
-            match observed.mergeable {
-                crate::github::Mergeable::Yes => return Ok(()),
-                crate::github::Mergeable::No => bail!(
-                    "pull request needs updating before merge; the author must resolve the conflict with {}",
-                    self.snapshot.base
-                ),
-                crate::github::Mergeable::Unknown => {
-                    let state = (observed.head_commit, observed.mergeable);
-                    crate::poll::sleep(backoff.observe(state, std::time::Instant::now()))?;
-                }
-            }
-        }
+        PullRequest::on_pull_request(
+            self.pr,
+            &self.snapshot.branch,
+            &self.snapshot.base,
+            self.github.clone(),
+        )
+        .ensure_review_ready(head)
     }
 }
