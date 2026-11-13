@@ -65,6 +65,8 @@ pub enum CommandKind {
     Review,
     #[serde(rename = "Custom process")]
     Process,
+    #[serde(rename = "Release run")]
+    Release,
 }
 
 impl std::fmt::Display for CommandKind {
@@ -77,6 +79,7 @@ impl std::fmt::Display for CommandKind {
             Self::Fix => "Fix run",
             Self::Review => "Review run",
             Self::Process => "Custom process",
+            Self::Release => "Release run",
         };
         f.write_str(name)
     }

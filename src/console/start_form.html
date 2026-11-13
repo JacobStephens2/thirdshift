@@ -1,9 +1,10 @@
-<section class="start-controls" aria-label="Start work" data-start-area data-csrf="{{ csrf }}">
+<section class="start-controls" aria-label="Start work" data-start-area data-csrf="{{ csrf }}" data-start-run="{{ !start.repositories.is_empty() }}" data-start-release="{{ !start.release_repositories.is_empty() }}">
   <details><summary>Start work</summary>
     <p>Choose the repository's machine. <a href="/cronjobs">Run a Pass now</a>.</p>
     <noscript><p>Starting work from this page requires JavaScript for confirmation. The CLI is also available.</p></noscript>
     {% if let Some(error) = start.error %}<p role="alert">Could not load Launch directories: {{ error }}</p>{% endif %}
-    {% if start.repositories.is_empty() %}<p>No known Launch directories. Add a repository to <code>launch_directories</code> in User config, or use it in a thirdshift cron job.</p>{% else %}
+    {% if start.repositories.is_empty() && start.release_repositories.is_empty() %}<p>No known Launch directories. Add a repository to <code>launch_directories</code> in User config, or use it in a thirdshift cron job.</p>{% endif %}
+    {% if !start.repositories.is_empty() %}
     <form data-start-form class="start-form">
       <div class="start-field"><label for="start-repository">Repository</label><select id="start-repository" name="repository" required>{% for repository in start.repositories %}<option value="{{ repository.repository }}" data-machine="{{ repository.machine }}">{{ repository.label }}</option>{% endfor %}</select></div>
       <label>Issue number or URL <input name="issue" required placeholder="7 or https://github.com/owner/repo/issues/7"></label>
@@ -25,6 +26,22 @@
       </details>
       <button type="submit" disabled data-start-enable>Review start</button>
     </form>
+    {% endif %}
+    {% if !start.release_repositories.is_empty() %}
+    <details><summary>Start Release run</summary>
+      <p>Publish and merge an explicit thirdshift version from green <code>origin/main</code>.</p>
+      <form data-start-form="release" class="start-form">
+        <input type="hidden" name="command" value="release">
+        <div class="start-field"><label for="release-repository">Repository</label><select id="release-repository" name="repository" required>{% for repository in start.release_repositories %}<option value="{{ repository.repository }}" data-machine="{{ repository.machine }}">{{ repository.label }}</option>{% endfor %}</select></div>
+        <label>Version <input name="version" required pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" placeholder="1.2.3"></label>
+        <div class="start-field"><label for="release-harness">Harness</label><select id="release-harness" name="harness">{% for name in start.harnesses %}<option{% if name.as_str() == start.harness %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></div>
+        <label>Model <input name="model" placeholder="User config / Harness default"></label>
+        <label>Effort <input name="effort" placeholder="User config / Harness default"></label>
+        <div class="start-field"><label for="release-email">Email</label><select id="release-email" name="email"><option value="">User config</option><option value="always">Always</option><option value="unless_merged">Unless merged</option><option value="never">Never</option></select></div>
+        <label>Email address <input name="email_address" type="email" placeholder="User config"></label>
+        <button type="submit" disabled data-start-enable>Review release</button>
+      </form>
+    </details>
     {% endif %}
   </details>
   <p data-start-result role="status" aria-live="polite"></p>

@@ -48,13 +48,29 @@ pub(super) fn document() -> Value {
         if route.method == axum::http::Method::POST {
             paths.get_mut(route.api).unwrap()["post"]["requestBody"] = action_body(route.view);
         }
+        if matches!(route.view, View::StartRun | View::StartOptions) {
+            let operation =
+                &mut paths.get_mut(route.api).unwrap()[route.method.as_str().to_ascii_lowercase()];
+            operation["x-any-scopes"] = json!(["run", "admin"]);
+            operation["description"] = json!(format!(
+                "CLI twins: {}. Release starts require admin; other Command starts require run. Start choices are filtered by these scopes.",
+                route.cli.join("; ")
+            ));
+            if matches!(route.view, View::StartRun) {
+                operation["x-command-scopes"] = super::start::Kind::ALL
+                    .into_iter()
+                    .map(|kind| (kind.word().to_owned(), json!(kind.scope().name())))
+                    .collect::<Map<String, Value>>()
+                    .into();
+            }
+        }
     }
     json!({
         "openapi": "3.1.1",
         "info": {
             "title": "thirdshift Console API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Currently served /api/v1 operations. Each operation enforces its x-scope. Bearer tokens require HTTPS or a direct connection to 127.0.0.1 without proxy headers. Local --no-sign-in needs no session."
+            "description": "Currently served /api/v1 operations. Operations enforce x-scope except shared Start operations, whose x-any-scopes lists admission alternatives and x-command-scopes selects the required scope per Command. Release starts require admin; other starts require run. Bearer tokens require HTTPS or a direct connection to 127.0.0.1 without proxy headers. Local --no-sign-in needs no session."
         },
         "paths": paths,
         "security": [{"ConsoleSession": []}, {"ConsoleBearer": []}],
@@ -524,6 +540,7 @@ fn start_schema() -> Value {
     let fields = json!({
         "repository": text, "issue": {"oneOf":[{"type":"integer","minimum":1},text]},
         "pull_request": text, "author": text, "name": text,
+        "version": {"type":"string", "pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
         "base": text, "focus": text, "report": {"type":"string","minLength":1},
         "order": {"enum":["lowest-first","highest-first"]},
         "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
@@ -558,6 +575,7 @@ fn start_schema() -> Value {
             required.push("command");
         }
         let mut variant = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
+        variant["x-scope"] = json!(kind.scope().name());
         if command == "review" {
             variant["oneOf"] = json!([
                 {"required":["pull_request"],"not":{"required":["author"]}},

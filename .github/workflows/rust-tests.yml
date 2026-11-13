@@ -50,6 +50,24 @@ jobs:
         run: |
           rustup toolchain install
           rustc --version
+      - name: Install sandbox dependencies
+        if: ${{ inputs.probe == 'none' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes apparmor bubblewrap socat
+          # Ubuntu restricts unprivileged user namespaces. Allow bwrap alone
+          # to create the namespaces used by the real sandbox tests.
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          bwrap --unshare-pid --unshare-ipc --unshare-uts --unshare-net \
+            --ro-bind / / --proc /proc --dev /dev -- /bin/true
       - uses: Swatinem/rust-cache@v2
         if: ${{ inputs.probe == 'none' }}
         id: cache

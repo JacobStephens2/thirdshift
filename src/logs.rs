@@ -128,6 +128,7 @@ pub enum CommandKind {
     Process,
     Review,
     Fix,
+    Release,
 }
 
 impl CommandKind {
@@ -143,6 +144,7 @@ impl CommandKind {
             Self::Process => "process",
             Self::Review => "review",
             Self::Fix => "fix",
+            Self::Release => "release",
         }
     }
 
@@ -158,6 +160,7 @@ impl CommandKind {
             "process" => Some(Self::Process),
             "review" => Some(Self::Review),
             "fix" => Some(Self::Fix),
+            "release" => Some(Self::Release),
             _ => None,
         }
     }
@@ -177,6 +180,7 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
+    ReleaseRun,
     ReviewRun {
         pass: bool,
     },
@@ -220,6 +224,7 @@ pub enum Work<'a> {
     ScoringRun(&'a Repo),
     ReviewRun(&'a Repo),
     FixRun(&'a Repo),
+    ReleaseRun(&'a Repo),
     /// Triage on a Report, or on the retained explicit or Pass-selected issue.
     TriageRun {
         repo: &'a Repo,
@@ -665,6 +670,7 @@ impl<'a> Work<'a> {
             Self::ScoringRun(_) => "scoring-run",
             Self::ReviewRun(_) => "review-run",
             Self::FixRun(_) => "fix-run",
+            Self::ReleaseRun(_) => "release-run",
             Self::TriageRun { .. } => "triage-run",
             Self::Experiment(_) => "experiment",
             Self::Process { name, .. } => return Identity::custom(name, None),
@@ -681,6 +687,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::ReviewRun(_) => Some(Stage::CodeReview),
             Work::FixRun(_) => Some(Stage::PullRequest),
+            Work::ReleaseRun(_) => Some(Stage::PullRequest),
             Work::TriageRun { .. } => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
@@ -698,6 +705,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(repo)
             | Work::ReviewRun(repo)
             | Work::FixRun(repo)
+            | Work::ReleaseRun(repo)
             | Work::TriageRun { repo, .. }
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
@@ -715,6 +723,7 @@ impl<'a> Work<'a> {
                 CommandKind::Scoring => Kind::ScoringRun,
                 CommandKind::Review => Kind::ReviewRun,
                 CommandKind::Fix => Kind::FixRun,
+                CommandKind::Release => Kind::ReleaseRun,
                 CommandKind::Triage => Kind::TriageRun,
                 CommandKind::Experiment => Kind::Experiment,
                 CommandKind::Process => Kind::Process,
@@ -727,6 +736,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Kind::ScoringRun,
             Work::ReviewRun(_) => Kind::ReviewRun,
             Work::FixRun(_) => Kind::FixRun,
+            Work::ReleaseRun(_) => Kind::ReleaseRun,
             Work::TriageRun { .. } => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
@@ -744,6 +754,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
+            | Work::ReleaseRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

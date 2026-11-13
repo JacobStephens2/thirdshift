@@ -24,6 +24,9 @@ mod ancestry;
 #[path = "release/checks.rs"]
 mod checks;
 
+#[path = "release/native.rs"]
+mod native;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -402,20 +405,32 @@ exec "$THIRDSHIFT_TEST_BINARY" "$@"
                 r#"#!/bin/bash
 set -euo pipefail
 command -p git "$@"
-if [ "$1" = push ]; then
-    for argument in "$@"; do
-        case $argument in
-        *:refs/tags/v*)
+pushed=0
+skip_value=0
+for argument in "$@"; do
+    if [ "$skip_value" -eq 1 ]; then
+        skip_value=0
+        continue
+    fi
+    case $argument in
+    -c|-C)
+        skip_value=1
+        ;;
+    push)
+        pushed=1
+        ;;
+    *:refs/tags/v*)
+        if [ "$pushed" -eq 1 ]; then
             sha=${{argument%:refs/tags/*}}
             tag=${{argument#*:refs/tags/}}
             run='{run}'
             run=${{run//@SHA@/$sha}}
             gh fake run "${{run//@TAG@/$tag}}"
             touch "$FAKE_GH_STATE.tag-pushed"
-            ;;
-        esac
-    done
-fi
+        fi
+        ;;
+    esac
+done
 "#
             ),
         );

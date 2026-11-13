@@ -806,6 +806,7 @@ mod tests {
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
+                | Work::ReleaseRun(_)
                 | Work::TriageRun { .. }
                 | Work::Experiment(_)
                 | Work::Process { .. } => {

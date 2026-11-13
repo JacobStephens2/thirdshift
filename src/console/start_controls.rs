@@ -9,7 +9,7 @@ use crate::{
 
 use super::start::Request;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Repository {
     pub repository: String,
     pub machine: String,
@@ -19,6 +19,8 @@ pub(super) struct Repository {
 #[derive(Serialize, Deserialize)]
 pub(super) struct Form {
     pub repositories: Vec<Repository>,
+    #[serde(default)]
+    pub release_repositories: Vec<Repository>,
     pub harness: String,
     pub harnesses: Vec<String>,
     pub error: Option<String>,
@@ -67,6 +69,7 @@ impl Form {
     ) -> Self {
         let mut form = Self {
             repositories: Vec::new(),
+            release_repositories: Vec::new(),
             harness: config
                 .harness
                 .default
@@ -99,10 +102,29 @@ impl Form {
                         machine: String::new(),
                     })
                     .collect();
+                form.release_repositories = form
+                    .repositories
+                    .iter()
+                    .filter(|repository| {
+                        repository
+                            .repository
+                            .eq_ignore_ascii_case("JacobStephens2/thirdshift")
+                    })
+                    .cloned()
+                    .collect();
             }
             Err(error) => form.error = Some(error.to_string()),
         }
         form
+    }
+
+    fn restrict(&mut self, scopes: &[super::Scope]) {
+        if !scopes.contains(&super::Scope::Run) {
+            self.repositories.clear();
+        }
+        if !scopes.contains(&super::Scope::Admin) {
+            self.release_repositories.clear();
+        }
     }
 
     pub fn fleet(
@@ -110,16 +132,14 @@ impl Form {
         viewer: &super::auth::Viewer,
         targets: &[super::fleet_control::Target],
     ) -> Option<Self> {
-        if !targets.iter().any(|target| target.run) {
+        if !targets.iter().any(|target| target.run || target.admin) {
             return None;
         }
         let mut form = Self::load(config);
-        if !viewer.scopes.contains(&super::Scope::Run) {
-            form.repositories.clear();
-        }
+        form.restrict(&viewer.scopes);
         for target in targets
             .iter()
-            .filter(|target| target.run && !target.machine.is_empty())
+            .filter(|target| (target.run || target.admin) && !target.machine.is_empty())
         {
             let result = super::fleet::read::Remote::select(
                 config,
@@ -129,17 +149,32 @@ impl Form {
             .and_then(|remote| remote.unwrap().get("/start-options"))
             .and_then(|value| Ok(serde_json::from_value::<Options>(value)?));
             match result {
-                Ok(options) => form
-                    .repositories
-                    .extend(options.form.repositories.into_iter().map(|mut repository| {
+                Ok(options) => {
+                    let label = |mut repository: Repository| {
                         repository.label = format!("{} · {}", repository.repository, target.name);
                         repository.machine = target.machine.clone();
                         repository
-                    })),
+                    };
+                    if target.run {
+                        form.repositories
+                            .extend(options.form.repositories.into_iter().map(label));
+                    }
+                    if target.admin {
+                        form.release_repositories
+                            .extend(options.form.release_repositories.into_iter().map(label));
+                    }
+                }
                 Err(error) => form.error = Some(error.to_string()),
             }
         }
-        Some(form)
+        if !targets.iter().any(|target| target.run)
+            && form.release_repositories.is_empty()
+            && form.error.is_none()
+        {
+            None
+        } else {
+            Some(form)
+        }
     }
 }
 
@@ -167,10 +202,17 @@ impl Options {
     }
 }
 
-pub(super) async fn options() -> axum::response::Response {
-    super::api::read(super::api::Format::Json, || {
+pub(super) async fn options(
+    axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
+) -> axum::response::Response {
+    super::api::read(super::api::Format::Json, move || {
         use axum::response::IntoResponse;
-        Ok(axum::Json(Options::load(&UserConfig::load()?)?).into_response())
+        let mut options = Options::load(&UserConfig::load()?)?;
+        options.form.restrict(&viewer.scopes);
+        if !viewer.scopes.contains(&super::Scope::Run) {
+            options.passes.clear();
+        }
+        Ok(axum::Json(options).into_response())
     })
     .await
 }
@@ -313,6 +355,7 @@ fn pass_choices<'a>(
             | args::Command::LogsExport { .. }
             | args::Command::LogFile { .. }
             | args::Command::ReleaseSummary
+            | args::Command::Release(_)
             | args::Command::Skill { .. }
             | args::Command::Process(_)
             | args::Command::Trial(_)

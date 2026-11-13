@@ -78,6 +78,12 @@ target or doctests. For a focused iteration, use
 `cargo test --bin thirdshift <module>::tests` or `cargo test --test <file>`
 (the file name without `.rs`).
 
+The native Release summary happy-path test runs a real sandbox. Install
+`bubblewrap` and `socat` before running the Rust suite. On Ubuntu 24.04,
+AppArmor must also permit `/usr/bin/bwrap` to create unprivileged user
+namespaces. The Rust CI workflow installs these dependencies, loads a profile
+granting that permission to `bwrap`, and probes sandbox startup before tests.
+
 Some tests give a Trial, grader or Harness a deadline of a second or less, and
 that deadline covers setup as well as the fake agent. On a busy many-core host,
 running every test at once can use up the deadline before the fake agent starts.

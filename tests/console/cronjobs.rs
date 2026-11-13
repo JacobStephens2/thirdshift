@@ -465,6 +465,7 @@ fn cronjobs_classifies_literal_commands_without_executing_them() {
         ("fix", Some("Fix run")),
         ("review --author acme", Some("Review run")),
         ("process inspect", Some("Custom process")),
+        ("release 1.2.3 --no-email", Some("Release run")),
         ("https://github.com/acme/widgets/issues/7", None),
         ("pickup > cron.log && thirdshift secure", None),
         ("status --json", None),

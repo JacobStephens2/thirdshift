@@ -813,7 +813,7 @@ address's scopes, including the Security finding limits above.
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
 | `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
-| `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
+| `admin` | Release starts; User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
 | `report` | Only `POST /api/v1/metrics/report`: a JSON body with `version`, `machine` (the token's holder), `view` and `summary`, sent by `metrics --push` |
 
 The actions in the following table take `application/x-www-form-urlencoded`
@@ -964,6 +964,11 @@ which also starts a Spec run when the issue has Tickets. Every request names
 | `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
 | `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
 | `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
+| `release` | Requires `admin` scope and explicit `version` (`X.Y.Z`); optional `email`, `harness`, `model`, `effort`; repository must be `JacobStephens2/thirdshift` |
+
+`POST /api/v1/start` is an alias of this path. Release starts require `admin`
+scope; the other Commands require `run`. The Console shows a separate Release
+run form to administrators, including administrators whose scopes omit `run`.
 
 Booleans use `true` or `false`. All options and combinations are checked by
 the CLI argument parser; for example, Architect `plan_only` refuses options
@@ -4358,6 +4363,43 @@ cargo test
 
 ## Releasing
 
+### Release runs
+
+From a clone whose `origin` is `JacobStephens2/thirdshift`, run
+`thirdshift release <version>` on Linux. The version must be plain `X.Y.Z`,
+without leading zeros, and greater than the version on freshly fetched `main`.
+The running binary uses Git objects and temporary detached worktrees, leaving
+the Launch directory's checked-out branch and uncommitted work alone.
+
+It chooses the newest `main` commit descending from the last release tag whose
+push CI succeeded. It waits with periodic progress lines while candidates have
+pending CI, and fails when none qualifies after CI completes. One tool-less
+summary Session runs in a fresh-home sandbox with its Session trace attached to
+the Release run. Failed or empty summaries fall back to GitHub generated notes
+outside the summary markers, so the post-release notes job does not repeat them.
+
+The Command pushes `release-<version>`, opens `Release <version>` into `main`,
+waits for checks and mergeability, pushes `v<version>` at that validated bump
+head, waits for the release workflow and merges the bump PR. It does not run
+`thirdshift update`. Existing branches or tags require the Day shift; this
+explicit-version flow does not yet resume releases or select versions itself.
+
+Use `--harness`, `--model`, `--effort`, `--email`, `--email-unless-merged` or
+`--no-email` as on other Commands. A machine-local release lock and atomic
+origin reservation serialize releases independently of the Command limit;
+the bump PR has `in-progress` while the run is live. Factory Sessions cannot
+start releases. `thirdshift stop` releases the locks and live label.
+
+Live Release runs appear in Working. Published and merged runs appear in Done
+and stay quiet under `email-unless-merged`. Failures, including publication
+without merging, appear in Needs you and email even under that policy. They
+settle when the bump PR merges or closes, a later Release run starts, or a
+Dismissal covers them. Cron jobs recognizes `thirdshift release <version>`.
+Console Start controls and `POST /api/v1/start` (also `/api/v1/runs`) require
+`admin` scope for releases; `run` scope and narrowed viewers are refused.
+
+### Release safeguards
+
 The repository owner can run `bash scripts/setup-release-tags.sh` to provision
 or verify the `v*` tag rulesets on `JacobStephens2/thirdshift`. Creation and
 updates allow only Repository Admin; a separate rule with no bypass blocks
@@ -4375,6 +4417,8 @@ and the tagged Git tree is exactly a commit reachable on `origin/main` with
 only the root Cargo manifest and lockfile bumped to the tag's version.
 This gate precedes planning, artifact builds/hosting and crates.io publication.
 Embedded Process changes exercise the release workflow alongside skills and Rust source.
+
+### Legacy release script
 
 Run `scripts/release.sh` on Linux. It refuses other hosts before fetching,
 writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM

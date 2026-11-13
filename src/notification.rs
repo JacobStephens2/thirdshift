@@ -47,6 +47,7 @@ pub enum About<'a> {
     ScoringRun,
     ReviewRun,
     FixRun,
+    ReleaseRun,
     TriageRun,
     /// A Custom process, named by its file, from the Launch directory.
     Process {
@@ -68,6 +69,7 @@ impl About<'_> {
             About::ScoringRun => None,
             About::ReviewRun => launch::repo().ok(),
             About::FixRun => launch::repo().ok(),
+            About::ReleaseRun => launch::repo().ok(),
         }
     }
 }
@@ -91,6 +93,7 @@ enum Subject {
     ScoringRun,
     ReviewRun(Option<Repo>),
     FixRun(Option<Repo>),
+    ReleaseRun(Option<Repo>),
     TriageRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
@@ -112,6 +115,7 @@ impl Subject {
             Subject::ScoringRun => Some(("Scoring run".into(), None)),
             Subject::ReviewRun(repo) => Some(("Review run".into(), repo.as_ref())),
             Subject::FixRun(repo) => Some(("Fix run".into(), repo.as_ref())),
+            Subject::ReleaseRun(repo) => Some(("Release run".into(), repo.as_ref())),
             Subject::TriageRun(repo) => Some(("Triage run".into(), repo.as_ref())),
             Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
@@ -182,6 +186,7 @@ impl RunNotification {
             About::ScoringRun => Subject::ScoringRun,
             About::ReviewRun => Subject::ReviewRun(repo),
             About::FixRun => Subject::FixRun(repo),
+            About::ReleaseRun => Subject::ReleaseRun(repo),
             About::TriageRun => Subject::TriageRun(repo),
             // Input is captured after the Process resolves it.
             About::Process { name } => Subject::Process {
@@ -416,6 +421,11 @@ fn body(
     }
     if let Some((command, repo)) = subject.command() {
         text += &command_lines(&command, repo);
+    }
+    if matches!(subject, Subject::ReleaseRun(_))
+        && let Ok(line) = &account.ended
+    {
+        text += &format!("Details:      {line}\n");
     }
     if let Some(input) = input {
         text += &format!("{:<14}{}\n", format!("{}:", input.label), input.url);
@@ -676,6 +686,32 @@ mod tests {
 
     fn about_architect_run() -> Subject {
         Subject::ArchitectRun(Repo::of_origin("https://github.com/acme/widgets.git"))
+    }
+
+    #[test]
+    fn a_release_notification_is_quiet_unless_merged_only_after_publication_and_merge() {
+        let subject = Subject::ReleaseRun(Repo::of_origin("https://github.com/acme/widgets.git"));
+        let ending = crate::command::Ending::Release(Ok(crate::release::Ended {
+            pr_url: PR.into(),
+            version: "1.2.3".into(),
+        }));
+        let account = crate::run_ending::read(&ending).ok().unwrap();
+        assert!(account.merged_with_nothing_waiting());
+        let (line, text) = told(&subject, &account).unwrap();
+        assert_eq!(line, "[thirdshift] acme/widgets Release run: merged");
+        assert!(text.contains("Command:      Release run"), "{text}");
+        assert!(text.contains("Release 1.2.3 published"), "{text}");
+
+        let ending = crate::command::Ending::Release(Err(crate::failed_run::FailedRun {
+            pr_url: Some(PR.into()),
+            ..anyhow!("published, but merge failed").into()
+        }));
+        let account = crate::run_ending::read(&ending).ok().unwrap();
+        assert!(!account.merged_with_nothing_waiting());
+        let (line, text) = told(&subject, &account).unwrap();
+        assert_eq!(line, "[thirdshift] acme/widgets Release run: failed");
+        assert!(text.contains("published, but merge failed"), "{text}");
+        assert!(text.contains(PR), "{text}");
     }
 
     /// A merged Run's account.

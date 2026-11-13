@@ -151,6 +151,7 @@ pub(super) fn allocate<F: Files>(
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
         Work::ReviewRun(_) => (CommandKind::Review, String::new()),
         Work::FixRun(_) => (CommandKind::Fix, String::new()),
+        Work::ReleaseRun(_) => (CommandKind::Release, String::new()),
         Work::TriageRun { .. } => (CommandKind::Triage, String::new()),
         Work::Experiment(_) => (CommandKind::Experiment, String::new()),
         Work::Process { .. } => (CommandKind::Process, String::new()),
@@ -225,7 +226,7 @@ impl Decoded<'_> {
 
     pub fn command_log(&self, path: &Path) -> PathBuf {
         let subject = match self.subject {
-            "" | "architect" | "secure" | "triage" => String::new(),
+            "" | "architect" | "secure" | "triage" | "release" => String::new(),
             subject if subject.starts_with("process-step-") => String::new(),
             subject => format!("{subject}-"),
         };
