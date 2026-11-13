@@ -600,27 +600,22 @@ impl<A: Adapter> PullRequest<A> {
             self.validate(&snapshot, true)?;
             return Ok(snapshot);
         };
-        let url = self.review_target()?.url;
         let snapshot = self
             .adapter
             .observe(&self.issue, &self.selector(), false)?
             .context("captured pull request disappeared during Review run")?;
-        self.capture(&snapshot)
-            .and_then(|()| {
-                let pr = &snapshot.pr;
-                if !pr.is_open() {
-                    bail!("PR {} is {}, not open", pr.url, pr.state);
-                }
-                self.validate(&snapshot, true)?;
-                if pr.url != url {
-                    bail!("PR URL is {}, not {url}", pr.url);
-                }
-                if snapshot.head_commit != head {
-                    bail!("PR head commit is {}, not {head}", snapshot.head_commit);
-                }
-                Ok(())
-            })
-            .context("pull request changed during Review run readiness")?;
+        let pr = &snapshot.pr;
+        let refused = self.capture(&snapshot).is_err()
+            // Checked before `validate`, which reports a merged target as
+            // ordinary Delivery's `AlreadyMerged` completion.
+            || !pr.is_open()
+            || self.validate(&snapshot, true).is_err()
+            || self.identified.as_ref().is_none_or(|captured| captured.url != pr.url)
+            || snapshot.head_commit != head;
+        // Review's diagnostic is this one line, whatever changed.
+        if refused {
+            bail!("pull request changed during Review run readiness");
+        }
         Ok(snapshot)
     }
 
@@ -2336,6 +2331,20 @@ mod tests {
                 ..World::default()
             });
             let error = pr.ensure_review_ready("watched").unwrap_err();
+            let refusal = match change {
+                ObservationChange::Missing => "captured pull request disappeared during Review run",
+                ObservationChange::Unreadable => "read failed",
+                ObservationChange::WrongBase
+                | ObservationChange::WrongHead
+                | ObservationChange::Fork
+                | ObservationChange::WrongRepository
+                | ObservationChange::Replacement
+                | ObservationChange::Closed
+                | ObservationChange::Merged
+                | ObservationChange::Ready
+                | ObservationChange::Draft => "pull request changed during Review run readiness",
+            };
+            assert_eq!(format!("{error:#}"), refusal, "{change:?}");
             // A merged target fails Review; it is never merged completion.
             assert!(!error.is::<AlreadyMerged>(), "{change:?}");
             assert!(
@@ -2440,5 +2449,46 @@ mod tests {
             ["eligibility", "observe", "eligibility"]
         );
         assert_read_only(&world.borrow());
+    }
+
+    #[test]
+    fn review_readiness_refusal_keeps_its_single_line_diagnostic() {
+        let mut moved = snapshot();
+        moved.head_commit = "later".to_string();
+        let (mut pr, _) = review_owner(World {
+            observations: VecDeque::from([Ok(Some(moved))]),
+            ..World::default()
+        });
+        let error = pr.ensure_review_ready("watched").unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "pull request changed during Review run readiness"
+        );
+    }
+
+    #[test]
+    fn a_head_commit_moved_during_unknown_review_polling_refuses_readiness() {
+        let mut moved = unknown();
+        moved.head_commit = "later".to_string();
+        let (mut pr, world) = review_owner(World {
+            observations: VecDeque::from([Ok(Some(unknown())), Ok(Some(moved))]),
+            ..World::default()
+        });
+        let error = pr.ensure_review_ready("watched").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "pull request changed during Review run readiness"
+        );
+        assert_eq!(
+            world.borrow().reads,
+            [
+                "eligibility",
+                "observe",
+                "eligibility",
+                "pause",
+                "eligibility",
+                "observe"
+            ]
+        );
     }
 }
