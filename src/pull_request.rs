@@ -1,11 +1,12 @@
-//! Pull request ownership for Spec Ticket accounting and Delivery. Numbered
-//! observations, checklist edits, capture transitions, readiness and merge
-//! reconciliation stay behind this interface.
+//! Pull request ownership for Spec Ticket accounting, Delivery and Review
+//! readiness. Numbered observations, checklist edits, capture transitions,
+//! readiness and merge reconciliation stay behind this interface.
 
 use anyhow::{Context, Result, bail};
 
 use crate::child_run::SpecPr;
 use crate::failed_run::PolicyRefusal;
+use crate::github::review::ReviewPullRequest;
 use crate::github::{GitHub, Mergeable, PrSnapshot, PrState, PullRequest as Record};
 use crate::harness::Choice;
 use crate::harness::built_with::MARKER as BUILT_WITH_MARKER;
@@ -107,6 +108,16 @@ pub(crate) struct PullRequest<A = GitHub> {
     /// An adopted head needs recorded agent review before Self-merge.
     merge_hold: Option<String>,
     adapter: A,
+}
+
+/// How a readiness check differs by caller. Ordinary Delivery and Fix may
+/// see a new head and wait for mergeability only within the grace period.
+/// Review stands behind one exact head, rereads Review eligibility around
+/// each numbered observation and waits until GitHub answers.
+#[derive(Clone, Copy)]
+enum Readiness<'h> {
+    Delivery,
+    Review { head: &'h str },
 }
 
 #[derive(PartialEq, Eq)]
@@ -508,7 +519,7 @@ impl<A: Adapter> PullRequest<A> {
     /// coherent numbered observation. Waiting remains interruptible.
     pub fn ensure_ready_and_mergeable(&mut self) -> Result<()> {
         progress::step("checking the PR is open, ready and mergeable");
-        let snapshot = self.settled_ready_snapshot()?;
+        let snapshot = self.settled_ready_snapshot(Readiness::Delivery)?;
         let url = &snapshot.pr.url;
         match snapshot.mergeable {
             Mergeable::Yes => Ok(()),
@@ -523,33 +534,117 @@ impl<A: Adapter> PullRequest<A> {
     /// [`Self::ensure_ready_and_mergeable`] polls it. Mergeability GitHub has
     /// not worked out within the grace period is not mergeable.
     pub fn is_mergeable(&mut self) -> Result<bool> {
-        Ok(self.settled_ready_snapshot()?.mergeable == Mergeable::Yes)
+        Ok(self.settled_ready_snapshot(Readiness::Delivery)?.mergeable == Mergeable::Yes)
+    }
+
+    /// Review readiness for the exact `head` a Review run reviewed or pushed.
+    /// Each poll reads Review eligibility, observes and validates this
+    /// numbered PR, then reads eligibility again before deciding. Branch
+    /// names stay fixed; the Base branch tip may advance. Unknown
+    /// mergeability waits, interruptibly, until GitHub answers. This never
+    /// marks ready, merges, pushes or comments, and a merged target is a
+    /// failed check, never [`AlreadyMerged`].
+    pub fn ensure_review_ready(&mut self, head: &str) -> Result<()> {
+        let snapshot = self.settled_ready_snapshot(Readiness::Review { head })?;
+        match snapshot.mergeable {
+            Mergeable::Yes => Ok(()),
+            Mergeable::No => bail!(
+                "pull request needs updating before merge; the author must resolve the conflict with {}",
+                self.base
+            ),
+            // Review waits out Unknown; it never reaches this decision.
+            Mergeable::Unknown => bail!(
+                "GitHub has not worked out whether PR {} is mergeable",
+                snapshot.pr.url
+            ),
+        }
     }
 
     /// An observation of this open, ready PR, polled while its mergeability
-    /// is unknown until the grace period ends.
-    fn settled_ready_snapshot(&mut self) -> Result<PrSnapshot> {
+    /// is unknown: until the grace period ends for ordinary Delivery, and
+    /// until GitHub answers or the wait is interrupted for Review.
+    fn settled_ready_snapshot(&mut self, readiness: Readiness) -> Result<PrSnapshot> {
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
         let mut waiting_line = poll::WaitingLine::new();
         let mut backoff = poll::Backoff::new();
         loop {
-            let snapshot = self.observe(false)?.context("no PR found")?;
-            self.validate(&snapshot, true)?;
-            match snapshot.mergeable {
-                Mergeable::Unknown if std::time::Instant::now() < deadline => {
+            self.ensure_review_eligible(readiness)?;
+            let snapshot = self.ready_snapshot(readiness)?;
+            self.ensure_review_eligible(readiness)?;
+            match (snapshot.mergeable, readiness) {
+                (Mergeable::Unknown, Readiness::Review { .. }) => {}
+                (Mergeable::Unknown, Readiness::Delivery)
+                    if std::time::Instant::now() < deadline =>
+                {
                     if waiting_line.should_report(()) {
                         progress::step(format!(
                             "waiting for GitHub to calculate mergeability of PR {}",
                             snapshot.pr.url
                         ));
                     }
-                    let state = (snapshot.head_commit, snapshot.mergeable);
-                    self.adapter
-                        .pause(backoff.observe(state, std::time::Instant::now()))?;
                 }
-                Mergeable::Yes | Mergeable::No | Mergeable::Unknown => return Ok(snapshot),
+                (Mergeable::Yes | Mergeable::No | Mergeable::Unknown, _) => return Ok(snapshot),
             }
+            let state = (snapshot.head_commit, snapshot.mergeable);
+            self.adapter
+                .pause(backoff.observe(state, std::time::Instant::now()))?;
         }
+    }
+
+    /// One numbered observation, validated as an open, ready PR of this
+    /// owner. Review also requires the exact captured URL and `head`, and
+    /// reports a merged target as a failed check.
+    fn ready_snapshot(&mut self, readiness: Readiness) -> Result<PrSnapshot> {
+        let Readiness::Review { head } = readiness else {
+            let snapshot = self.observe(false)?.context("no PR found")?;
+            self.validate(&snapshot, true)?;
+            return Ok(snapshot);
+        };
+        let snapshot = self
+            .adapter
+            .observe(&self.issue, &self.selector(), false)?
+            .context("captured pull request disappeared during Review run")?;
+        let pr = &snapshot.pr;
+        let refused = self.capture(&snapshot).is_err()
+            // Checked before `validate`, which reports a merged target as
+            // ordinary Delivery's `AlreadyMerged` completion.
+            || !pr.is_open()
+            || self.validate(&snapshot, true).is_err()
+            || self.identified.as_ref().is_none_or(|captured| captured.url != pr.url)
+            || snapshot.head_commit != head;
+        // Review's diagnostic is this one line, whatever changed.
+        if refused {
+            bail!("pull request changed during Review run readiness");
+        }
+        Ok(snapshot)
+    }
+
+    /// For Review, a fresh read of the existing Review eligibility, with its
+    /// Trusted account checks, at the captured branch names and exact `head`.
+    fn ensure_review_eligible(&mut self, readiness: Readiness) -> Result<()> {
+        let Readiness::Review { head } = readiness else {
+            return Ok(());
+        };
+        let target = self.review_target()?;
+        let current = self.adapter.review_eligibility(&target)?;
+        if current.branch != self.branch || current.base != self.base {
+            bail!("pull request changed during Review run");
+        }
+        if current.head != head {
+            bail!("pull request changed during Review run CI watch");
+        }
+        Ok(())
+    }
+
+    fn review_target(&self) -> Result<crate::review::PullRequestUrl> {
+        let pr = self
+            .identified
+            .as_ref()
+            .context("Review readiness needs a captured pull request")?;
+        Ok(crate::review::PullRequestUrl {
+            url: pr.url.clone(),
+            issue: self.issue.clone(),
+        })
     }
 
     /// A fresh gate and best-effort review decision read precede each numbered
@@ -618,12 +713,16 @@ impl<A: Adapter> PullRequest<A> {
         ))
     }
 
-    fn observe(&mut self, completion: bool) -> Result<Option<PrSnapshot>> {
-        let selector = self
-            .identified
+    /// The captured number, or this Issue branch before capture.
+    fn selector(&self) -> String {
+        self.identified
             .as_ref()
             .map(|pr| pr.number.to_string())
-            .unwrap_or_else(|| self.branch.clone());
+            .unwrap_or_else(|| self.branch.clone())
+    }
+
+    fn observe(&mut self, completion: bool) -> Result<Option<PrSnapshot>> {
+        let selector = self.selector();
         let snapshot = self.adapter.observe(&self.issue, &selector, completion)?;
         if let Some(snapshot) = &snapshot {
             self.capture(snapshot)?;
@@ -750,6 +849,12 @@ pub(crate) trait Adapter {
     ) -> Result<String>;
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
+    /// The existing Review eligibility read, with its Trusted account and
+    /// repository checks.
+    fn review_eligibility(
+        &mut self,
+        pr: &crate::review::PullRequestUrl,
+    ) -> Result<ReviewPullRequest>;
     fn pause(&mut self, delay: std::time::Duration) -> Result<()> {
         poll::sleep(delay)
     }
@@ -821,6 +926,12 @@ impl Adapter for GitHub {
     }
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
         GitHub::merge(self, issue, number, head)
+    }
+    fn review_eligibility(
+        &mut self,
+        pr: &crate::review::PullRequestUrl,
+    ) -> Result<ReviewPullRequest> {
+        self.review_pull_request(pr)
     }
 }
 
@@ -923,6 +1034,12 @@ mod tests {
         effects: Vec<(String, bool)>,
         retarget_after_edit: bool,
         grace: Duration,
+        /// Review eligibility reads, answered like `observations`.
+        eligibility: VecDeque<Eligibility>,
+        /// Review eligibility reads, numbered observations and pauses, in order.
+        reads: Vec<&'static str>,
+        /// The pause after this many pauses is interrupted.
+        interrupt_pause: Option<usize>,
     }
     impl Default for World {
         fn default() -> Self {
@@ -946,6 +1063,9 @@ mod tests {
                 effects: Vec::new(),
                 retarget_after_edit: false,
                 grace: Duration::ZERO,
+                eligibility: VecDeque::from([Ok(eligible())]),
+                reads: Vec::new(),
+                interrupt_pause: None,
             }
         }
     }
@@ -965,6 +1085,7 @@ mod tests {
             assert_eq!(issue.repo_slug(), "acme/widgets");
             let mut world = self.0.borrow_mut();
             world.selected.push((selector.to_string(), completion));
+            world.reads.push("observe");
             let answers = if completion {
                 &mut world.completion
             } else {
@@ -1066,7 +1187,32 @@ mod tests {
             }
             Ok(())
         }
+        fn review_eligibility(
+            &mut self,
+            pr: &crate::review::PullRequestUrl,
+        ) -> Result<ReviewPullRequest> {
+            crate::process::Interruption::Ordinary.check()?;
+            assert_eq!((pr.url.as_str(), pr.issue.number), (URL, 12));
+            let mut world = self.0.borrow_mut();
+            world.reads.push("eligibility");
+            let answer = if world.eligibility.len() > 1 {
+                world.eligibility.pop_front().unwrap()
+            } else {
+                world
+                    .eligibility
+                    .front()
+                    .expect("no eligibility scripted")
+                    .clone()
+            };
+            answer.map_err(anyhow::Error::msg)
+        }
         fn pause(&mut self, _: Duration) -> Result<()> {
+            let mut world = self.0.borrow_mut();
+            world.reads.push("pause");
+            let pauses = world.reads.iter().filter(|read| **read == "pause").count();
+            if world.interrupt_pause.is_some_and(|after| pauses > after) {
+                bail!("interrupted");
+            }
             Ok(())
         }
         fn grace_period(&self) -> Duration {
@@ -1088,6 +1234,43 @@ mod tests {
         observed.pr.number = number;
         observed.pr.url = format!("https://github.com/acme/widgets/pull/{number}");
         observed
+    }
+
+    type Eligibility = std::result::Result<ReviewPullRequest, &'static str>;
+
+    /// The Review eligibility read of the PR [`snapshot`] observes.
+    fn eligible() -> ReviewPullRequest {
+        ReviewPullRequest {
+            title: "Widgets".to_string(),
+            body: String::new(),
+            head: "watched".to_string(),
+            branch: "issue-7".to_string(),
+            base: "main".to_string(),
+            base_head: "base".to_string(),
+        }
+    }
+
+    /// A Review run's owner of the captured PR, as Review constructs it.
+    fn review_owner(world: World) -> (PullRequest<Scripted>, Rc<RefCell<World>>) {
+        let world = Rc::new(RefCell::new(world));
+        let pr = crate::review::PullRequestUrl::parse(URL).unwrap();
+        (
+            PullRequest::on_pull_request(&pr, "issue-7", "main", Scripted(world.clone())),
+            world,
+        )
+    }
+
+    fn unknown() -> PrSnapshot {
+        let mut unknown = snapshot();
+        unknown.mergeable = Mergeable::Unknown;
+        unknown
+    }
+
+    /// Readiness is read-only: no transition, body edit or merge request.
+    fn assert_read_only(world: &World) {
+        assert!(world.ready.is_empty() && world.draft.is_empty());
+        assert!(world.merges.is_empty() && world.edits.is_empty());
+        assert!(world.effects.is_empty() && world.created.is_empty());
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -2038,6 +2221,274 @@ mod tests {
         interrupted_merge(
             "pull_request::tests::an_unconfirmed_interrupted_request_keeps_its_failure_and_interruption",
             false,
+        );
+    }
+
+    #[test]
+    fn review_readiness_reads_eligibility_around_one_validated_numbered_observation() {
+        let (mut pr, world) = review_owner(World::default());
+        pr.ensure_review_ready("watched").unwrap();
+        let world = world.borrow();
+        assert_eq!(world.reads, ["eligibility", "observe", "eligibility"]);
+        assert_eq!(world.selected, [("12".to_string(), false)]);
+        assert_read_only(&world);
+    }
+
+    #[test]
+    fn review_readiness_requires_the_exact_head_and_url_that_ordinary_readiness_does_not() {
+        let mut moved = snapshot();
+        moved.head_commit = "later".to_string();
+        let mut spelled = snapshot();
+        spelled.pr.url = format!("{URL}/");
+        for observed in [moved, spelled] {
+            let (mut ordinary, _) = owner(World {
+                observations: VecDeque::from([Ok(Some(observed.clone()))]),
+                ..World::default()
+            });
+            ordinary.ensure_ready_and_mergeable().unwrap();
+            let (mut review, world) = review_owner(World {
+                observations: VecDeque::from([Ok(Some(observed))]),
+                ..World::default()
+            });
+            let error = review.ensure_review_ready("watched").unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "pull request changed during Review run readiness"
+            );
+            // Validation failure stops before the final eligibility read.
+            assert_eq!(world.borrow().reads, ["eligibility", "observe"]);
+        }
+    }
+
+    #[test]
+    fn review_eligibility_changes_before_the_numbered_observation_stop_without_observing() {
+        let mut moved = eligible();
+        moved.head = "later".to_string();
+        let mut renamed = eligible();
+        renamed.branch = "renamed".to_string();
+        let mut retargeted = eligible();
+        retargeted.base = "develop".to_string();
+        for (answer, message) in [
+            (Ok(moved), "pull request changed during Review run CI watch"),
+            (Ok(renamed), "pull request changed during Review run"),
+            (Ok(retargeted), "pull request changed during Review run"),
+            (
+                Err("author is not a Trusted account"),
+                "author is not a Trusted account",
+            ),
+            (Err("pull request is merged"), "pull request is merged"),
+        ] {
+            let (mut pr, world) = review_owner(World {
+                eligibility: VecDeque::from([answer]),
+                ..World::default()
+            });
+            let error = pr.ensure_review_ready("watched").unwrap_err();
+            assert_eq!(error.to_string(), message);
+            assert_eq!(world.borrow().reads, ["eligibility"]);
+            assert_read_only(&world.borrow());
+        }
+    }
+
+    #[test]
+    fn review_eligibility_changes_after_a_valid_numbered_observation_refuse_readiness() {
+        let mut moved = eligible();
+        moved.head = "later".to_string();
+        let mut retargeted = eligible();
+        retargeted.base = "develop".to_string();
+        for after in [
+            Ok(moved),
+            Ok(retargeted),
+            Err("author is not a Trusted account"),
+        ] {
+            let (mut pr, world) = review_owner(World {
+                eligibility: VecDeque::from([Ok(eligible()), after]),
+                ..World::default()
+            });
+            assert!(pr.ensure_review_ready("watched").is_err());
+            assert_eq!(
+                world.borrow().reads,
+                ["eligibility", "observe", "eligibility"]
+            );
+        }
+    }
+
+    #[test]
+    fn every_unknown_review_poll_refuses_each_common_snapshot_change() {
+        for change in [
+            ObservationChange::WrongBase,
+            ObservationChange::WrongHead,
+            ObservationChange::Fork,
+            ObservationChange::WrongRepository,
+            ObservationChange::Replacement,
+            ObservationChange::Closed,
+            ObservationChange::Merged,
+            ObservationChange::Missing,
+            ObservationChange::Unreadable,
+            ObservationChange::Draft,
+        ] {
+            let (mut pr, world) = review_owner(World {
+                observations: VecDeque::from([Ok(Some(unknown())), change.answer(unknown())]),
+                ..World::default()
+            });
+            let error = pr.ensure_review_ready("watched").unwrap_err();
+            let refusal = match change {
+                ObservationChange::Missing => "captured pull request disappeared during Review run",
+                ObservationChange::Unreadable => "read failed",
+                ObservationChange::WrongBase
+                | ObservationChange::WrongHead
+                | ObservationChange::Fork
+                | ObservationChange::WrongRepository
+                | ObservationChange::Replacement
+                | ObservationChange::Closed
+                | ObservationChange::Merged
+                | ObservationChange::Ready
+                | ObservationChange::Draft => "pull request changed during Review run readiness",
+            };
+            assert_eq!(format!("{error:#}"), refusal, "{change:?}");
+            // A merged target fails Review; it is never merged completion.
+            assert!(!error.is::<AlreadyMerged>(), "{change:?}");
+            assert!(
+                error.chain().all(|cause| !cause.is::<AlreadyMerged>()),
+                "{change:?}"
+            );
+            let world = world.borrow();
+            assert_eq!(
+                world.reads,
+                [
+                    "eligibility",
+                    "observe",
+                    "eligibility",
+                    "pause",
+                    "eligibility",
+                    "observe"
+                ],
+                "{change:?}"
+            );
+            assert!(world.selected.iter().all(|(selector, _)| selector == "12"));
+            assert_read_only(&world);
+        }
+    }
+
+    #[test]
+    fn review_readiness_allows_the_base_branch_tip_to_advance() {
+        let mut advanced = eligible();
+        advanced.base_head = "newer-base".to_string();
+        let (mut pr, _) = review_owner(World {
+            eligibility: VecDeque::from([Ok(eligible()), Ok(advanced)]),
+            ..World::default()
+        });
+        pr.ensure_review_ready("watched").unwrap();
+    }
+
+    #[test]
+    fn review_waits_through_unknown_mergeability_that_ordinary_readiness_does_not() {
+        let observations = || {
+            VecDeque::from([
+                Ok(Some(unknown())),
+                Ok(Some(unknown())),
+                Ok(Some(unknown())),
+                Ok(Some(snapshot())),
+            ])
+        };
+        let (mut ordinary, _) = owner(World {
+            observations: observations(),
+            ..World::default()
+        });
+        let error = ordinary.ensure_ready_and_mergeable().unwrap_err();
+        assert!(error.to_string().contains("has not worked out"), "{error}");
+        let (mut review, world) = review_owner(World {
+            observations: observations(),
+            ..World::default()
+        });
+        review.ensure_review_ready("watched").unwrap();
+        let world = world.borrow();
+        assert_eq!(
+            world.reads.iter().filter(|read| **read == "pause").count(),
+            3
+        );
+        assert_eq!(
+            world
+                .reads
+                .iter()
+                .filter(|read| **read == "eligibility")
+                .count(),
+            8
+        );
+        assert_read_only(&world);
+    }
+
+    #[test]
+    fn an_interrupted_review_wait_stops_without_another_read() {
+        let (mut pr, world) = review_owner(World {
+            observations: VecDeque::from([Ok(Some(unknown()))]),
+            interrupt_pause: Some(1),
+            ..World::default()
+        });
+        let error = pr.ensure_review_ready("watched").unwrap_err();
+        assert_eq!(error.to_string(), "interrupted");
+        let reads = world.borrow().reads.clone();
+        assert_eq!(reads.last(), Some(&"pause"));
+        assert_eq!(reads.iter().filter(|read| **read == "pause").count(), 2);
+    }
+
+    #[test]
+    fn a_conflict_asks_the_review_author_to_update_the_branch() {
+        let mut conflicting = snapshot();
+        conflicting.mergeable = Mergeable::No;
+        let (mut pr, world) = review_owner(World {
+            observations: VecDeque::from([Ok(Some(conflicting))]),
+            ..World::default()
+        });
+        let error = pr.ensure_review_ready("watched").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "pull request needs updating before merge; the author must resolve the conflict with main"
+        );
+        assert_eq!(
+            world.borrow().reads,
+            ["eligibility", "observe", "eligibility"]
+        );
+        assert_read_only(&world.borrow());
+    }
+
+    #[test]
+    fn review_readiness_refusal_keeps_its_single_line_diagnostic() {
+        let mut moved = snapshot();
+        moved.head_commit = "later".to_string();
+        let (mut pr, _) = review_owner(World {
+            observations: VecDeque::from([Ok(Some(moved))]),
+            ..World::default()
+        });
+        let error = pr.ensure_review_ready("watched").unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "pull request changed during Review run readiness"
+        );
+    }
+
+    #[test]
+    fn a_head_commit_moved_during_unknown_review_polling_refuses_readiness() {
+        let mut moved = unknown();
+        moved.head_commit = "later".to_string();
+        let (mut pr, world) = review_owner(World {
+            observations: VecDeque::from([Ok(Some(unknown())), Ok(Some(moved))]),
+            ..World::default()
+        });
+        let error = pr.ensure_review_ready("watched").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "pull request changed during Review run readiness"
+        );
+        assert_eq!(
+            world.borrow().reads,
+            [
+                "eligibility",
+                "observe",
+                "eligibility",
+                "pause",
+                "eligibility",
+                "observe"
+            ]
         );
     }
 }
