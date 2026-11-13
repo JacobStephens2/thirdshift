@@ -13,6 +13,80 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
 "#;
 
 #[test]
+fn passes_skip_release_bumps_but_explicit_fix_still_repairs_them() {
+    for base in ["main", "integration"] {
+        for author in [false, true] {
+            let scenario = Scenario::new();
+            if base != "main" {
+                scenario.origin_has_branch(base, "main", &["Integration"]);
+            }
+            let mut release_url = String::new();
+            for branch in ["release-0.3.0", "feature"] {
+                scenario.origin_has_branch(branch, base, &["Feature"]);
+                let url = scenario.github_has_pr(branch, base, "OPEN");
+                if branch.starts_with("release-") {
+                    release_url = url;
+                }
+            }
+            let mut state = scenario.gh_state();
+            state["collaborators"] = json!(["colleague"]);
+            for branch in ["release-0.3.0", "feature"] {
+                let head = scenario.origin_git(&["rev-parse", branch]);
+                state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+            }
+            scenario.write_gh_state(&state);
+            scenario.agent_does(REPAIR_CI);
+            let mut args = vec![
+                "fix",
+                "--base",
+                base,
+                "--no-merge",
+                "--no-base-fix",
+                "--no-email",
+            ];
+            if author {
+                args.extend(["--author", "colleague"]);
+            }
+
+            let result = scenario.run(&args);
+
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            let selected = if base == "main" {
+                "feature"
+            } else {
+                "release-0.3.0"
+            };
+            let skipped = if base == "main" {
+                "release-0.3.0"
+            } else {
+                "feature"
+            };
+            assert_eq!(
+                scenario.origin_file(selected, "ci-fix.txt").as_deref(),
+                Some("repaired\n")
+            );
+            assert!(scenario.origin_file(skipped, "ci-fix.txt").is_none());
+            if base == "main" {
+                let targeted = scenario.run(&[
+                    "fix",
+                    &release_url,
+                    "--no-merge",
+                    "--no-base-fix",
+                    "--no-email",
+                ]);
+                assert_eq!(targeted.code, Some(0), "{}", targeted.stderr);
+                assert_eq!(
+                    scenario
+                        .origin_file("release-0.3.0", "ci-fix.txt")
+                        .as_deref(),
+                    Some("repaired\n")
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn pass_skips_a_claimed_issue_then_repairs_after_its_claim_ends() {
     for issue_labels in [json!(["spec", "in-progress"]), json!(["in-progress"])] {
         let scenario = Scenario::new();

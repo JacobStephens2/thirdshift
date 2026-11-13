@@ -4060,6 +4060,24 @@ Dismissal covers them. Cron jobs recognizes <code>thirdshift release &lt;version
 Console Start controls and <code>POST /api/v1/start</code> (also <code>/api/v1/runs</code>) require
 <code>admin</code> scope for releases; <code>run</code> scope and narrowed viewers are refused.</p>
 </div></details>
+<details class="fold"><summary><h3>Release safeguards</h3></summary>
+<div class="manual-content" id="release-safeguards">
+<p>The repository owner can run <code>bash scripts/setup-release-tags.sh</code> to provision
+or verify the <code>v*</code> tag rulesets on <code>JacobStephens2/thirdshift</code>. Creation and
+updates allow only Repository Admin; a separate rule with no bypass blocks
+deletion. The interactive wizard guides browser changes and verification;
+automated tests never modify live rulesets. See <a href="https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets">GitHub&#39;s ruleset rules</a>.</p>
+<p>Review Passes (<code>review --author</code>) and Fix Passes skip <code>release-*</code> pull requests
+targeting <code>main</code>, leaving their version-only heads to the Release run. Explicit
+<code>thirdshift fix &lt;pr-url&gt; --no-merge --no-base-fix</code> still repairs those PRs.
+Session destructive-command signals flag <code>thirdshift release</code> and tag pushes
+using <code>git push --tags</code> or <code>refs/tags/</code> refspecs.</p>
+<p>On tag pushes, the release workflow checks <code>github.actor</code> is <code>JacobStephens2</code>
+and the tagged Git tree is exactly a commit reachable on <code>origin/main</code> with
+only the root Cargo manifest and lockfile bumped to the tag&#39;s version.
+This gate precedes planning, artifact builds/hosting and crates.io publication.
+Embedded Process changes exercise the release workflow alongside skills and Rust source.</p>
+</div></details>
 <details class="fold"><summary><h3>Legacy release script</h3></summary>
 <div class="manual-content" id="legacy-release-script">
 <p>Run <code>scripts/release.sh</code> on Linux. It refuses other hosts before fetching,

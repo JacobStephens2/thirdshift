@@ -44,6 +44,7 @@ on:
     paths:
       - 'src/**'
       - 'skills/**'
+      - 'processes/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'dist-workspace.toml'
@@ -62,7 +63,30 @@ concurrency:
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
+  release-tag-guard:
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify release actor
+        if: ${{ github.event_name == 'push' }}
+        env:
+          RELEASE_ACTOR: ${{ github.actor }}
+        run: test "$RELEASE_ACTOR" = JacobStephens2
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name == 'push' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify exact version-only release tree
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          python3 scripts/release-tag-guard.py
+
   plan:
+    needs: [release-tag-guard]
     permissions:
       "actions": "write"
       "contents": "read"

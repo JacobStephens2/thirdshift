@@ -109,6 +109,25 @@ fn native_release_publishes_green_content_without_reading_the_launch_tree() {
     let head = release.pr_head("release-0.2.0");
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), main);
     assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    // The workflow checks a fetched tag; Release publishes it directly to origin.
+    git(
+        &release.maintainer(),
+        &[
+            "fetch",
+            "--no-tags",
+            "origin",
+            "refs/tags/v0.2.0:refs/tags/v0.2.0",
+        ],
+    );
+    let guard = release
+        .command(Path::new("python3"), &release.maintainer())
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/release-tag-guard.py"))
+        .env("GITHUB_ACTOR", "JacobStephens2")
+        .env("GITHUB_REF_NAME", "v0.2.0")
+        .env("GITHUB_SHA", &head)
+        .output()
+        .unwrap();
+    assert!(guard.status.success(), "{}", stderr(&guard));
     assert_eq!(
         release.origin(&["diff", "--name-only", &main, &head]),
         "Cargo.lock\nCargo.toml"
