@@ -175,8 +175,7 @@ use run::StartedBy;
 const HELP: &str = "\
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
-       thirdshift merge <number>                      Run it, then merge the pull request
-       thirdshift merge <Issue URL>                   Run, then merge the pull request
+       thirdshift merge <number> or thirdshift merge <Issue URL>  Run, then merge the pull request
        thirdshift --email <Issue URL>                 Run, then email the outcome
        thirdshift architect [<focus>]                 Review architecture, publish a plan and run it
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
