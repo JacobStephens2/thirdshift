@@ -1693,6 +1693,19 @@ impl fmt::Display for PrState {
     }
 }
 
+/// GitHub's `OPEN`, `CLOSED` or `MERGED` for `url`.
+/// Anything else is an invalid response, named with that pull request.
+fn parse_pr_state(state: Option<&str>, url: &str) -> Result<PrState> {
+    match state {
+        Some("OPEN") => Ok(PrState::Open),
+        Some("CLOSED") => Ok(PrState::Closed),
+        Some("MERGED") => Ok(PrState::Merged),
+        other => bail!(CommandFailure::InvalidResponse(format!(
+            "gh output has an unknown PR state {other:?} for {url}"
+        ))),
+    }
+}
+
 /// The state `json` reports for `pr_url` in `issue`'s repository.
 /// The view must be that pull request: another URL is not open.
 fn pr_state_from_view(issue: &IssueUrl, pr_url: &str, json: &Value) -> Result<PrState> {
@@ -1704,31 +1717,15 @@ fn pr_state_from_view(issue: &IssueUrl, pr_url: &str, json: &Value) -> Result<Pr
     if url != pr_url || !pr_url_in_repo(issue, url) {
         bail!("PR {pr_url} is not open");
     }
-    match json["state"].as_str() {
-        Some("OPEN") => Ok(PrState::Open),
-        Some("CLOSED") => Ok(PrState::Closed),
-        Some("MERGED") => Ok(PrState::Merged),
-        other => bail!(CommandFailure::InvalidResponse(format!(
-            "gh output has an unknown PR state {other:?} for {pr_url}"
-        ))),
-    }
+    parse_pr_state(json["state"].as_str(), pr_url)
 }
 
 /// Whether `url` is a pull request in `issue`'s repository.
 fn pr_url_in_repo(issue: &IssueUrl, url: &str) -> bool {
-    let Some(path) = url.strip_prefix("https://github.com/") else {
+    let Some((owner, repo, _)) = split_pull_request_url(url.trim_end_matches('/')) else {
         return false;
     };
-    let mut parts = path.trim_end_matches('/').split('/');
-    matches!(
-        (parts.next(), parts.next(), parts.next(), parts.next()),
-        (Some(owner), Some(repo), Some("pull"), Some(number))
-            if owner.eq_ignore_ascii_case(&issue.owner)
-                && repo.eq_ignore_ascii_case(&issue.repo)
-                && !number.is_empty()
-                && number.bytes().all(|byte| byte.is_ascii_digit())
-                && parts.next().is_none()
-    )
+    owner.eq_ignore_ascii_case(&issue.owner) && repo.eq_ignore_ascii_case(&issue.repo)
 }
 
 #[derive(Debug, Clone)]
@@ -1929,14 +1926,7 @@ impl PullRequestState {
     }
 
     fn from_json(url: &str, json: &Value) -> Result<Self> {
-        let state = match json["state"].as_str() {
-            Some("OPEN") => PrState::Open,
-            Some("CLOSED") => PrState::Closed,
-            Some("MERGED") => PrState::Merged,
-            other => bail!(CommandFailure::InvalidResponse(format!(
-                "gh output has an unknown PR state {other:?} for {url}"
-            ))),
-        };
+        let state = parse_pr_state(json["state"].as_str(), url)?;
         let at = |name: &str| json[name].as_str().map(String::from);
         Ok(PullRequestState {
             state,
