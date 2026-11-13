@@ -26,6 +26,33 @@ struct Command<'a> {
 // here plus fixture cases, without changing metrics or Run control flow.
 const PATTERNS: &[Pattern] = &[
     Pattern {
+        name: "thirdshift-release",
+        matches: |command| {
+            command
+                .words
+                .first()
+                .is_some_and(|word| word == "thirdshift")
+                && command.words.get(1).is_some_and(|word| word == "release")
+        },
+    },
+    Pattern {
+        name: "tag-push",
+        matches: |command| {
+            let words: Vec<_> = command.words.iter().map(String::as_str).collect();
+            words.starts_with(&["git", "push"])
+                && (words[2..]
+                    .iter()
+                    .take_while(|word| **word != "--")
+                    .any(|word| matches!(*word, "--tags" | "--follow-tags"))
+                    || words[2..].windows(2).any(|pair| pair[0] == "tag")
+                    || words[2..].iter().any(|word| {
+                        word.split(':').any(|reference| {
+                            reference.trim_start_matches('+').starts_with("refs/tags/")
+                        })
+                    }))
+        },
+    },
+    Pattern {
         name: "force-push",
         matches: |command| {
             let words: Vec<_> = command.words.iter().map(String::as_str).collect();

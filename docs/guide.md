@@ -4358,6 +4358,24 @@ cargo test
 
 ## Releasing
 
+The repository owner can run `bash scripts/setup-release-tags.sh` to provision
+or verify the `v*` tag rulesets on `JacobStephens2/thirdshift`. Creation and
+updates allow only Repository Admin; a separate rule with no bypass blocks
+deletion. The interactive wizard guides browser changes and verification;
+automated tests never modify live rulesets. See [GitHub's ruleset rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets).
+
+Review Passes (`review --author`) and Fix Passes skip `release-*` pull requests
+targeting `main`, leaving their version-only heads to the Release run. Explicit
+`thirdshift fix <pr-url> --no-merge --no-base-fix` still repairs those PRs.
+Session destructive-command signals flag `thirdshift release` and tag pushes
+using `git push --tags` or `refs/tags/` refspecs.
+
+On tag pushes, the release workflow checks `github.actor` is `JacobStephens2`
+and the tagged Git tree is exactly a commit reachable on `origin/main` with
+only the root Cargo manifest and lockfile bumped to the tag's version.
+This gate precedes planning, artifact builds/hosting and crates.io publication.
+Embedded Process changes exercise the release workflow alongside skills and Rust source.
+
 Run `scripts/release.sh` on Linux. It refuses other hosts before fetching,
 writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
 such as Lima; on Windows, use WSL2.

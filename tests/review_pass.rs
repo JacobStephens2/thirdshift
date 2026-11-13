@@ -8,6 +8,29 @@ use support::Scenario;
 const NO_FINDINGS: &str = "printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"";
 
 #[test]
+fn author_pass_skips_release_bumps_into_main_only() {
+    for (base, selected) in [("main", 1), ("integration", 0)] {
+        let scenario = Scenario::new();
+        scenario.agent_does(NO_FINDINGS);
+        if base != "main" {
+            scenario.origin_has_branch(base, "main", &["Integration"]);
+        }
+        for branch in ["release-0.3.0", "feature"] {
+            scenario.origin_has_branch(branch, base, &["Feature"]);
+            scenario.github_has_pr(branch, base, "OPEN");
+        }
+
+        let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let state = scenario.gh_state();
+        assert!(state["prs"][selected]["postedComments"].is_array());
+        assert!(state["prs"][1 - selected]["postedComments"].is_null());
+        assert_eq!(scenario.claude_calls().len(), 1);
+    }
+}
+
+#[test]
 fn author_pass_leaves_a_closing_issue_reservation_until_operator_release() {
     let scenario = Scenario::new();
     scenario.agent_does(NO_FINDINGS);
