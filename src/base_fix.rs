@@ -17,7 +17,7 @@ use anyhow::{Result, bail};
 use crate::child_run::{self, ChildAsks, Ended, Kind, SpecPr};
 use crate::ci::{self, FailedChecks};
 use crate::git::Git;
-use crate::github::{Check, GitHub, ListedIssue};
+use crate::github::{Check, GitHub, ListedIssue, PrState};
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, READY_FOR_AGENT};
 use crate::poll;
@@ -202,10 +202,12 @@ impl BaseFix {
     /// [`BaseFix::wait_on`]), or, if a Run from its Launch directory started that Base fix
     /// and it ended with the issue still open, starts it again on the same
     /// issue. Fails, with the Run's cause, if the Run was not asked to start
-    /// one, if the Base fix fails, in which case the cause names its issue,
-    /// or if the Run has had its one Base fix, in which case the cause names
-    /// that one's issue. A Run that fails with no Base fix taken has
-    /// [`BaseFix::into_advice`] to give after its cause.
+    /// one, if the pull request is not still open when the Base fix would be
+    /// created, if the Base fix fails, in which case the cause names its
+    /// issue, or if the Run has had its one Base fix, in which case the cause
+    /// names that one's issue. A Run that fails with no Base fix taken has
+    /// [`BaseFix::into_advice`] to give after its cause. A closed or merged
+    /// pull request writes no issue and gives no advice.
     pub fn fix(
         &mut self,
         mut outside: LaunchAndGitHub,
@@ -267,6 +269,10 @@ impl BaseFix {
                 }
             },
             None => {
+                // CI watch already required an open pull request. Read it
+                // again here, still holding the look, immediately before the
+                // issue is written: a close in between must not create one.
+                confirm_pull_request_open(outside, pr_url)?;
                 let fix = outside.create_issue(
                     &issue_title(base, &checks),
                     &issue_body(issue, pr_url, base, base_at, &failed.on_base),
@@ -448,6 +454,9 @@ trait Outside {
     fn has_ended(&mut self, watch: &Self::Watch) -> bool;
     /// Whether `issue` is open.
     fn issue_is_open(&mut self, issue: &IssueUrl) -> Result<bool>;
+    /// The state of the Run's pull request `pr_url`, read immediately before
+    /// a Base fix issue is written.
+    fn pull_request_state(&mut self, pr_url: &str) -> Result<PrState>;
     /// Write the Base fix issue, in the Run's repository.
     fn create_issue(&mut self, title: &str, body: &str, labels: &[Label]) -> Result<IssueUrl>;
     /// Mark the Base fix on issue `number` as running, from here.
@@ -534,6 +543,10 @@ impl Outside for LaunchAndGitHub<'_> {
 
     fn issue_is_open(&mut self, issue: &IssueUrl) -> Result<bool> {
         GitHub::new().issue_is_open(issue)
+    }
+
+    fn pull_request_state(&mut self, pr_url: &str) -> Result<PrState> {
+        GitHub::new().pr_state(self.issue, pr_url)
     }
 
     fn create_issue(&mut self, title: &str, body: &str, labels: &[Label]) -> Result<IssueUrl> {
@@ -635,6 +648,17 @@ fn names(checks: &str, name: &str) -> bool {
     })
 }
 
+/// Fail unless `pr_url` is still open. A failed read fails the same way, so
+/// nothing is written when the pull request cannot be confirmed open.
+fn confirm_pull_request_open<O: Outside>(outside: &mut O, pr_url: &str) -> Result<()> {
+    let state = outside.pull_request_state(pr_url)?;
+    if state == PrState::Open {
+        Ok(())
+    } else {
+        bail!("PR {pr_url} is {state}, not open");
+    }
+}
+
 /// The body of the Base fix issue, from a fixed template: the checks
 /// `failed` on the Base branch `base` at its commit `base_at`, shortened, with
 /// their URLs, and the Run that found them, on `issue` with the PR `pr_url`.
@@ -667,7 +691,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::Conclusion;
+    use crate::github::{Conclusion, PrState};
 
     /// What the Base fix did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -684,6 +708,8 @@ mod tests {
         ReadEnded(u64),
         /// Asked whether this issue is open.
         ReadIssue(u64),
+        /// Read this pull request's state before creating a Base fix.
+        ReadPullRequest(String),
         /// Wrote an issue with this title, body and labels.
         CreateIssue(String, String, Vec<&'static str>),
         /// Marked the Base fix on this issue as running.
@@ -734,6 +760,8 @@ mod tests {
         ended: VecDeque<bool>,
         /// For each ask, whether the issue is open.
         open: VecDeque<bool>,
+        /// The pull request's state. Open when unset. `Err` is a failed read.
+        pull_request: Option<std::result::Result<PrState, &'static str>>,
         /// How each child Run ends.
         children: VecDeque<Ended>,
         /// Whether the Run is interrupted during a pause.
@@ -814,6 +842,15 @@ mod tests {
                 .open
                 .pop_front()
                 .expect("no issue state scripted"))
+        }
+
+        fn pull_request_state(&mut self, pr_url: &str) -> Result<PrState> {
+            self.push(Did::ReadPullRequest(pr_url.to_string()));
+            match self.script.pull_request {
+                None => Ok(PrState::Open),
+                Some(Ok(state)) => Ok(state),
+                Some(Err(message)) => Err(anyhow!(message)),
+            }
         }
 
         fn create_issue(&mut self, title: &str, body: &str, labels: &[Label]) -> Result<IssueUrl> {
@@ -998,6 +1035,7 @@ mod tests {
         vec![
             Did::Look,
             Did::ListFixes,
+            Did::ReadPullRequest(PR_URL.to_string()),
             Did::CreateIssue(
                 "CI red on main: test".to_string(),
                 "CI is red on `main` at abcdef1: these checks fail there, \
@@ -1041,6 +1079,55 @@ mod tests {
         assert_eq!(outside.did(), did);
         assert_eq!(base_fix.report(), Some(format!("{FIX_URL} merged")));
         assert_eq!(base_fix.into_advice(), []);
+    }
+
+    #[test]
+    fn a_pull_request_that_is_not_open_writes_no_base_fix() {
+        for (state, message) in [(PrState::Closed, "closed"), (PrState::Merged, "merged")] {
+            let mut base_fix = asked(BaseFixAsk::Allow);
+            let mut outside = Scripted::new(Script {
+                pull_request: Some(Ok(state)),
+                ..Script::default()
+            });
+
+            let result = fix(&mut base_fix, &mut outside, &inherited(&["test"]));
+
+            assert_eq!(error(result), format!("PR {PR_URL} is {message}, not open"));
+            assert_eq!(
+                outside.did(),
+                [
+                    Did::Look,
+                    Did::ListFixes,
+                    Did::ReadPullRequest(PR_URL.to_string()),
+                    Did::LookReleased,
+                ]
+            );
+            assert_eq!(base_fix.report(), None);
+            assert_eq!(base_fix.into_advice(), []);
+        }
+    }
+
+    #[test]
+    fn a_pull_request_that_cannot_be_read_writes_no_base_fix() {
+        let mut base_fix = asked(BaseFixAsk::Allow);
+        let mut outside = Scripted::new(Script {
+            pull_request: Some(Err("could not read the pull request")),
+            ..Script::default()
+        });
+
+        let result = fix(&mut base_fix, &mut outside, &inherited(&["test"]));
+
+        assert_eq!(error(result), "could not read the pull request");
+        assert_eq!(
+            outside.did(),
+            [
+                Did::Look,
+                Did::ListFixes,
+                Did::ReadPullRequest(PR_URL.to_string()),
+                Did::LookReleased,
+            ]
+        );
+        assert_eq!(base_fix.report(), None);
     }
 
     #[test]

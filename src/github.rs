@@ -765,6 +765,15 @@ impl GitHub {
         }))
     }
 
+    /// The state of the pull request `pr_url` in `issue`'s repository.
+    /// A missing pull request, or a view of a different one, is not open.
+    pub fn pr_state(&self, issue: &IssueUrl, pr_url: &str) -> Result<PrState> {
+        let Some(json) = self.optional_pr_view(issue, pr_url, "state,url")? else {
+            bail!("PR {pr_url} is not open");
+        };
+        pr_state_from_view(issue, pr_url, &json)
+    }
+
     /// Every pull request in this repository, in any state, whose head branch
     /// starts with `prefix`. PRs from forks are left out: their heads are not
     /// this repository's branches.
@@ -1684,6 +1693,41 @@ impl fmt::Display for PrState {
     }
 }
 
+/// GitHub's `OPEN`, `CLOSED` or `MERGED` for `url`.
+/// Anything else is an invalid response, named with that pull request.
+fn parse_pr_state(state: Option<&str>, url: &str) -> Result<PrState> {
+    match state {
+        Some("OPEN") => Ok(PrState::Open),
+        Some("CLOSED") => Ok(PrState::Closed),
+        Some("MERGED") => Ok(PrState::Merged),
+        other => bail!(CommandFailure::InvalidResponse(format!(
+            "gh output has an unknown PR state {other:?} for {url}"
+        ))),
+    }
+}
+
+/// The state `json` reports for `pr_url` in `issue`'s repository.
+/// The view must be that pull request: another URL is not open.
+fn pr_state_from_view(issue: &IssueUrl, pr_url: &str, json: &Value) -> Result<PrState> {
+    let url = json["url"]
+        .as_str()
+        .context(CommandFailure::InvalidResponse(
+            "gh output has no url".into(),
+        ))?;
+    if url != pr_url || !pr_url_in_repo(issue, url) {
+        bail!("PR {pr_url} is not open");
+    }
+    parse_pr_state(json["state"].as_str(), pr_url)
+}
+
+/// Whether `url` is a pull request in `issue`'s repository.
+fn pr_url_in_repo(issue: &IssueUrl, url: &str) -> bool {
+    let Some((owner, repo, _)) = split_pull_request_url(url.trim_end_matches('/')) else {
+        return false;
+    };
+    owner.eq_ignore_ascii_case(&issue.owner) && repo.eq_ignore_ascii_case(&issue.repo)
+}
+
 #[derive(Debug, Clone)]
 pub struct PullRequest {
     pub number: u64,
@@ -1882,14 +1926,7 @@ impl PullRequestState {
     }
 
     fn from_json(url: &str, json: &Value) -> Result<Self> {
-        let state = match json["state"].as_str() {
-            Some("OPEN") => PrState::Open,
-            Some("CLOSED") => PrState::Closed,
-            Some("MERGED") => PrState::Merged,
-            other => bail!(CommandFailure::InvalidResponse(format!(
-                "gh output has an unknown PR state {other:?} for {url}"
-            ))),
-        };
+        let state = parse_pr_state(json["state"].as_str(), url)?;
         let at = |name: &str| json[name].as_str().map(String::from);
         Ok(PullRequestState {
             state,
@@ -2099,5 +2136,32 @@ mod tests {
         }
         assert_eq!(ActionsJob::of(Some(41), None), None);
         assert_eq!(ActionsJob::of(None, Some(job)), None);
+    }
+
+    #[test]
+    fn a_pull_request_view_is_its_state_only_when_it_is_that_pull_request() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let pr = "https://github.com/acme/widgets/pull/1";
+        let view = |state: &str, url: &str| serde_json::json!({"state": state, "url": url});
+        assert_eq!(
+            pr_state_from_view(&issue, pr, &view("OPEN", pr)).unwrap(),
+            PrState::Open
+        );
+        assert_eq!(
+            pr_state_from_view(&issue, pr, &view("CLOSED", pr)).unwrap(),
+            PrState::Closed
+        );
+        assert_eq!(
+            pr_state_from_view(&issue, pr, &view("MERGED", pr)).unwrap(),
+            PrState::Merged
+        );
+        for other in [
+            view("OPEN", "https://github.com/acme/widgets/pull/2"),
+            view("OPEN", "https://github.com/other/widgets/pull/1"),
+            view("OPEN", "https://github.com/acme/widgets/issues/1"),
+        ] {
+            let error = pr_state_from_view(&issue, pr, &other).unwrap_err();
+            assert_eq!(format!("{error:#}"), format!("PR {pr} is not open"));
+        }
     }
 }
