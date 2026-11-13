@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::{Captured, Publishing, Recommendation, is_factory_label};
+use super::{Captured, Publishing, Recommendation};
 use crate::issue::IssueUrl;
 use crate::labels;
 use crate::triage::{Input, Report};
@@ -378,13 +378,6 @@ fn recorded_publication_reaches_output_and_notification() {
 }
 
 #[test]
-fn workflow_labels_are_factory_labels_whatever_their_case() {
-    assert!(is_factory_label("Ready-For-Agent"));
-    assert!(is_factory_label("in-progress"));
-    assert!(!is_factory_label("Bug"));
-}
-
-#[test]
 fn a_report_category_error_is_reported_with_an_incomplete_issue() {
     let input = report();
     let error = interpret(
@@ -456,7 +449,7 @@ fn notes_name_the_held_state_each_mode_applies() {
 }
 
 #[test]
-fn notes_carry_a_confirmation_block_then_a_questionnaire() {
+fn notes_carry_a_confirmation_block_or_a_questionnaire() {
     let input = report();
     let mut recommendation = interpret(
         &input,

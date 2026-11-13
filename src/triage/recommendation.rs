@@ -358,7 +358,7 @@ impl Filing {
     }
 
     /// `ready-for-agent` was recommended, but filing lacks permission for it.
-    pub fn readiness_held(&self) -> bool {
+    fn readiness_held(&self) -> bool {
         self.triaged == labels::READY_FOR_AGENT && self.state != labels::READY_FOR_AGENT
     }
 }
