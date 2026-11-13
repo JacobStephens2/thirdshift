@@ -5,7 +5,7 @@ A Run started by hand on another machine never appeared on the Console the **Day
 The API can do what the CLI can, starting Commands and changing the User config included. That supersedes ADR 0016's "it never starts work" and "no HTTP API is promised to anyone". The Console still never starts work of its own accord. Every Command it starts is asked for by a signed-in person or a token holder, the same as a typed command, so ADR 0009 still holds: thirdshift never schedules itself. Each endpoint behaves exactly like its CLI twin, the **Command limit** included, and a Command started through the API runs detached, so a Console restart or update doesn't end it.
 
 Tokens carry the weight (#1142 Q3.1 to Q3.5):
-- **Scopes:** `read`, `security` (Security run details and findings), `act` (Stop, Dismissal, the eval judgments), `run` (start Commands), `admin` (User config, `update`) and `report` (upload only the token holder's own named **Run metrics** summary when that machine cannot be reached inbound, #2036 Q4.2). `read` is the default.
+- **Scopes:** `read`, `security` (Security run details and findings), `act` (Stop, Dismissal, the eval judgments), `run` (start Commands), `admin` (User config, `update`, `release`, #2054 Q15) and `report` (upload only the token holder's own named **Run metrics** summary when that machine cannot be reached inbound, #2036 Q4.2). `read` is the default.
 - **Handling:** 256 random bits, shown once and kept by the issuer only as a hash. The holder keeps it in its **Credentials**. Tokens are accepted over HTTPS only (except 127.0.0.1), named and listed with their last use, revocable at once, optionally given an expiry, and rate-limited after failures. Every call that changes anything goes in the **Console log**.
 - **People:** each address on a Console's sign-in list carries scopes of its own, all five viewer scopes (`read`, `security`, `act`, `run`, `admin`) unless the User config narrows them (#1142 Q4.1, answering #952). A Console calling on someone's behalf names the person signed in. The owning machine refuses the call unless that person is on its own sign-in list with the scope the call needs, and its **Activity log** names both the person and the machine.
 - **CLI-only, even with `admin`:** the following exclusions are checked against the full CLI command inventory (#1775). The machine's own shell stays the root of trust, so the API can't widen its own access.
@@ -31,7 +31,8 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `console`: Console serving bootstraps the API listener itself; it is not a client operation.
   - `--trial`: The hidden Trial protocol consumes a local request and writes local Trial artifacts.
   - `--oom-exec`: The hidden OOM wrapper replaces its process inside an existing Trial scope.
-  - `--release-summary`: The hidden release-summary protocol belongs to the local release script's stdin exchange.
+  - `--release-summary`: The hidden release-summary protocol belongs to the local release script's stdin exchange. (Retired by #2054 Q2 once `thirdshift release` replaces `scripts/release.sh`.)
+  - `release --review`: Interactive release summary review opens an editor on a local terminal (#2054 Q13, Q15).
 
 ## Considered Options
 
