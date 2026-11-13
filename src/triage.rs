@@ -3,22 +3,23 @@
 use std::io::{IsTerminal, Read};
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
 
 use crate::failed_run::FailedRun;
 use crate::git::Git;
 use crate::github::{GENERATED, GitHub};
 use crate::harness::Choice;
 use crate::issue::{IssueInput, IssueUrl, Repo};
-use crate::labels::{self, Label};
+use crate::labels;
 use crate::{command_limit, launch, logs, prompt, session, worktree};
 
 mod correction;
 mod existing;
 mod images;
 mod pass;
+mod recommendation;
 
 pub use pass::{Outcome, run as run_pass};
+use recommendation::{Publishing, Recommendation, is_factory_label};
 
 /// Input is resolved before Setup can consume a piped Report.
 pub enum Input {
@@ -27,6 +28,14 @@ pub enum Input {
 }
 
 impl Input {
+    /// The existing issue to triage in place, if this is not a Report.
+    fn issue(&self) -> Option<&IssueUrl> {
+        match self {
+            Self::Issue(issue) => Some(issue),
+            Self::Report(_) => None,
+        }
+    }
+
     /// No supplied work means an unattended Pass. Resolve stdin before Setup.
     pub fn read(issue: Option<IssueInput>, file: Option<&str>) -> Result<Option<Self>> {
         if let Some(issue) = issue {
@@ -93,226 +102,6 @@ impl Report {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Recommendation {
-    category: String,
-    state: String,
-    issues: Vec<ProposedIssue>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    comments: Vec<ProposedComment>,
-    investigation: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ProposedComment {
-    url: String,
-    body: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ProposedIssue {
-    title: String,
-    body: String,
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    category: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    confirmation_blocked: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    questionnaire: Option<String>,
-    /// The state the issue is filed with before readiness permission,
-    /// resolved once by [`resolve_recommendation`].
-    #[serde(skip)]
-    triaged: Option<Label>,
-}
-
-impl Recommendation {
-    /// A readable Run notification, leaving full issue and comment bodies on stdout.
-    /// Fields stay inside their records: a line break in session text must not
-    /// open another `Issue:` line, and terminal controls must not be written out.
-    fn notification(&self) -> String {
-        let mut notification = format!(
-            "Investigation:\n{}\n\nRecommendation: {} ({})\n",
-            investigation_text(&self.investigation),
-            one_line(&self.category),
-            one_line(&self.state)
-        );
-        if !self.issues.is_empty() {
-            notification.push_str("\nIssues:\n");
-            for issue in &self.issues {
-                notification.push_str(&format!(
-                    "- {} ({}, {})\n",
-                    one_line(&issue.title),
-                    one_line(issue.category.as_deref().unwrap_or(&self.category)),
-                    one_line(issue.state.as_deref().unwrap_or(&self.state))
-                ));
-                if let Some(url) = &issue.url {
-                    notification.push_str(&format!("Issue: {}\n", one_line(url)));
-                }
-            }
-        }
-        if !self.comments.is_empty() {
-            notification.push_str("\nComment targets:\n");
-            for comment in &self.comments {
-                notification.push_str(&format!("- {}\n", one_line(&comment.url)));
-            }
-        }
-        for issue in &self.issues {
-            if let Some(questionnaire) = &issue.questionnaire {
-                notification.push_str(&format!("\nQuestionnaire: {}\n", one_line(&issue.title)));
-                if let Some(url) = &issue.url {
-                    notification.push_str(&format!("Issue: {}\n", one_line(url)));
-                }
-                notification.push_str(&format!("\n{questionnaire}\n"));
-            }
-        }
-        notification
-    }
-}
-
-/// One notification field. Line breaks and terminal controls would otherwise
-/// open another record, such as a forged `Issue:` line.
-fn one_line(text: &str) -> String {
-    let mut collapsed = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for ch in text.chars() {
-        if ch == '\u{2028}' || ch == '\u{2029}' || ch.is_control() {
-            pending_space = !collapsed.is_empty();
-            continue;
-        }
-        if pending_space {
-            collapsed.push(' ');
-            pending_space = false;
-        }
-        collapsed.push(ch);
-    }
-    collapsed
-}
-
-/// The investigation, one indented line per row, so none of its text stands
-/// as its own notification record.
-fn investigation_text(text: &str) -> String {
-    text.split('\n')
-        .map(|line| format!("  {}", one_line(line)))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-const INCOMPLETE: &str = "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments";
-
-/// Read the session's final recommendation line. The session's prose stays
-/// out of the machine-readable stdout contract.
-fn read_recommendation(message: Option<&str>) -> Result<Recommendation> {
-    let json = message
-        .and_then(|message| {
-            message
-                .lines()
-                .rev()
-                .find_map(|line| line.strip_prefix("Triage recommendation: "))
-        })
-        .context("the Triage session ended without its final Triage recommendation: JSON line")?;
-    serde_json::from_str(json).context("the Triage recommendation is not valid recommendation JSON")
-}
-
-/// Check a read recommendation is complete and resolve each proposed issue's state.
-fn resolve_recommendation(recommendation: &mut Recommendation) -> Result<()> {
-    let overall = state_label(&recommendation.state);
-    ensure!(
-        !recommendation.category.trim().is_empty()
-            && overall.is_some()
-            && !recommendation.investigation.trim().is_empty()
-            && recommendation.comments.iter().all(|comment| {
-                !comment.body.trim().is_empty() && IssueUrl::parse(&comment.url).is_ok()
-            }),
-        INCOMPLETE
-    );
-    for issue in &mut recommendation.issues {
-        issue.questionnaire = issue
-            .questionnaire
-            .take()
-            .filter(|text| !text.trim().is_empty());
-        ensure!(
-            !issue.title.trim().is_empty()
-                && !issue.body.trim().is_empty()
-                && issue
-                    .confirmation_blocked
-                    .as_deref()
-                    .is_none_or(|reason| !reason.trim().is_empty()),
-            INCOMPLETE
-        );
-        let recommended = issue
-            .state
-            .as_deref()
-            .map_or(overall, state_label)
-            .context(INCOMPLETE)?;
-        // Only the Day shift can confirm a problem that needs credentials or
-        // production access, whatever the session recommended.
-        let triaged = if issue.confirmation_blocked.is_some() {
-            labels::READY_FOR_HUMAN
-        } else {
-            recommended
-        };
-        let needs_answer = triaged == labels::NEEDS_INFO;
-        ensure!(
-            issue.questionnaire.is_some() == needs_answer,
-            "the Triage questionnaire is required only for needs-info issues: {}",
-            issue.title
-        );
-        issue.triaged = Some(triaged);
-    }
-    Ok(())
-}
-
-fn state_label(state: &str) -> Option<Label> {
-    std::iter::once(labels::READY_FOR_AGENT)
-        .chain(labels::UNREADY)
-        .find(|label| label.is_named(state))
-}
-
-/// Whether thirdshift treats `name` as workflow state. The session may name
-/// a repository category; these stay factory-owned, whatever their case.
-fn is_factory_label(name: &str) -> bool {
-    state_label(name).is_some()
-        || crate::claim::IN_PROGRESS.is_named(name)
-        || crate::claim::AGENT_FAILED.is_named(name)
-        || crate::base_fix::BASE_FIX.is_named(name)
-        || labels::FLAKY_TEST.is_named(name)
-        || crate::security::fixing::SECURITY_FIX.is_named(name)
-        || crate::architect::is_mark(name)
-        || crate::github::is_security_finding_label(name)
-}
-
-const CATEGORY_ERROR: &str = "the Triage category must be a repository category label, not a triage state or another factory label";
-
-/// The repository's own spelling of a recommended category, matched case-insensitively.
-fn repository_category<'a>(categories: &'a [String], wanted: &str) -> Result<&'a String> {
-    categories
-        .iter()
-        .find(|name| name.eq_ignore_ascii_case(wanted))
-        .context(CATEGORY_ERROR)
-}
-
-/// A proposed issue's own category, or the recommendation's overall one.
-fn issue_category<'a>(
-    categories: &'a [String],
-    recommendation: &Recommendation,
-    issue: &ProposedIssue,
-) -> Result<&'a String> {
-    repository_category(
-        categories,
-        issue
-            .category
-            .as_deref()
-            .unwrap_or(&recommendation.category),
-    )
-}
-
 /// Guidance, correction and publication share the same usable repository categories.
 fn repository_categories(repo: &Repo, github: &GitHub) -> Result<Vec<String>> {
     Ok(github
@@ -367,125 +156,55 @@ impl std::fmt::Display for IncompletePublication {
     }
 }
 
-/// How filing labels one proposed issue.
-struct Filing {
-    /// The repository's category label, spelled as the repository spells it.
-    category: String,
-    state: Label,
-    /// `ready-for-agent` was recommended, but filing lacks permission for it.
-    readiness_held: bool,
-}
-
-/// Everything filing asks GitHub to accept, checked before any write.
-struct Publication {
-    filings: Vec<Filing>,
-    /// The open issues in this repository that the proposed comments go to.
-    targets: Vec<IssueUrl>,
-}
-
-/// Check the recommendation against GitHub, writing nothing. Both modes
-/// check it, so `--recommend-only` refuses exactly what filing would refuse.
-fn check_publication(
+/// Check the comment targets against GitHub, writing nothing. Both modes
+/// check them, so `--recommend-only` refuses exactly what filing would refuse.
+fn check_comment_targets(
     recommendation: &Recommendation,
     repo: &Repo,
-    categories: &[String],
     github: &GitHub,
-    allow_ready_for_agent: bool,
-) -> Result<Publication> {
-    let targets = recommendation
-        .comments
-        .iter()
-        .map(|comment| {
-            let issue = IssueUrl::parse(&comment.url)?;
-            ensure!(
-                issue.owner.eq_ignore_ascii_case(&repo.owner)
-                    && issue.repo.eq_ignore_ascii_case(&repo.name),
-                "the Triage comment must target an issue in {}: {}",
-                repo.slug(),
-                issue.url
-            );
-            ensure!(
-                github.issue_is_open(&issue)?,
-                "the Triage comment must target an open issue: {}",
-                issue.url
-            );
-            Ok(issue)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if recommendation.issues.is_empty() {
-        return Ok(Publication {
-            filings: Vec::new(),
-            targets,
-        });
+) -> Result<()> {
+    for comment in recommendation.comments() {
+        let issue = comment.target();
+        ensure!(
+            issue.owner.eq_ignore_ascii_case(&repo.owner)
+                && issue.repo.eq_ignore_ascii_case(&repo.name),
+            "the Triage comment must target an issue in {}: {}",
+            repo.slug(),
+            issue.url
+        );
+        ensure!(
+            github.issue_is_open(issue)?,
+            "the Triage comment must target an open issue: {}",
+            issue.url
+        );
     }
-    let filings = recommendation
-        .issues
-        .iter()
-        .map(|issue| {
-            let category = issue_category(categories, recommendation, issue)?;
-            let triaged = issue
-                .triaged
-                .expect("parse_recommendation resolves every proposed issue's state");
-            let readiness_held = triaged == labels::READY_FOR_AGENT && !allow_ready_for_agent;
-            Ok(Filing {
-                category: category.clone(),
-                state: if readiness_held {
-                    labels::NEEDS_TRIAGE
-                } else {
-                    triaged
-                },
-                readiness_held,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(Publication { filings, targets })
+    Ok(())
 }
 
-/// File the checked issues and comments. Each write that lands is pushed to
+/// File a Report's issues and comments. Each write that lands is pushed to
 /// `published` as it lands, so a failure partway still names it.
 fn publish(
-    recommendation: &mut Recommendation,
-    publication: Publication,
-    repo: &Repo,
     report: &Report,
+    issues: &mut [recommendation::Issue],
+    comments: &mut [recommendation::Comment],
+    repo: &Repo,
     github: &GitHub,
     published: &mut Vec<IssueUrl>,
 ) -> Result<()> {
     let original_report = report.quoted();
     let mut wontfix = Vec::new();
-    for (issue, filing) in recommendation.issues.iter_mut().zip(publication.filings) {
-        let held = if filing.readiness_held {
-            "\n\nready-for-agent was recommended; needs-triage is applied until the Day shift permits readiness."
-        } else {
-            ""
-        };
-        let blocked = issue
-            .confirmation_blocked
-            .as_deref()
-            .map_or_else(String::new, |reason| {
-                format!("\n\nConfirmation needs the Day shift: {reason}")
-            });
-        let questionnaire = issue
-            .questionnaire
-            .as_deref()
-            .map_or_else(String::new, |text| {
-                format!("\n\n## Questionnaire\n\n{text}")
-            });
-        issue.body = format!(
-            "This issue was generated by AI.\n\n{}{held}{blocked}{questionnaire}\n\n{original_report}",
-            issue.body,
+    for issue in issues {
+        let body = format!(
+            "This issue was generated by AI.\n\n{}{}\n\n{original_report}",
+            issue.body(),
+            issue.notes(),
         );
-        let url = github.create_triaged_issue(
-            repo,
-            &issue.title,
-            &issue.body,
-            &filing.category,
-            filing.state,
-        )?;
-        issue.url = Some(url.url.clone());
-        issue.category = Some(filing.category);
-        issue.state = Some(filing.state.name().into());
-        if filing.state == labels::WONTFIX {
+        let filing = issue.filing();
+        let state = filing.state();
+        let url =
+            github.create_triaged_issue(repo, issue.title(), &body, filing.category(), state)?;
+        issue.record_filed(&url, body);
+        if state == labels::WONTFIX {
             wontfix.push(url.clone());
         }
         published.push(url);
@@ -511,10 +230,11 @@ fn publish(
             &format!("{GENERATED}\n\nClosed as wontfix, as the Triage run recommended. The issue body says why."),
         )?;
     }
-    for (comment, target) in recommendation.comments.iter_mut().zip(publication.targets) {
-        comment.body = format!("{GENERATED}\n\n{}\n\n{original_report}", comment.body);
-        github.comment_issue(&target, &comment.body)?;
-        published.push(target);
+    for comment in comments {
+        let body = format!("{GENERATED}\n\n{}\n\n{original_report}", comment.body());
+        github.comment_issue(comment.target(), &body)?;
+        published.push(comment.target().clone());
+        comment.record_posted(body);
     }
     Ok(())
 }
@@ -539,10 +259,7 @@ pub fn run(
 ) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
-    let target = match input {
-        Input::Issue(issue) => Some(issue),
-        Input::Report(_) => None,
-    };
+    let target = input.issue();
     logs::started(
         logs::Work::TriageRun {
             repo: &repo,
@@ -575,10 +292,7 @@ fn investigate(
     base: &launch::BaseBranch,
     mut claim: Option<existing::Claim<'_>>,
 ) -> Result<Ended, FailedRun> {
-    let target = match input {
-        Input::Issue(issue) => Some(issue),
-        Input::Report(_) => None,
-    };
+    let target = input.issue();
     let finding_notification = target
         .map(|issue| existing::finding_notification(issue, &GitHub::new()))
         .transpose()?
@@ -605,42 +319,31 @@ fn investigate(
                 (session_prompt, categories)
             }
         };
-        let mut recommendation =
-            correction::recommendation(sessions, &session_prompt, target, &categories)?;
+        let captured = recommendation::Captured {
+            categories: &categories,
+            input,
+            allow_ready_for_agent: options.allow_ready_for_agent,
+        };
+        let mut recommendation = correction::recommendation(sessions, &session_prompt, &captured)?;
         let github = GitHub::new();
-        let publication = check_publication(
-            &recommendation,
-            repo,
-            &categories,
-            &github,
-            options.allow_ready_for_agent,
-        )
-        .and_then(|mut checked| {
+        let publication = check_comment_targets(&recommendation, repo, &github).and_then(|()| {
             if let Some(target) = target {
                 existing::check_target(target, &github)?;
-                if checked.filings[0].readiness_held {
-                    checked.filings[0].state = labels::READY_FOR_HUMAN;
-                }
             }
             if options.recommend_only {
                 return Ok(());
             }
-            match input {
-                Input::Report(report) => publish(
-                    &mut recommendation,
-                    checked,
-                    repo,
+            match recommendation.publishing() {
+                Publishing::Report {
                     report,
-                    &github,
-                    &mut published,
-                ),
-                Input::Issue(target) => existing::publish(
-                    &mut recommendation,
-                    checked,
+                    issues,
+                    comments,
+                } => publish(report, issues, comments, repo, &github, &mut published),
+                Publishing::Existing {
                     target,
-                    &github,
-                    &mut published,
-                ),
+                    issue,
+                    comments,
+                } => existing::publish(target, issue, comments, &github, &mut published),
             }
         });
         let json = serde_json::to_string(&recommendation)?;
