@@ -226,7 +226,7 @@ impl Decoded<'_> {
 
     pub fn command_log(&self, path: &Path) -> PathBuf {
         let subject = match self.subject {
-            "" | "architect" | "secure" | "triage" => String::new(),
+            "" | "architect" | "secure" | "triage" | "release" => String::new(),
             subject if subject.starts_with("process-step-") => String::new(),
             subject => format!("{subject}-"),
         };
