@@ -66,7 +66,7 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
         outside_session()?;
         let wanted = Version::parse(version)?;
         let launch = Git::new(std::env::current_dir()?);
-        let repo = Repo::of_origin(&launch.run(&["config", "remote.origin.url"])?)
+        let repo = Repo::of_origin(&git_run(&launch, &["config", "remote.origin.url"])?)
             .context("release requires a GitHub origin")?;
         ensure!(
             repo.slug().eq_ignore_ascii_case(REPOSITORY),
@@ -74,55 +74,65 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
         );
         logs::started(logs::Work::ReleaseRun(&repo), choice);
         let _local = local_lock()?;
-        fetch(&launch)?;
-        validate_version(&launch, &wanted)?;
+        // Declared before the reservation so Drop pushes its delete first.
+        let isolated = Isolated::open(&launch)?;
+        let git = &isolated.git;
+        fetch(git)?;
+        validate_version(git, &wanted)?;
         let branch = format!("release-{version}");
         let tag = format!("v{version}");
         ensure!(
-            launch
-                .run(&[
+            git_run(
+                git,
+                &[
                     "ls-remote",
                     "--refs",
                     "origin",
                     &format!("refs/heads/{branch}"),
                     &format!("refs/tags/{tag}")
-                ])?
-                .is_empty(),
+                ]
+            )?
+            .is_empty(),
             "{branch} or {tag} already exists on origin; recovery requires the Day shift"
         );
         ensure!(
-            launch.run(&["tag", "--list", &tag])?.is_empty(),
+            git_run(&launch, &["tag", "--list", &tag])?.is_empty(),
             "{tag} already exists locally"
         );
-        let _reservation = crate::reservation::Reservation::release(&launch)?
+        let _reservation = crate::reservation::Reservation::release(git)?
             .context("another Release run holds the origin release reservation")?;
         let github = GitHub::new();
-        let (base, previous) = candidate(&launch, &github, &wanted)?;
-        let work = Worktree::new(&launch, &base)?;
-        let git = Git::new(work.path());
-        bump(work.path(), version)?;
-        git.run(&["add", "--", "Cargo.toml", "Cargo.lock"])?;
-        git.run(&[
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgSign=false",
-            "commit",
-            "-m",
-            &format!("Release {version}"),
-        ])?;
-        let head = git.run(&["rev-parse", "HEAD"])?;
-        let diff = git.run(&[
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            &base,
-            &head,
-            "--",
-            "Cargo.toml",
-            "Cargo.lock",
-        ])?;
-        let input = summary::input(&launch, &github, &base, previous.as_deref(), version, &diff)?;
+        let (base, previous) = candidate(git, &github, &wanted)?;
+        checkout(git, &base)?;
+        bump(git.dir(), version)?;
+        git_run(git, &["add", "--", "Cargo.toml", "Cargo.lock"])?;
+        git_run(
+            git,
+            &[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "-m",
+                &format!("Release {version}"),
+            ],
+        )?;
+        let head = git_run(git, &["rev-parse", "HEAD"])?;
+        let diff = git_run(
+            git,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                &base,
+                &head,
+                "--",
+                "Cargo.toml",
+                "Cargo.lock",
+            ],
+        )?;
+        let input = summary::input(git, &github, &base, previous.as_deref(), version, &diff)?;
         let summary = match summary::write(choice, &repo, &input, &mut trace) {
             Ok(text) => Some(text),
             Err(error) => {
@@ -147,18 +157,21 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
         );
         logs::stage(logs::Stage::PullRequest);
         // A release merged while the summary was running invalidates this cut.
-        fetch(&launch)?;
-        validate_version(&launch, &wanted)?;
+        fetch(git)?;
+        validate_version(git, &wanted)?;
         ensure!(
-            last_tag(&launch)? == previous,
+            last_tag(git)? == previous,
             "a newer release appeared while preparing this release; retry"
         );
-        git.run(&[
-            "push",
-            "--no-verify",
-            "origin",
-            &format!("{head}:refs/heads/{branch}"),
-        ])?;
+        git_run(
+            git,
+            &[
+                "push",
+                "--no-verify",
+                "origin",
+                &format!("{head}:refs/heads/{branch}"),
+            ],
+        )?;
         let url = github.open_release(version, &branch, &body)?;
         pr_url = Some(url.clone());
         let pr = crate::review::PullRequestUrl::parse(&url)?;
@@ -168,12 +181,15 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
         wait_for_bump(&github, &pr, &head, &branch)?;
         // Only the validated head is tagged, never a branch name that can move.
         progress::step(format_args!("publishing {tag} at {head}"));
-        git.run(&[
-            "push",
-            "--no-verify",
-            "origin",
-            &format!("{head}:refs/tags/{tag}"),
-        ])?;
+        git_run(
+            git,
+            &[
+                "push",
+                "--no-verify",
+                "origin",
+                &format!("{head}:refs/tags/{tag}"),
+            ],
+        )?;
         wait_for_release(&github, &head)?;
         check_bump(&github, &pr, &head, &branch)?;
         logs::stage(logs::Stage::SelfMerge);
@@ -213,18 +229,21 @@ fn local_lock() -> Result<File> {
 }
 
 fn fetch(git: &Git) -> Result<()> {
-    git.run(&[
-        "fetch",
-        "--quiet",
-        "--tags",
-        "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
-    ])
+    git_run(
+        git,
+        &[
+            "fetch",
+            "--quiet",
+            "--tags",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+    )
     .map(drop)
 }
 
 fn validate_version(git: &Git, wanted: &Version) -> Result<()> {
-    let manifest = git.run(&["show", "origin/main:Cargo.toml"])?;
+    let manifest = git_run(git, &["show", "origin/main:Cargo.toml"])?;
     let manifest: toml::Value = toml::from_str(&manifest)?;
     let current = manifest["package"]["version"]
         .as_str()
@@ -237,20 +256,25 @@ fn validate_version(git: &Git, wanted: &Version) -> Result<()> {
 }
 
 fn last_tag(git: &Git) -> Result<Option<String>> {
-    if git
-        .run(&["tag", "--merged", "origin/main", "--list", "v[0-9]*"])?
-        .is_empty()
+    if git_run(
+        git,
+        &["tag", "--merged", "origin/main", "--list", "v[0-9]*"],
+    )?
+    .is_empty()
     {
         return Ok(None);
     }
-    git.run(&[
-        "describe",
-        "--tags",
-        "--abbrev=0",
-        "--match",
-        "v[0-9]*",
-        "origin/main",
-    ])
+    git_run(
+        git,
+        &[
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            "v[0-9]*",
+            "origin/main",
+        ],
+    )
     .map(Some)
 }
 
@@ -266,13 +290,13 @@ fn candidate(git: &Git, github: &GitHub, wanted: &Version) -> Result<(String, Op
         if let Some(boundary) = &boundary {
             args.push(boundary);
         }
-        let commits = git.run(&args)?;
+        let commits = git_run(git, &args)?;
         let mut pending = false;
         for sha in commits.lines() {
             if let Some(previous) = &previous {
                 // main can contain a release tag on a merged side branch.
-                if git.run(&["merge-base", previous, sha])?
-                    != git.run(&["rev-parse", &format!("{previous}^{{commit}}")])?
+                if git_run(git, &["merge-base", previous, sha])?
+                    != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
                 {
                     continue;
                 }
@@ -440,43 +464,92 @@ fn bump(directory: &Path, version: &str) -> Result<()> {
     Ok(())
 }
 
-struct Worktree<'a> {
-    launch: &'a Git,
-    directory: tempfile::TempDir,
+/// Git commands for the release run in a repository this process created.
+/// The Launch directory's hooks, filters, fsmonitor, attributes and remote
+/// helpers never apply. Its effective origin is copied only when that URL is
+/// the configured GitHub repository or a local path.
+struct Isolated {
+    _directory: tempfile::TempDir,
+    git: Git,
 }
-impl<'a> Worktree<'a> {
-    fn new(launch: &'a Git, base: &str) -> Result<Self> {
+
+impl Isolated {
+    fn open(launch: &Git) -> Result<Self> {
+        let origin = git_run(launch, &["remote", "get-url", "origin"])?;
+        ensure!(
+            usable_origin(&origin),
+            "release origin URL is not {REPOSITORY} or a local path"
+        );
         let directory = tempfile::Builder::new()
             .prefix("thirdshift-release-")
             .tempdir()?;
-        let held = Self { launch, directory };
-        launch.run(&[
-            "-c",
-            "core.hooksPath=/dev/null",
-            "worktree",
-            "add",
-            "--quiet",
-            "--detach",
-            held.path().to_str().context("non-UTF8 release directory")?,
-            base,
-        ])?;
-        Ok(held)
-    }
-    fn path(&self) -> &Path {
-        self.directory.path()
+        let template = tempfile::Builder::new()
+            .prefix("thirdshift-release-template-")
+            .tempdir()?;
+        let git = Git::new(directory.path());
+        git_run(
+            &git,
+            &[
+                "init",
+                "--quiet",
+                "--template",
+                template
+                    .path()
+                    .to_str()
+                    .context("non-UTF8 release template directory")?,
+            ],
+        )?;
+        git_run(&git, &["config", "core.hooksPath", "/dev/null"])?;
+        git_run(&git, &["config", "commit.gpgSign", "false"])?;
+        git_run(&git, &["config", "protocol.ext.allow", "never"])?;
+        copy_identity(launch, &git)?;
+        git_run(&git, &["remote", "add", "origin", &origin])?;
+        Ok(Self {
+            _directory: directory,
+            git,
+        })
     }
 }
-impl Drop for Worktree<'_> {
-    fn drop(&mut self) {
-        if let Err(error) = self.launch.completion().run(&[
-            "worktree",
-            "remove",
-            "--force",
-            &self.path().to_string_lossy(),
-        ]) {
-            progress::warn(&error, format_args!("could not remove release worktree"));
+
+fn copy_identity(launch: &Git, repository: &Git) -> Result<()> {
+    for key in ["user.name", "user.email"] {
+        let Some(value) = git_optional(launch, &["config", key])? else {
+            continue;
+        };
+        if value.is_empty() || value.starts_with('-') || value.chars().any(char::is_control) {
+            continue;
         }
+        git_run(repository, &["config", key, &value])?;
     }
+    Ok(())
+}
+
+fn usable_origin(url: &str) -> bool {
+    if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_whitespace) {
+        return false;
+    }
+    if let Some(repo) = Repo::of_origin(url) {
+        return repo.slug().eq_ignore_ascii_case(REPOSITORY);
+    }
+    Path::new(url).is_absolute()
+}
+
+fn checkout(git: &Git, base: &str) -> Result<()> {
+    // The base is a commit id. `--` would make `checkout --detach` treat it as a path.
+    git_run(git, &["checkout", "--quiet", "--detach", base]).map(drop)
+}
+
+/// `git <args>` without the Launch directory's hooks or fsmonitor.
+pub(super) fn git_run(repository: &Git, args: &[&str]) -> Result<String> {
+    let mut full = vec!["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor="];
+    full.extend_from_slice(args);
+    repository.run(&full)
+}
+
+fn git_optional(repository: &Git, args: &[&str]) -> Result<Option<String>> {
+    let mut full = vec!["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor="];
+    full.extend_from_slice(args);
+    repository.run_optional(&full)
 }
 
 struct LiveLabel {

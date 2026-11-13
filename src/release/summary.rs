@@ -23,7 +23,18 @@ pub(super) fn input(
     diff: &str,
 ) -> Result<String> {
     let range = previous.map_or_else(|| base.to_owned(), |previous| format!("{previous}..{base}"));
-    let subjects = git.run(&["log", "--reverse", "--merges", "--format=%s", &range])?;
+    let subjects = super::git_run(
+        git,
+        &[
+            "log",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--reverse",
+            "--merges",
+            "--format=%s",
+            &range,
+        ],
+    )?;
     let mut pull_requests = Vec::new();
     for subject in subjects.lines() {
         if let Some(number) = subject

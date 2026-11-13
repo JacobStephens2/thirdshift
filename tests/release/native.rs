@@ -489,3 +489,54 @@ fn native_release_does_not_execute_launch_checkout_hooks() {
         "Release run executed a hook from the Launch directory working tree"
     );
 }
+
+#[test]
+fn native_release_does_not_execute_launch_repository_filters() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut run = command(&release, "0.2.0");
+    let root = release.root();
+    let marker = root.join("launch-filter-executed");
+    let smudge = root.join("smudge.sh");
+    let clean = root.join("clean.sh");
+    let fsmonitor = root.join("fsmonitor.sh");
+    let record = marker.display().to_string();
+    write_executable(
+        &smudge,
+        &format!("#!/bin/sh\nprintf smudge >> '{record}'\ncat\n"),
+    );
+    write_executable(
+        &clean,
+        &format!("#!/bin/sh\nprintf clean >> '{record}'\ncat\n"),
+    );
+    write_executable(
+        &fsmonitor,
+        &format!("#!/bin/sh\nprintf fs >> '{record}'\nexit 0\n"),
+    );
+    let launch = release.maintainer();
+    git(
+        &launch,
+        &["config", "filter.pwn.smudge", smudge.to_str().unwrap()],
+    );
+    git(
+        &launch,
+        &["config", "filter.pwn.clean", clean.to_str().unwrap()],
+    );
+    git(&launch, &["config", "filter.pwn.required", "true"]);
+    fs::create_dir_all(launch.join(".git/info")).unwrap();
+    fs::write(launch.join(".git/info/attributes"), "* filter=pwn\n").unwrap();
+    git(
+        &launch,
+        &["config", "core.fsmonitor", fsmonitor.to_str().unwrap()],
+    );
+    assert!(
+        !marker.exists(),
+        "fixture setup executed a filter or fsmonitor"
+    );
+    let output = run.output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !marker.exists(),
+        "Release run executed a filter or fsmonitor from the Launch directory repository"
+    );
+}
