@@ -364,7 +364,7 @@ fn native_release_stop_releases_locks_reservation_and_live_label() {
     let output = fs::File::create(&output_path).unwrap();
     run.stdout(output.try_clone().unwrap()).stderr(output);
     // Pending head CI keeps the Release run live after it opens its bump PR.
-    release.ci_reports(r#"[{"name":"test","status":"in_progress","conclusion":null}]"#);
+    release.ci_reports(r#"[{"name":"test","conclusion":"success","pending_polls":100000}]"#);
     let owned = support::child_lifetime::OwnedRuns::new();
     let mut child = owned.spawn(&mut run);
     let deadline = Instant::now() + support::WAIT_BOUND;
@@ -425,4 +425,48 @@ fn native_release_stop_releases_locks_reservation_and_live_label() {
         .unwrap();
     assert!(lock.try_lock().is_ok());
     assert!(release.origin_tag("v0.2.0").is_none());
+}
+
+#[test]
+fn native_release_refuses_a_blocking_review_without_a_merge_attempt() {
+    for decision in ["REVIEW_REQUIRED", "CHANGES_REQUESTED"] {
+        let release = Release::new();
+        let initial_merges = release.merge_calls().len();
+        release.gh(&[
+            "fake", "on-ci-read", "1",
+            &format!("gh fake checks \"$FAKE_CI_SHA\" '{GREEN}'\ngh fake pr release-0.2.0 reviewDecision '\"{decision}\"'"),
+        ]);
+        let output = command(&release, "0.2.0").output().unwrap();
+        assert!(!output.status.success(), "{decision}: {}", stderr(&output));
+        assert_eq!(
+            release.merge_calls().len(),
+            initial_merges,
+            "{decision}: a blocking review must not issue gh pr merge"
+        );
+        assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+    }
+}
+
+#[test]
+fn native_release_does_not_execute_launch_checkout_hooks() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut run = command(&release, "0.2.0");
+    let hooks = release.maintainer().join("local-release-hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let marker = release.root().join("launch-hook-executed");
+    write_executable(
+        &hooks.join("post-checkout"),
+        &format!("#!/bin/sh\nprintf invoked > '{}'\n", marker.display()),
+    );
+    git(
+        &release.maintainer(),
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    let output = run.output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !marker.exists(),
+        "Release run executed a hook from the Launch directory working tree"
+    );
 }

@@ -813,7 +813,7 @@ address's scopes, including the Security finding limits above.
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
 | `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
-| `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
+| `admin` | Release starts; User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
 | `report` | Only `POST /api/v1/metrics/report`: a JSON body with `version`, `machine` (the token's holder), `view` and `summary`, sent by `metrics --push` |
 
 The actions in the following table take `application/x-www-form-urlencoded`
@@ -964,6 +964,11 @@ which also starts a Spec run when the issue has Tickets. Every request names
 | `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
 | `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
 | `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
+| `release` | Requires `admin` scope and explicit `version` (`X.Y.Z`); optional `email`, `harness`, `model`, `effort`; repository must be `JacobStephens2/thirdshift` |
+
+`POST /api/v1/start` is an alias of this path. Release starts require `admin`
+scope; the other Commands require `run`. The Console shows a separate Release
+run form to administrators, including administrators whose scopes omit `run`.
 
 Booleans use `true` or `false`. All options and combinations are checked by
 the CLI argument parser; for example, Architect `plan_only` refuses options

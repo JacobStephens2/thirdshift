@@ -177,6 +177,10 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
         wait_for_release(&github, &head)?;
         check_bump(&github, &pr, &head, &branch)?;
         logs::stage(logs::Stage::SelfMerge);
+        ensure!(
+            !github.review_blocks_merge(&pr.issue, pr.issue.number),
+            "review required before merging the release bump pull request; the GitHub Release remains published"
+        );
         github.merge(&pr.issue, pr.issue.number, &head)
             .context("GitHub Release was published, but the bump pull request was not merged; the Day shift must merge it")?;
         ensure!(
@@ -447,6 +451,8 @@ impl<'a> Worktree<'a> {
             .tempdir()?;
         let held = Self { launch, directory };
         launch.run(&[
+            "-c",
+            "core.hooksPath=/dev/null",
             "worktree",
             "add",
             "--quiet",

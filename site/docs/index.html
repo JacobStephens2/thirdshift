@@ -788,7 +788,7 @@ address&#39;s scopes, including the Security finding limits above.</p>
 </tr>
 <tr>
 <td><code>admin</code></td>
-<td>User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording</td>
+<td>Release starts; User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording</td>
 </tr>
 <tr>
 <td><code>report</code></td>
@@ -1097,7 +1097,14 @@ which also starts a Spec run when the issue has Tickets. Every request names
 <td><code>experiment</code></td>
 <td>Structured <code>experiment</code> options: <code>candidate</code>, <code>baseline</code>, per-arm Harness/Model/Effort, <code>suite</code> array, sampling and timeout settings, optional <code>release</code> and <code>yes</code></td>
 </tr>
+<tr>
+<td><code>release</code></td>
+<td>Requires <code>admin</code> scope and explicit <code>version</code> (<code>X.Y.Z</code>); optional <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>; repository must be <code>JacobStephens2/thirdshift</code></td>
+</tr>
 </tbody></table>
+<p><code>POST /api/v1/start</code> is an alias of this path. Release starts require <code>admin</code>
+scope; the other Commands require <code>run</code>. The Console shows a separate Release
+run form to administrators, including administrators whose scopes omit <code>run</code>.</p>
 <p>Booleans use <code>true</code> or <code>false</code>. All options and combinations are checked by
 the CLI argument parser; for example, Architect <code>plan_only</code> refuses options
 for a dispatched run. Issue and pull request URLs must belong to the named
