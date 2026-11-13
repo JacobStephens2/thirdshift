@@ -108,14 +108,62 @@ printf '%s' 'PR 421; issue 422; fix/the-counter; Repair "quoted" counter; {}' > 
             let request = attempt.unwrap().path().join("request.json");
             if request.is_file() {
                 let document = fs::read_to_string(request).unwrap();
+                let request: Value = serde_json::from_str(&document).unwrap();
                 assert!(
-                    !document.contains("421")
+                    !request_mentions_identifier(&request, "421")
                         && !document.contains("quoted")
                         && !document.contains(fix.trim()),
                     "{document}"
                 );
             }
         }
+    }
+}
+
+fn request_mentions_identifier(request: &Value, identifier: &str) -> bool {
+    match request {
+        // Match Kind::mentions: letters, digits, underscores and hyphens
+        // belong to a token, so a hash containing the number is harmless.
+        Value::String(text) => text
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+            .any(|token| token == identifier),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| request_mentions_identifier(value, identifier)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| request_mentions_identifier(value, identifier)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+#[test]
+fn request_privacy_check_distinguishes_identifier_tokens_from_hashes() {
+    for (document, expected) in [
+        (
+            r#"{"repository":"/tmp/66d4ba83bed53da05d397c944421ecef8054d4580ff918593d7af28cc778500e/repository","output_dir":"/tmp/66d4ba83bed53da05d397c944421ecef8054d4580ff918593d7af28cc778500e/session"}"#,
+            false,
+        ),
+        (
+            r#"{"inputs":["1421","4210","a421","421f","_421","421_","-421","421-","é421","421é"],"model":null,"version":1}"#,
+            false,
+        ),
+        (r#"{"inputs":{"prompt":"421"}}"#, true),
+        (r#"{"inputs":{"prompt":"PR 421"}}"#, true),
+        (r##"{"inputs":{"prompt":"#421"}}"##, true),
+        (
+            r#"{"inputs":{"pr_url":"https://github.com/acme/widgets/pull/421"}}"#,
+            true,
+        ),
+        (r#"{"inputs":[{"prompt":"issue 421."}]}"#, true),
+        (r#"{"inputs":{"prompt":"PR \u0034\u0032\u0031"}}"#, true),
+    ] {
+        let request: Value = serde_json::from_str(document).unwrap();
+        assert_eq!(
+            request_mentions_identifier(&request, "421"),
+            expected,
+            "{document}"
+        );
     }
 }
 
