@@ -452,7 +452,7 @@ On the Console, **Metrics** opens on the Fleet when a Fleet machine is paired, t
 
 #### Reporting outward
 
-A machine the watching Console cannot reach, such as a laptop VM that sleeps or sits behind NAT, can push its own summary instead. On the watching Console, issue a `report` token to the machine's Fleet name; on the reporting machine, save it as a report destination:
+A machine the watching Console cannot reach, such as a laptop VM that sleeps or sits behind NAT, can push its own summary, and its own **Plan usage**, instead. On the watching Console, issue a `report` token to the machine's Fleet name; on the reporting machine, save it as a report destination:
 
 ```sh
 # On the always-on Console (prints the token once):
@@ -464,13 +464,14 @@ thirdshift console report list --json
 thirdshift console report remove hub
 thirdshift metrics --push
 thirdshift metrics --push hub --window 30d
+thirdshift plan-usage --push
 ```
 
-A `report` token is bound to its holder, which must be a Fleet name, and carries no other scope. It can call only `POST /api/v1/metrics/report`, over HTTPS or 127.0.0.1, and that endpoint saves the summary only in its holder's own reported slot under `~/.thirdshift/logs/fleet-metrics/`; a report naming another machine is refused with 403, one under the Console's own name with 422, and every `read`, `security`, `act`, `run` and `admin` endpoint answers it with 403. A person's `console scopes` never include `report`.
+A `report` token is bound to its holder, which must be a Fleet name, and carries no other scope. It can call only `POST /api/v1/metrics/report` and `POST /api/v1/plan-usage/report`, over HTTPS or 127.0.0.1, and those endpoints save the summary or view only in its holder's own reported slot under `~/.thirdshift/logs/fleet-metrics/` or `~/.thirdshift/logs/fleet-plan-usage/`; a report naming another machine is refused with 403, one under the Console's own name or with unreadable contents with 422, and every `read`, `security`, `act`, `run` and `admin` endpoint answers it with 403. A person's `console scopes` never include `report`.
 
-`console report add` checks the token with `/api/v1/whoami`, refuses one that carries anything but `report`, and saves the destination's name, address and the holder the Console named under `console.report` in the User config; the token goes to `[report]` in the Credentials. `metrics --push [<destination>]` sends this machine's summary of the view its window and filters name (the default view without them) to every report destination, or to the one named, and fails unless each accepts it. After every Command that finishes (not a skipped Pass, nor a child Run), a configured machine pushes its whole history by day, which stands in for every window's view, then its default view, to each destination too, waiting at most five seconds on each send; an offline or refusing Console only prints `warning: metrics not reported to <name>: …` and never changes the Command's exit code. These commands are CLI-only.
+`console report add` checks the token with `/api/v1/whoami`, refuses one that carries anything but `report`, and saves the destination's name, address and the holder the Console named under `console.report` in the User config; the token goes to `[report]` in the Credentials. `metrics --push [<destination>]` sends this machine's summary of the view its window and filters name (the default view without them) to every report destination, or to the one named, and fails unless each accepts it. `plan-usage --push [<destination>]` sends this machine's saved Plan usage, as `plan-usage --local --json` shows it but without running any non-billed read, the same way. After every Command that finishes (not a skipped Pass, nor a child Run), a configured machine pushes its whole history by day, which stands in for every window's view, then its default view, then its saved Plan usage, to each destination too, waiting at most five seconds on each send; an offline or refusing Console only prints `warning: metrics and Plan usage not reported to <name>: …` and never changes the Command's exit code. Nothing is pushed between Commands. These commands are CLI-only.
 
-On the watching Console, a reporting machine appears in **Metrics** and its Machine selector with status `reported` and `pushed_at`, shown as read-only with how long ago it pushed. Any viewer who can read that Console sees it, since the Console's owner issued the token. When the machine is also a paired Fleet entry, its reported summary stands in while it cannot be reached, or the newer of it and the viewer's own cached read. Its Failed Commands are named without links to their details, which are not reachable from here, but with their repository and pull request or issue.
+On the watching Console, a reporting machine appears in **Metrics**, **Plan usage** and their Machine selectors with status `reported` and `pushed_at`, shown as read-only with how long ago it pushed. Any viewer who can read that Console sees it, since the Console's owner issued the token. When the machine is also a paired Fleet entry, its reported summary stands in while it cannot be reached, or the newer of it and the viewer's own cached read. Its Failed Commands are named without links to their details, which are not reachable from here, but with their repository and pull request or issue.
 
 ## Install
 
@@ -694,7 +695,7 @@ Holders are unique on this machine. The default scope is `read`. The five
 viewer scopes are `read` (views), `security` (Security run details and findings),
 `act` (actions), `run` (starting Commands) and `admin` (administration). A sixth,
 `report`, is given alone to a Fleet machine that pushes its own Run metrics
-summary here (see [Reporting outward](#reporting-outward)).
+summary and Plan usage here (see [Reporting outward](#reporting-outward)).
 A token without `security` still receives the other fields of a read route, but
 not Security finding records: `security_findings`, `security_fix_findings`, and
 a true `security_findings_waiting` flag are omitted or cleared. It also cannot
@@ -815,6 +816,7 @@ by later Console API tickets appear when they are served.
 | Run metrics | `/api/v1/metrics` (`command`, `window`, `grain`, `from`, `through`, repeated `repo`, `kind`, `harness`, `model`, `version`, `account`); refuses `fleet` and `machine` | `metrics` (`--fleet` and `--machine` are CLI and page only) |
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
 | Experiments, Trial Session evidence and blind pairs | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>`, `/api/v1/experiments/<id>/pairs/<pair>` | `experiments [<id>] [--session <session> \| --pair <pair>]` |
+| Plan usage | `/api/v1/plan-usage` (`fleet=true`, `machine=<name>` or `local=true`); the Fleet by default once a Fleet machine is paired, saved or reported | `plan-usage` (`--fleet`, `--machine <name>`, `--local`) |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
 | Known Launch directories | `/api/v1/launch-directories` | `launch-directories` |
 | Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
@@ -832,10 +834,10 @@ address's scopes, including the Security finding limits above.
 | --- | --- |
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
-| `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
+| `act` | Stop, Dismissal, judgments, clearing this machine's Plan usage cooldowns, selecting a Theme and hidden sections |
 | `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
 | `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
-| `report` | Only `POST /api/v1/metrics/report`: a JSON body with `version`, `machine` (the token's holder), `view` and `summary`, sent by `metrics --push` |
+| `report` | Only `POST /api/v1/metrics/report`: a JSON body with `version`, `machine` (the token's holder), `view` and `summary`, sent by `metrics --push`; and `POST /api/v1/plan-usage/report`: a JSON body with `version`, `machine` and `view` (its `plan-usage --local --json`), sent by `plan-usage --push` |
 
 The actions in the following table take `application/x-www-form-urlencoded`
 bodies using the listed fields; Theme import takes `application/json` instead.
@@ -848,6 +850,7 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | --- | --- | --- |
 | `/stop` | `command`, optional `requeue=true` | `stop <command> [--requeue]` |
 | `/dismiss`, `/dismiss/undo` | `command` | `dismiss <command> [--undo]` |
+| `/plan-usage/clear` | optional `harness` (one subscription Harness; every one without it) | `plan-usage --clear [<harness>]` |
 | `/scores/mine` | `pull_request`, each of `Correct`, `Scoped`, `Tested`, `Honest`, `Standards` as `pass` or `fail`, and each corresponding `<criterion>_reason` | `scores <pull_request> --mine` |
 | `/bug-origins/settle` | `issue`, `action=confirm\|correct\|reject`, `pull_request` for a correction | `bug-origins <issue> --confirm\|--correct <pr>\|--none` |
 | `/experiments/proposals/<suite>/<task>/approve` | none | `evals approve <suite> <task>` |
@@ -1969,6 +1972,29 @@ Before every session, including a Resume, Repair, Security review or a preflight
 Free disk space is the space an ordinary user may still write on the filesystem that holds the worktrees: the parent of the repository holding the directory thirdshift runs in, or that directory itself outside a repository. When the system temporary directory is on another filesystem, the lower of the two counts. For the Console and `thirdshift resources`, that is the directory they were started in.
 
 These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. `spec.parallel` still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.
+
+### Plan usage
+
+`thirdshift plan-usage` shows how much of each subscription Harness's allowance is used: each **Plan window**'s utilization, status and reset time, credits, spend controls, cooldowns and the account it is signed in to, with every `harness` and `security` route of the User config that names the Harness and whether that route could take a session now. Running sessions keep it up to date; viewing it runs each installed `claude`, `codex` and `muse` CLI's non-billed read when the last one is more than a minute old. Factory sessions route on this machine's own Plan usage alone and never ask another machine.
+
+```sh
+thirdshift plan-usage
+thirdshift plan-usage --json
+thirdshift plan-usage --fleet
+thirdshift plan-usage --machine laptop
+thirdshift plan-usage --local --json
+thirdshift plan-usage --clear
+thirdshift plan-usage --clear codex --json
+thirdshift plan-usage --push
+```
+
+Once a **Fleet** machine is paired, or a saved or reported view of one exists, `plan-usage` shows the Fleet unless `--local` or `--machine` names one machine; `--fleet` asks for it explicitly, and `--machine` with this machine's own name is `--local`. It reads `/api/v1/plan-usage?local=true` from each paired machine, so no machine relays another's, and lists each machine with its `status`: `ok`, `cached` when it cannot be reached and the view this machine last read from it stands in, `reported` when it pushed its own view (see [Reporting outward](#reporting-outward)), or `unavailable`, `refused`, `incompatible` or `link-only`. A cached or reported view carries `last_seen` or `pushed_at`; a retired machine's last view stays until its saved file under `~/.thirdshift/logs/fleet-plan-usage/` is removed.
+
+The Fleet view shows each subscription login once. Machines whose `claude` reports the same organization and email, whose `codex` reports the same account id, or whose `muse` reports the same account label share a row, which names every machine on it, shows the freshest observation and on which machine it was made, and lists each machine's routes to it. `agy` and `grok` report no account, so each machine's row stays its own, as does any login whose account is unknown or differs. The version 1 Fleet JSON has `machine` (null for the whole Fleet), `machines` and `harnesses`, each with `harness`, `identity`, `machines`, `observed_on`, `active_on` and `routes`, each route naming its `machine`, beside the observation's own fields.
+
+`--clear [<harness>]` forgets the cooldowns and revalidation backoff recorded on this machine, for one subscription Harness or all, so the next factory session tries those routes again. It acts on this machine only; clear another machine's on that machine or its Console.
+
+The Console's **Plan usage** page (`/plan-usage`, `g` then `p`) shows the same view, the Fleet by default, with a Machine selector for **Fleet**, **This machine** or one machine, and a **Clear cooldowns** form for viewers with `act`. Every Console page's header shows **Plan usage · N routes limited** beside the host admission status, linking to the page, while any route this machine's User config names is in cooldown or at or above its `max_utilization`; its title lists those routes. The header reads only what is saved and runs no non-billed read. **Resources** stays this host's memory, load and disk alone.
 
 ### Standalone skills
 

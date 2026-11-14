@@ -15,6 +15,14 @@ header > .header-status { grid-column: 2; grid-row: 1 / span 2; align-self: star
 #host-resources[data-state="ready"] a { color: var(--ready-text); }
 #host-resources[data-state="busy"] a { color: var(--look-text); }
 #host-resources[data-state="unknown"] a { color: var(--urgent-text); }
+/* A configured route used up or at its ceiling: a pill beside host admission. */
+#plan-usage-warning { margin: 6px 0 0; font-size: 13px; }
+#plan-usage-warning a { display: inline-block; padding: 1px 8px; border: 1px solid var(--look); border-radius: 999px; color: var(--look-text); }
+.plan-usage-login dd[data-limited="true"] { color: var(--look-text); }
+.plan-usage-active { font-size: 13px; color: var(--ready-text); }
+.plan-usage-login meter { width: 6em; vertical-align: middle; }
+/* Labels here name machines and Plan windows as their Harness spells them. */
+.plan-usage-login dt { text-transform: none; }
 header::after { grid-column: 1 / -1; }
 @media (max-width: 760px) { header { display: block; } header > .header-status { text-align: left; } }
 .brand, .harness, .age, .empty, aside { color: var(--dim); }
