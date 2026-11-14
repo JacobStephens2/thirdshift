@@ -1,8 +1,6 @@
 use super::*;
 
-#[test]
-fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_verdict() {
-    let fixture = Fixture::new();
+fn prepare_native_release(fixture: &Fixture) -> String {
     let scenario = &fixture.scenario;
     scenario.user_config_is("[harness]\ndefault = 'claude'\n");
     scenario.launch_git(&[
@@ -43,6 +41,14 @@ fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_
     state["repo"] = json!("JacobStephens2/thirdshift");
     state["runs"] = json!([{"databaseId":1,"workflow":"ci.yml","event":"push","branch":"main","headSha":candidate,"status":"completed","conclusion":"success","attempt":1}]);
     scenario.write_gh_state(&state);
+    candidate
+}
+
+#[test]
+fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_verdict() {
+    let fixture = Fixture::new();
+    let scenario = &fixture.scenario;
+    let candidate = prepare_native_release(&fixture);
     scenario.agent_does(review_reports_prelude());
     let run = scenario.run_with_env(&["release", "0.2.0", "--with-experiment"], &NO_SANDBOX);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
@@ -84,6 +90,22 @@ fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_
         .filter(|name| name.ends_with(".command.json"))
         .collect::<Vec<_>>();
     assert_eq!(records.len(), 2);
+    let declined = scenario.run_on_terminal(
+        &["release", "0.2.0", "--with-experiment"],
+        &NO_SANDBOX,
+        &[("release anyway? [y/N]", "n")],
+    );
+    assert_ne!(declined.code, Some(0), "{}", declined.stderr);
+    assert!(
+        declined.stderr.contains("release declined"),
+        "{}",
+        declined.stderr
+    );
+    assert!(
+        scenario
+            .origin_git(&["branch", "--list", "release-0.2.0"])
+            .is_empty()
+    );
     let overridden = scenario.run_on_terminal(
         &["release", "0.2.0", "--with-experiment"],
         &NO_SANDBOX,
@@ -107,6 +129,105 @@ fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_
 #[test]
 fn release_names_all_approved_tasks_missing_trial_inputs_before_building() {
     assert_missing_trial_inputs_refused_before_builds(true);
+}
+
+#[test]
+fn native_release_waits_for_leak_decisions_before_any_push() {
+    use std::time::{Duration, Instant};
+    let fixture = process::fixture();
+    prepare_native_release(&fixture);
+    let scenario = &fixture.scenario;
+    let task = scenario.path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(
+        task,
+        manifest.replace(
+            "https://github.com/acme/widgets/",
+            "https://github.com/JacobStephens2/thirdshift/",
+        ),
+    )
+    .unwrap();
+    let fix = scenario.launch_git(&["rev-parse", "reference-fix"]);
+    let script = fs::read_to_string(scenario.path("claude-script.sh")).unwrap();
+    scenario.agent_does(&format!(
+        "{script}\nprintf '%s' '{}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        fix.trim()
+    ));
+    let owned = support::child_lifetime::OwnedRuns::new();
+    let log = scenario.path("release-leak-output");
+    let output = fs::File::create(&log).unwrap();
+    let mut command = scenario.command(&["release", "0.2.0", "--with-experiment"]);
+    command
+        .envs(NO_SANDBOX)
+        .stdout(output.try_clone().unwrap())
+        .stderr(output);
+    let mut child = owned.spawn(&mut command);
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let waiting = loop {
+        assert!(
+            child.try_wait().is_none(),
+            "{}",
+            fs::read_to_string(&log).unwrap()
+        );
+        let listed = scenario.run(&["experiments", "--json"]);
+        assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+        let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+        if let Some(view) = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|view| view["verdict"]["verdict"] == "waiting_on_leaks")
+        {
+            break view.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Release Experiment never waited on leak decisions"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        scenario
+            .origin_git(&["branch", "--list", "release-0.2.0"])
+            .is_empty()
+    );
+    assert!(scenario.origin_git(&["tag", "--list", "v0.2.0"]).is_empty());
+    let id = waiting["id"].as_str().unwrap();
+    for hit in waiting["leak_hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|hit| hit["decision"].is_null())
+    {
+        let dismissed = scenario.run(&[
+            "experiments",
+            id,
+            "--leak",
+            hit["id"].as_str().unwrap(),
+            "dismiss",
+            "--reason",
+            "Fixture deliberately emitted the reference identifier",
+        ]);
+        assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    }
+    let deadline = Instant::now() + support::WAIT_BOUND;
+    let ended = loop {
+        if let Some(status) = child.try_wait() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Release did not finish after leak decisions"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let transcript = fs::read_to_string(log).unwrap();
+    assert_eq!(ended.code(), Some(1), "{transcript}");
+    assert!(
+        transcript.contains("unattended release has no terminal override"),
+        "{transcript}"
+    );
+    assert!(scenario.origin_git(&["tag", "--list", "v0.2.0"]).is_empty());
 }
 
 #[test]

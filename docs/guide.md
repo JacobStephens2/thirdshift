@@ -1384,8 +1384,8 @@ stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y` o
 exits without building an Arm or starting a Trial, and a new Experiment
 leaves no record. In release mode the Baseline probe comes first and may build
 the last release's Arm. `--yes` skips the question,
-and so does a stdin that is not a terminal. `scripts/release.sh
---with-experiment` passes `--yes`, so a release asks only its own question.
+and so does a stdin that is not a terminal. `thirdshift release
+--with-experiment` runs the Experiment with `--yes`, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.
 
@@ -4365,6 +4365,16 @@ cargo test
 
 ### Release runs
 
+Schedule a Release Pass with cron or a systemd timer, for example every hour:
+
+```cron
+0 * * * * cd /path/to/thirdshift && thirdshift release
+```
+
+For an on-demand Command, run `thirdshift release 0.4.0` to cut or resume that
+version. To let a Pass select eligible shipped content with a pinned bump, use
+`thirdshift release --minor` (or `--major` / `--patch`).
+
 From a clone whose `origin` is `JacobStephens2/thirdshift`, run
 `thirdshift release [<version> | --major | --minor | --patch]` on Linux. An explicit version must be plain `X.Y.Z`,
 without leading zeros, and greater than the version on freshly fetched `main`.
@@ -4389,6 +4399,14 @@ non-bump changes or an unverifiable publication lookup produces a quiet,
 deduplicated skip naming the blocked release. An explicit version resumes that
 version and refuses another live unfinished version with recovery instructions.
 Published GitHub Releases are final: their tags are never moved.
+
+A fresh cut refuses a `v<version>` tag that already exists locally or on
+origin. A bump PR closed without merging whose `release-<version>` branch is
+gone from origin leaves nothing to resume, so that version starts over. A failed
+release workflow exits `1` naming the failed jobs and the run URL with
+`gh run rerun --failed <id>` to recover, and leaves the tag for the Day shift.
+When the merge after publication fails because the bump PR turned draft, the
+error names `gh pr ready <url>`; the GitHub Release stays published.
 
 While waiting on the bump PR, a Merge conflict or completed failing check can
 start one in-process targeted Fix run with `--no-merge --no-base-fix`. Every
@@ -4464,104 +4482,7 @@ only the root Cargo manifest and lockfile bumped to the tag's version.
 This gate precedes planning, artifact builds/hosting and crates.io publication.
 Embedded Process changes exercise the release workflow alongside skills and Rust source.
 
-### Legacy release script
-
-Run `scripts/release.sh` on Linux. It refuses other hosts before fetching,
-writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
-such as Lima; on Windows, use WSL2.
-
-The release script skips Experiments by default, printing a note. Opt in with
-`scripts/release.sh --with-experiment 0.4.0`, adding `--with-experiment` again
-on each resume that should run an Experiment.
-
-With `--with-experiment`, before pushing anything, the script runs
-`thirdshift experiment --release <commit> --yes` using this checkout's runner and private Eval suites,
-so the Experiment prints its cost without asking about it.
-It evaluates the content commit beneath the version-only bump, so reruns use
-the same Experiment even before a bump branch exists. It pins that commit in a
-local Git ref before starting, so a merge to `main` during interruption does
-not change the Candidate on restart. If a release tag now on `main` is not an
-ancestor of that pin, the script selects a new base. It also rechecks that the
-requested version is higher than `main` before reusing a pin, refusing if not.
-The pin is removed after the branch push,
-when the pushed bump retains the selection. A pass carries on;
-a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
-intervals and asks `release anyway? [y/N]`, including without `--review`.
-The summary lists every Advisory suite and its own Verdict. All suites advisory
-gives inconclusive and asks the same question.
-Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
-and decisive Scores are listed with their recheck commands and polled until
-you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. An interrupted invocation resumes its saved
-Trials. A pushed bump branch is checked again before opening its PR, and an
-open or merged bump PR before tagging. An already pushed tag waits for publication before merging
-an open PR, skipping the Experiment unless recovering with a newer green base. Python 3 is needed to read the Experiment results.
-
-The release base is the newest commit on `main` whose latest push `CI` run
-succeeded, strictly newer than and descending from the last release tag on
-`origin/main`. A green commit from before that tag merged into `main` cannot
-qualify. The script uses a qualifying commit immediately even
-if the tip's CI is pending or failed. If none qualifies, it waits for a run to
-succeed, still considering older pending commits when `main` moves. The
-Experiment's Candidate is that release base. The tag names exactly that content
-plus the version bump. A repair or external head update can change that content;
-the script validates it and refreshes the requested Experiment and release notes
-before publishing.
-
-From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
-
-```sh
-scripts/release.sh 0.4.0
-```
-
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it warns that the bump PR is not merged, names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. A Merge conflict or completed failing PR checks can start the bounded Fix run described below. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Running CI and publication have no overall timeout.
-
-While waiting for PR CI, the script observes that PR's current head and mergeability.
-A Merge conflict, including one with no workflows, or completed failing CI starts
-at most one targeted `thirdshift fix <PR URL> --no-merge --no-base-fix` per release
-invocation, using this checkout's runner and User config. Those flags override
-Self-merge and Base fix defaults: the release script still tags, waits for
-publication, then merges. Healthy, queued and running CI start no Fix run.
-Missing workflows without a conflict have a five-minute startup grace period
-(`RELEASE_WORKFLOW_STARTUP_SECONDS=300`, adjustable for testing), then stop with
-the PR, head and recovery command. After CI passes, GitHub gets the same grace
-to report the PR mergeable. Neither is a deadline on CI runtime.
-
-After a Fix run or external push, the script fetches and validates the current
-PR identity, open state, readiness, origin, branches, head and exact version-bump
-tree against main. Extra source changes or a wrong version require human review
-before tagging. A changed content base reruns the Experiment when requested and
-regenerates the summary and version diff, honoring `--review`. More than five
-head updates, a failed or interrupted Fix, or another conflict or CI failure
-after the automatic Fix stops with recovery instructions and no new tag pushed.
-A closed, retargeted or draft PR, a changed origin, or a content base older than
-the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
-A failed or interrupted Fix run leaves the PR draft, so the rerun names
-`gh pr ready <url>`: mark it ready after review, then rerun.
-Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
-records the content base its notes describe; a resumed PR from before that marker
-has its summary and version diff regenerated once, honoring `--review`.
-
-After publication, a failed merge leaves the release standing and names the PR
-for the Day shift. If the PR is draft, mark it ready with `gh pr ready <PR URL>`
-before merging it. Rerunning the release command keeps the published tag in place.
-
-Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
-
-If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.
-
-An untagged pushed branch or open bump PR is re-cut if its content base does
-not descend from the last release tag now on `origin/main`, excluding its own
-tag. After validating the existing version-only bump, the script rechecks that
-the requested version is higher than `main` and waits for a green base
-descending from that release tag. It prints the new base, runs the Experiment
-when requested, regenerates the summary and version diff, force-pushes the
-branch, and updates an open PR's body or opens its PR before waiting for checks
-on the new head. With `--review`, declining the new summary exits `1` before
-moving the branch or changing the PR body. Tagged and merged releases keep
-their existing resume behavior.
-
-On resume after a completed failed release workflow with no GitHub Release yet, the script looks for the newest `main` commit newer than the bump commit's parent whose latest push `CI` run succeeded. When one exists, it re-cuts `release-<version>` from that commit: it runs the release Experiment when `--with-experiment` is passed, regenerates the summary and version diff (honoring `--review`), force-pushes the new bump commit to the branch, updates the open PR body, waits for its new checks, then force-pushes `v<version>` to the new bump commit. An old merged bump gets a new bump PR. The summary and Experiment exclude the unpublished tag and retain the prior release boundary; release Experiments accept `--baseline <ref>` for this recovery. It waits for the new release workflow before merging. A recovery stopped between pushing the branch and moving the tag resumes that checked version bump. If no newer green commit exists, it automatically runs `gh run rerun --failed <run id>`, prints a stamped progress line, and waits for the rerun before merging. A published GitHub Release is never re-cut: its branch and tag are never moved. If the publication check cannot be completed, the script refuses and moves nothing. A tag on an unrelated commit is still refused. You can stop either wait with Ctrl-C and run the script again to continue.
+### Release publication
 
 The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the two Linux musl binaries and the installer, smoke-checks that the `x86_64` binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, checks the `aarch64` binary's static linking and version on Ubuntu, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
 

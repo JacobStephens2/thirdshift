@@ -354,7 +354,6 @@ fn pass_choices<'a>(
             | args::Command::LogsList { .. }
             | args::Command::LogsExport { .. }
             | args::Command::LogFile { .. }
-            | args::Command::ReleaseSummary
             | args::Command::Release(_)
             | args::Command::Skill { .. }
             | args::Command::Process(_)

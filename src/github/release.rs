@@ -13,6 +13,17 @@ pub(crate) struct ReleasePushRun {
     pub conclusion: Option<String>,
 }
 
+/// A release workflow run's page and its jobs' conclusions.
+pub(crate) struct ReleaseWorkflowJobs {
+    pub url: String,
+    pub jobs: Vec<ReleaseJob>,
+}
+
+pub(crate) struct ReleaseJob {
+    pub name: String,
+    pub conclusion: Conclusion,
+}
+
 pub(crate) struct ReleasePr {
     pub pr: PullRequest,
     pub title: String,
@@ -146,6 +157,34 @@ impl GitHub {
             args.extend(["-f".into(), format!("previous_tag_name={previous}")]);
         }
         self.gh_stdout(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    pub(crate) fn release_workflow_jobs(&self, id: u64) -> Result<ReleaseWorkflowJobs> {
+        let detail = self.gh_json(&[
+            "run",
+            "view",
+            &id.to_string(),
+            "--repo",
+            crate::release::REPOSITORY,
+            "--json",
+            "url,jobs",
+        ])?;
+        let url = detail["url"]
+            .as_str()
+            .context("release workflow has no URL")?
+            .to_owned();
+        let jobs = detail["jobs"]
+            .as_array()
+            .context("release workflow has no jobs")?
+            .iter()
+            .filter_map(|job| {
+                Some(ReleaseJob {
+                    name: job["name"].as_str()?.to_owned(),
+                    conclusion: Conclusion::of_check_run(job["conclusion"].as_str()),
+                })
+            })
+            .collect();
+        Ok(ReleaseWorkflowJobs { url, jobs })
     }
 
     pub(crate) fn open_release(&self, version: &str, branch: &str, body: &str) -> Result<String> {

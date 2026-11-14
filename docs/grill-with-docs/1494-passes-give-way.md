@@ -37,7 +37,7 @@ Earlier decisions: [run-capacity.md](run-capacity.md) Q1.3, Q2.1-Q2.3, Q3.1-Q3.2
 *Answer:* 
 
 **Q1.4 - After the merge.** #1979 needs a release with this in it before it can install anything. The options:
-- (a) **Cut a release right after #1982 merges,** with `scripts/release.sh` and no Experiment, because this change makes Passes skip and doesn't change what agents do. Then install the release on the existing hosts as usual.
+- (a) **Cut a release right after #1982 merges,** with the former release shell script and no Experiment, because this change makes Passes skip and doesn't change what agents do. Then install the release on the existing hosts as usual.
 - (b) Wait for the next scheduled release.
 
 *Recommended:* (a). It unblocks #1979. The new skip only fires while an Experiment is live, so on the existing hosts it changes nothing until someone starts an Experiment there.

@@ -58,7 +58,7 @@ impl Fixture {
         }
         // The guardian reaps its descendants before exiting. Observe it
         // first so SIGKILL cleanup can finish before checking child PIDs.
-        fixture.owned = ["guardian", "script", "descendant"]
+        fixture.owned = ["guardian", "command", "descendant"]
             .map(|name| {
                 fs::read_to_string(fixture.root.path().join(name))
                     .unwrap()
@@ -199,22 +199,20 @@ fn assert_timeout(mode: &str) {
     for expected in [
         "release fixture exceeded 500ms",
         "stdout:",
-        "script stdout",
+        "command stdout",
         "stderr:",
-        "script stderr",
+        "command stderr",
     ] {
         assert!(output.contains(expected), "{mode}: {output}");
     }
-    assert!(
-        if mode.starts_with("summary-") {
-            output.contains("writing the release summary")
-        } else {
+    if !mode.starts_with("summary-") {
+        assert!(
             output.lines().any(|line| {
                 stamped(line).is_some_and(|(_, message)| message.starts_with("waiting for"))
-            })
-        },
-        "{output}"
-    );
+            }),
+            "{output}"
+        );
+    }
 }
 
 #[test]
@@ -241,15 +239,34 @@ fn fixture_process() {
     let mode = std::env::var("RELEASE_LIFETIME_MODE").unwrap();
     let release = Release::new();
     release.ci_reports(GREEN);
+    match mode.as_str() {
+        "missing-ci" => release.ci_reports("[]"),
+        "pending-release" => release.release_workflow(json!({"pending_polls": 100000})),
+        "missing-release" => release.release_workflow(json!({"hidden_polls": 100000})),
+        _ => {
+            release.ci_reports(r#"[{"name":"test","conclusion":"success","pending_polls":100000}]"#)
+        }
+    }
     if mode.starts_with("summary-") {
-        // This Harness is started by the real release-summary driver in a
-        // new process group. Keep the reviewer's timeout reproduction here.
-        release.agent_runs(
-            r#"
+        // The real summary sandbox hides the fixture root. Signal readiness
+        // from the host-side launcher, then let the sandboxed fake hang.
+        let bwrap = "/usr/bin/bwrap";
+        write_executable(
+            &release.bin().join("bwrap"),
+            &format!(
+                r#"#!/bin/sh
+case "$*" in *'-- /bin/true') exec {bwrap} "$@";; esac
 echo $$ > "$RELEASE_LIFETIME_ROOT/descendant"
 touch "$RELEASE_LIFETIME_ROOT/ready"
-exec sleep 86400
-"#,
+echo 'release-summary sandbox started' >&2
+exec {bwrap} "$@"
+"#
+            ),
+        );
+        fs::remove_file(release.bin().join("claude")).unwrap();
+        write_executable(
+            &release.bin().join("claude"),
+            "#!/bin/sh\nif [ \"$1 $2\" = 'auth status' ]; then exit 0; fi\nexec sleep 86400\n",
         );
     }
     let gh = release.bin().join("gh");
@@ -258,14 +275,11 @@ exec sleep 86400
     write_executable(
         &gh,
         r#"#!/bin/bash
-case "$RELEASE_LIFETIME_MODE:$1:$2" in
-    *-release:run:list)
-        if [[ " $* " != *" --workflow release.yml "* ]]; then
-            exec -a gh "$RELEASE_REAL_GH" "$@"
-        fi
-        ;;
+case "$RELEASE_LIFETIME_MODE:$*" in
+    *-release:*'run list '*'--workflow release.yml '*) ;;
     *-release:*) exec -a gh "$RELEASE_REAL_GH" "$@" ;;
-    *:api:*actions/runs\?*) ;;
+    summary-*:*) exec -a gh "$RELEASE_REAL_GH" "$@" ;;
+    *:api*check-runs*) ;;
     *) exec -a gh "$RELEASE_REAL_GH" "$@" ;;
 esac
 if mkdir "$RELEASE_LIFETIME_ROOT/started" 2>/dev/null; then
@@ -273,34 +287,30 @@ if mkdir "$RELEASE_LIFETIME_ROOT/started" 2>/dev/null; then
     echo $! > "$RELEASE_LIFETIME_ROOT/descendant"
     touch "$RELEASE_LIFETIME_ROOT/ready"
 fi
-case "$RELEASE_LIFETIME_MODE" in
-    missing-*) ;;
-    pending-release) echo '123 https://example.test/runs/123 in_progress null' ;;
-    complete)
-        if [ -e "$RELEASE_LIFETIME_ROOT/continue" ]; then
-            echo 'completed success fixture CI'
-        else
-            echo 'in_progress null fixture CI'
-        fi
-        ;;
-    *) echo 'in_progress null fixture CI' ;;
-esac
+if [ "$RELEASE_LIFETIME_MODE" = complete ] && [ -e "$RELEASE_LIFETIME_ROOT/continue" ]; then
+    head=$(git ls-remote origin refs/heads/release-0.2.0 | cut -f1)
+    gh fake checks "$head" '[{"name":"test","conclusion":"success"}]'
+fi
+exec -a gh "$RELEASE_REAL_GH" "$@"
 "#,
     );
+    let prepared = native::command(&release, "");
     let mut command = release.command(Path::new("bash"), &release.maintainer());
+    copy_environment(&prepared, &mut command);
     command
         .arg("-c")
         .arg(
             r#"
-echo $$ > "$RELEASE_LIFETIME_ROOT/script"
+echo $$ > "$RELEASE_LIFETIME_ROOT/command"
 echo "$PPID" > "$RELEASE_LIFETIME_ROOT/guardian"
-echo 'script stdout'
-echo 'script stderr' >&2
-exec "$1" 0.2.0
+echo 'command stdout'
+echo 'command stderr' >&2
+exec "$1" release 0.2.0
 "#,
         )
         .arg("bash")
-        .arg(manifest_dir().join("scripts/release.sh"))
+        .arg(env!("CARGO_BIN_EXE_thirdshift"))
+        .env("THIRDSHIFT_CI_GRACE_MS", "300000")
         .env("RELEASE_REAL_GH", real_gh);
     let child = support::child_lifetime::FixtureChild::spawn(&mut command, "");
     let deadline = Instant::now() + support::WAIT_BOUND;

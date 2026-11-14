@@ -51,7 +51,6 @@ const COMMANDS: &[(&str, &str)] = &[
     ("LogsList", "logs"),
     ("LogsExport", "logs widgets#7 --export output"),
     ("LogFile", "logs --file id"),
-    ("ReleaseSummary", "--release-summary"),
     ("Release", "release 1.2.3"),
     ("Skill", "skill to-spec"),
     ("Process", "process list"),
@@ -224,10 +223,6 @@ const EXCLUSIONS: &[(&str, &str)] = &[
     (
         "--oom-exec true",
         "The hidden OOM wrapper replaces its process inside an existing Trial scope.",
-    ),
-    (
-        "--release-summary",
-        "The hidden release-summary protocol belongs to the local release script's stdin exchange.",
     ),
 ];
 

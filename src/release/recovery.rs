@@ -58,7 +58,16 @@ impl Cut {
 
     pub fn validate(&mut self, git: &Git, github: &GitHub) -> Result<()> {
         fetch(git)?;
-        git_run(git, &["fetch", "--quiet", "origin", &self.head])?;
+        git_run(git, &["fetch", "--quiet", "origin", &self.head]).with_context(|| {
+            let source = self
+                .pr
+                .as_ref()
+                .map_or_else(|| self.branch(), |pr| pr.url.clone());
+            format!(
+                "{source} head {} could not be fetched from origin",
+                self.head
+            )
+        })?;
         let target = if let Some(pr) = &self.pr {
             let snapshot = github
                 .pr_snapshot(&pr.issue, &pr.url)?
@@ -276,6 +285,10 @@ fn inspect(
             }
         }
     }
+    // A newest PR closed without merging whose branch is gone from origin
+    // leaves nothing to resume, whichever repository it came from: the
+    // version starts over, as GitHub cannot reopen it.
+    let mut abandoned = std::collections::BTreeSet::new();
     for pr in prs {
         let Some(version) = pr.pr.head.strip_prefix("release-") else {
             continue;
@@ -283,6 +296,19 @@ fn inspect(
         let Ok(parsed) = Version::parse(version) else {
             continue;
         };
+        if abandoned.contains(&parsed) {
+            continue;
+        }
+        let branch_gone = live
+            .get(&parsed)
+            .is_none_or(|entry| entry.branch_head.is_none());
+        if pr.pr.state == PrState::Closed
+            && branch_gone
+            && live.get(&parsed).is_none_or(|entry| entry.pr.is_none())
+        {
+            abandoned.insert(parsed);
+            continue;
+        }
         if pr.pr.state == PrState::Open || wanted == Some(version) || live.contains_key(&parsed) {
             let entry = live
                 .entry(parsed)

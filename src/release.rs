@@ -176,8 +176,9 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                     *cut
                 }
                 recovery::Discovery::Fresh { previous } => {
-                    if let Some(wanted) = &explicit {
+                    if let (Some(wanted), Some(version)) = (&explicit, request.version) {
                         validate_version(git, wanted)?;
+                        refuse_tag_on_origin(git, version)?;
                     }
                     let (base, _) = match selection::candidate(
                         git,
@@ -218,6 +219,7 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                         }
                     };
                     validate_version(git, &Version::parse(&version)?)?;
+                    refuse_tag_on_origin(git, &version)?;
                     ensure!(
                         git_run(&launch, &["tag", "--list", &format!("v{version}")])?.is_empty(),
                         "v{version} already exists locally"
@@ -316,6 +318,16 @@ fn validate_version(git: &Git, wanted: &Version) -> Result<()> {
     Ok(())
 }
 
+/// A fresh cut never reuses a tag already on origin, published or not.
+fn refuse_tag_on_origin(git: &Git, version: &str) -> Result<()> {
+    let tag = format!("refs/tags/v{version}");
+    ensure!(
+        git_run(git, &["ls-remote", "--tags", "origin", &tag])?.is_empty(),
+        "v{version} already exists on origin"
+    );
+    Ok(())
+}
+
 fn main_version(git: &Git) -> Result<Version> {
     let manifest = git_run(git, &["show", "origin/main:Cargo.toml"])?;
     let manifest: toml::Value = toml::from_str(&manifest)?;
@@ -362,6 +374,33 @@ fn check_bump(
     Ok(snapshot.mergeable)
 }
 
+/// Names the failed jobs and the run, or the bare conclusion when the
+/// run's details cannot be read, with the rerun that recovers it.
+fn release_failure(github: &GitHub, run: &crate::github::release::ReleasePushRun) -> String {
+    let rerun = format!("recover with gh run rerun --failed {}", run.id);
+    match github.release_workflow_jobs(run.id) {
+        Ok(detail) => {
+            let failed = detail
+                .jobs
+                .iter()
+                .filter(|job| {
+                    !matches!(
+                        job.conclusion,
+                        Conclusion::Success | Conclusion::Skipped | Conclusion::Neutral
+                    )
+                })
+                .map(|job| job.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{failed} at {}; {rerun}", detail.url)
+        }
+        Err(error) => format!(
+            "{} (job details unavailable: {error:#}); {rerun}",
+            run.conclusion.as_deref().unwrap_or("no conclusion")
+        ),
+    }
+}
+
 fn wait_for_release(github: &GitHub, head: &str) -> Result<()> {
     let mut line = poll::WaitingLine::new();
     let started = Instant::now();
@@ -369,11 +408,12 @@ fn wait_for_release(github: &GitHub, head: &str) -> Result<()> {
         let run = github.release_push_run("release.yml", "", head)?;
         if let Some(run) = &run {
             if run.status == "completed" {
-                ensure!(
-                    run.conclusion.as_deref() == Some("success"),
-                    "release workflow failed: {:?}; tag is left for the Day shift",
-                    run.conclusion
-                );
+                if run.conclusion.as_deref() != Some("success") {
+                    anyhow::bail!(
+                        "release workflow failed: {}; tag is left for the Day shift",
+                        release_failure(github, run)
+                    );
+                }
                 return Ok(());
             }
         } else {
