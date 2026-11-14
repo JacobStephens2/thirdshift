@@ -107,6 +107,7 @@ pub(crate) struct PullRequest<A = GitHub> {
     spec_pr: Option<SpecPr>,
     /// An adopted head needs recorded agent review before Self-merge.
     merge_hold: Option<String>,
+    require_unstacked_base: bool,
     adapter: A,
 }
 
@@ -137,6 +138,7 @@ impl<A: Adapter> PullRequest<A> {
             security_review_count: None,
             spec_pr: None,
             merge_hold: None,
+            require_unstacked_base: false,
             adapter,
         }
     }
@@ -158,6 +160,11 @@ impl<A: Adapter> PullRequest<A> {
 
     pub fn hold_self_merge(&mut self, reason: String) {
         self.merge_hold = Some(reason);
+    }
+
+    /// Review runs opt into checking this again immediately before each merge.
+    pub(crate) fn require_unstacked_base(&mut self) {
+        self.require_unstacked_base = true;
     }
 
     /// Resume accounting with an ordinary discovery, then draft the observed
@@ -661,6 +668,15 @@ impl<A: Adapter> PullRequest<A> {
             }
             .into());
         }
+        if self.require_unstacked_base && self.adapter.base_is_open_pr(&self.issue, &self.base)? {
+            return Err(crate::failed_run::MergeHold {
+                reason: format!(
+                    "base {} is another open pull request; the PR stays ready for review",
+                    self.base
+                ),
+            }
+            .into());
+        }
         let number = self
             .identified
             .as_ref()
@@ -849,6 +865,7 @@ pub(crate) trait Adapter {
         body: &str,
     ) -> Result<String>;
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
+    fn base_is_open_pr(&mut self, issue: &IssueUrl, base: &str) -> Result<bool>;
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
     /// The existing Review eligibility read, with its Trusted account and
     /// repository checks.
@@ -924,6 +941,9 @@ impl Adapter for GitHub {
     }
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool {
         GitHub::review_blocks_merge(self, issue, number)
+    }
+    fn base_is_open_pr(&mut self, issue: &IssueUrl, base: &str) -> Result<bool> {
+        self.review_base_is_open_pr(issue, base)
     }
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
         GitHub::merge(self, issue, number, head)
@@ -1175,6 +1195,9 @@ mod tests {
         }
         fn review_blocks_merge(&mut self, _: &IssueUrl, _: u64) -> bool {
             false
+        }
+        fn base_is_open_pr(&mut self, _: &IssueUrl, _: &str) -> Result<bool> {
+            Ok(false)
         }
         fn merge(&mut self, _: &IssueUrl, number: u64, head: &str) -> Result<()> {
             let mut world = self.0.borrow_mut();
