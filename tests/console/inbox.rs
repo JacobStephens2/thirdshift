@@ -1414,7 +1414,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
             .collect()
     };
 
-    // With no choice, all four current groups open together, even empty ones.
+    // With no choice, Overview shows every group, even empty ones.
     let html = console.get("/").text().unwrap();
     let folders = html
         .split("aria-label=\"Inbox sections\"")
@@ -1442,28 +1442,49 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
             .contains("href=\"/?section=overview\" data-group=\"overview\" aria-current=\"page\""),
         "{folders}"
     );
-    assert_eq!(
-        shown(&html),
-        ["needs you", "ready for review", "landing", "working"],
+    let overview = [
+        "needs you",
+        "ready for review",
+        "landing",
+        "working",
+        "done",
+        "resolved",
+    ];
+    assert_eq!(shown(&html), overview, "{html}");
+    let opens = |html: &str, group: &str| {
+        section(html, group)
+            .split('>')
+            .next()
+            .unwrap()
+            .ends_with(" open")
+    };
+    // Done and Resolved follow Working, folded closed even without JavaScript.
+    for (group, title, open) in [
+        ("needs you", "Needs you", true),
+        ("ready for review", "Ready for review", true),
+        ("landing", "Landing", true),
+        ("working", "Working", true),
+        ("done", "Done", false),
+        ("resolved", "Resolved", false),
+    ] {
+        assert!(
+            section(&html, group).contains(&format!("<summary><h3>{title} ")),
+            "{html}"
+        );
+        assert_eq!(opens(&html, group), open, "{group}: {html}");
+    }
+    assert!(
+        section(&html, "resolved").contains("<p class=\"empty\">Nothing here.</p>"),
         "{html}"
     );
-    for (group, title) in [
-        ("needs you", "Needs you"),
-        ("ready for review", "Ready for review"),
-        ("landing", "Landing"),
-        ("working", "Working"),
-        ("done", "Done"),
-        ("resolved", "Resolved"),
-    ] {
-        let group = section(&html, group);
-        assert!(group.contains(&format!("<summary><h3>{title} ")), "{html}");
-        assert!(group.split('>').next().unwrap().ends_with(" open"));
-    }
-    // Both sections are still on the page, so a switch needs no request.
-    assert!(html.contains("data-group=\"done\""), "{html}");
 
+    // A section's own folder opens it.
+    for group in ["done", "resolved"] {
+        let html = console.get(&format!("/?section={group}")).text().unwrap();
+        assert_eq!(shown(&html), [group], "{html}");
+        assert!(opens(&html, group), "{html}");
+    }
     let html = console.get("/?section=done").text().unwrap();
-    assert_eq!(shown(&html), ["done"], "{html}");
     assert!(
         html.contains("href=\"/?section=done\" data-group=\"done\" aria-current=\"page\""),
         "{html}"
@@ -1472,7 +1493,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     // An unknown section falls back to the default.
     assert_eq!(
         shown(&console.get("/?section=nonsense").text().unwrap()),
-        ["needs you", "ready for review", "landing", "working"]
+        overview
     );
 
     // A section hidden with Sections keeps a hidden folder, for Sections to
@@ -1489,7 +1510,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     );
     assert_eq!(
         shown(&html),
-        ["ready for review", "landing", "working"],
+        ["ready for review", "landing", "working", "done", "resolved"],
         "{html}"
     );
 }
