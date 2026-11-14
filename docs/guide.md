@@ -4521,6 +4521,8 @@ start one in-process targeted Fix run with `--no-merge --no-base-fix`. Every
 adopted head must still have the exact tree of its main merge-base plus the Cargo
 version bump. A draft, unresolved failure or conflict stops before tagging.
 When the content base changes, requested Experiments and release notes refresh.
+A resumed bump PR whose body still names its content base keeps its summary,
+including one edited with `--review`.
 Bump PR workflows have five minutes to appear, as does GitHub's mergeability
 report after checks pass and the release workflow after the tag push; queued
 and running checks keep waiting.
@@ -4541,7 +4543,8 @@ It prints the summary and offers accept, `$EDITOR` edit or cancel. It is a
 documented CLI-only flag because it needs the maintainer's local terminal.
 
 With no version, the command is a Release Pass. It skips quietly with exit `0`
-and no Run notification during a live Experiment or Quota wait, while either
+and no Run notification during a live Experiment or Quota wait, when no route
+it may take has Plan usage left (see [When no route has Plan usage](#when-no-route-has-plan-usage)), while either
 release lock is held, when nothing changed or only non-shipped paths changed,
 or when every eligible main push CI completed non-green. The Activity log keeps
 one skip entry until its reason changes; Cron jobs shows the latest Pass firing.

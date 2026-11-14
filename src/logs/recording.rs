@@ -239,6 +239,8 @@ impl<O: Outside> Record<O> {
     pub(super) fn configured(&mut self, config: &UserConfig) {
         self.logs_dir = Some(config.logs_dir.clone());
         self.otlp_endpoint = config.otlp_endpoint.clone();
+        // A Release Pass skips with no output at all, whatever quiet_skips
+        // says: its held lines stay held until it knows it is not skipping.
         if !config.quiet_skips && self.command != CommandKind::Release {
             self.show_held();
         }

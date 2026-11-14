@@ -2195,25 +2195,18 @@ fn run_list(state: &mut Json, flags: &Flags) {
         listed.push(shown);
     }
     save(state);
-    if flag(flags, "jq").is_none() {
-        let records: Vec<Json> = listed
-            .iter()
-            .take(limit)
-            .map(|run| {
-                let mut record = object([]);
-                for field in fields {
-                    record.set(field, run.at(field).clone());
-                }
-                record
-            })
-            .collect();
-        println!("{}", Array(records).dump());
-        return;
-    }
-    for run in listed.iter().take(limit) {
-        let line: Vec<String> = fields.iter().map(|field| run.at(field).python()).collect();
-        println!("{}", line.join(" "));
-    }
+    let records: Vec<Json> = listed
+        .iter()
+        .take(limit)
+        .map(|run| {
+            let mut record = object([]);
+            for field in fields {
+                record.set(field, run.at(field).clone());
+            }
+            record
+        })
+        .collect();
+    println!("{}", Array(records).dump());
 }
 
 /// Release workflow diagnostics from its current attempt.

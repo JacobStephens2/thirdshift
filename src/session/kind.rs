@@ -27,6 +27,8 @@ pub enum Kind {
     Triage,
     /// One correction of an invalid Triage recommendation, retaining its investigation.
     TriageCorrection,
+    /// The Release run's one summary Session, `release-summary`. Without a
+    /// version or bump flag the same Session also chooses `minor` or `patch`.
     ReleaseSummary,
     /// `security-audit`.
     SecurityAudit,

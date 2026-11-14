@@ -242,11 +242,14 @@ fn native_with_experiment_uses_the_engine_without_cargo_on_the_launch_directory(
         "{}",
         stderr(&output)
     );
-    let pin = git(
-        &release.maintainer(),
-        &["rev-parse", "refs/thirdshift/release-candidates/0.2.0"],
+    // The pushed branch replaced the pin that held the content commit.
+    assert_eq!(
+        git(
+            &release.maintainer(),
+            &["for-each-ref", "refs/thirdshift/release-candidates/"],
+        ),
+        ""
     );
-    assert_eq!(pin, release.origin(&["rev-parse", "release-0.2.0^"]));
 }
 
 #[test]
@@ -610,7 +613,7 @@ fn release_pass_reports_pending_main_ci_before_it_finishes() {
     let owned = support::child_lifetime::OwnedRuns::new();
     let mut child = owned.spawn(&mut run);
     // This covers binary startup, isolated Git preparation and the first CI read.
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + support::WAIT_BOUND;
     while !fs::read_to_string(&path)
         .unwrap()
         .contains("waiting for main push CI")
@@ -662,7 +665,7 @@ fn a_release_pass_that_waited_for_main_ci_records_its_later_skip() {
     let owned = support::child_lifetime::OwnedRuns::new();
     let mut child = owned.spawn(&mut run);
     // This covers binary startup, isolated Git preparation and the first CI read.
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + support::WAIT_BOUND;
     while !fs::read_to_string(&path)
         .unwrap()
         .contains("waiting for main push CI")
@@ -1444,4 +1447,86 @@ fn a_skipped_release_pass_sends_no_run_notification_even_with_email() {
     .unwrap();
     assert!(activity.contains("Release run skipped:"), "{activity}");
     assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn resuming_an_open_bump_pr_keeps_its_reviewed_summary_when_the_base_is_unchanged() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    let base = release.origin(&["rev-parse", &format!("{head}^")]);
+    let body = format!(
+        "## Summary\n\n<!-- release-summary:start -->\nEdited by hand in --review.\n<!-- release-summary:end -->\n\n<!-- release-content-base: {base} -->\n"
+    );
+    release.gh(&[
+        "fake",
+        "pr",
+        "release-0.2.0",
+        "body",
+        &json!(body).to_string(),
+    ]);
+    release.ci_reports(GREEN);
+    release.summary_says("Regenerated summary.");
+    let output = with_input(&mut command(&release, "0.2.0"), "");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.2.0");
+    assert!(
+        body.contains("Edited by hand in --review."),
+        "resume overwrote the reviewed summary: {body}"
+    );
+}
+
+#[test]
+fn release_experiment_pin_does_not_run_launch_repository_git_programs() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut run = command(&release, "0.2.0");
+    let marker = release.root().join("launch-upload-pack-ran");
+    let wrapper = release.root().join("upload-pack.sh");
+    write_executable(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nprintf ran > '{}'\nexec git upload-pack \"$@\"\n",
+            marker.display()
+        ),
+    );
+    git(
+        &release.maintainer(),
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            wrapper.to_str().unwrap(),
+        ],
+    );
+    let output = with_input(run.arg("--with-experiment"), "");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !marker.exists(),
+        "Release run executed the Launch directory's remote.origin.uploadpack"
+    );
+}
+
+#[test]
+fn an_abandoned_experiment_cut_leaves_no_pin_that_blocks_later_passes() {
+    let release = Release::new();
+    release.ci_reports(RED);
+    release.agent_runs("exit 1");
+    let first = with_input(command(&release, "0.2.0").arg("--with-experiment"), "");
+    assert!(!first.status.success(), "{}", stderr(&first));
+    assert!(release.origin_branch("release-0.2.0"), "{}", stderr(&first));
+    // The Day shift abandons 0.2.0: close its PR and delete its branch.
+    release.gh(&["pr", "close", "release-0.2.0"]);
+    release.origin(&["update-ref", "-d", "refs/heads/release-0.2.0"]);
+    let pass = with_input(&mut command(&release, ""), "");
+    assert!(pass.status.success(), "{}", stderr(&pass));
+    let activity = fs::read_to_string(
+        release
+            .root()
+            .join("home/.thirdshift/logs/JacobStephens2/thirdshift/activity.log"),
+    )
+    .unwrap_or_default();
+    assert!(
+        !activity.contains("awaits its Experiment"),
+        "the Experiment pin outlived the branch push and blocks Passes: {activity}"
+    );
 }

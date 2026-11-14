@@ -25,7 +25,16 @@ pub(super) fn finish(
                 None => false,
             };
             controls::experiment(git, cut, request.with_experiment)?;
-            let body = notes.body(git, github, cut, request.review, automatic)?;
+            let kept = match &cut.pr {
+                Some(pr) if !cut.recut && automatic.is_none() => {
+                    reviewed_body(github, pr, &cut.base)?
+                }
+                _ => None,
+            };
+            let body = match &kept {
+                Some(body) => body.clone(),
+                None => notes.body(git, github, cut, request.review, automatic)?,
+            };
             fetch(git)?;
             recovery::ensure_previous(git, github, cut.previous.as_deref())?;
             if !((merged || cut.recut && cut.tagged.is_some())
@@ -35,7 +44,9 @@ pub(super) fn finish(
             }
             cut.push(git, github)?;
             if let Some(pr) = &cut.pr {
-                github.set_pr_body(&pr.issue, pr.issue.number, &body)?;
+                if kept.is_none() {
+                    github.set_pr_body(&pr.issue, pr.issue.number, &body)?;
+                }
             } else {
                 cut.pr = Some(crate::review::PullRequestUrl::parse(
                     &github.open_release(&cut.version, &cut.branch(), &body)?,
@@ -151,6 +162,27 @@ pub(super) fn finish(
     Ok(())
 }
 
+/// The open bump PR's body when its summary already describes `base`, so a
+/// resumed run keeps a summary the Day shift may have edited in `--review`.
+/// A body without the content-base marker, or naming another base, is
+/// written afresh.
+fn reviewed_body(
+    github: &GitHub,
+    pr: &crate::review::PullRequestUrl,
+    base: &str,
+) -> Result<Option<String>> {
+    let input = github.release_pr_input(&pr.issue.number.to_string())?;
+    let body = input["body"].as_str().unwrap_or_default();
+    Ok((content_base(body) == Some(base)).then(|| body.to_owned()))
+}
+
+/// The commit named by a bump PR body's `release-content-base` marker.
+fn content_base(body: &str) -> Option<&str> {
+    let (_, rest) = body.rsplit_once("<!-- release-content-base: ")?;
+    let (sha, _) = rest.split_once(" -->")?;
+    Some(sha.trim())
+}
+
 impl Notes<'_> {
     fn body(
         &mut self,
@@ -237,10 +269,10 @@ fn ready(
         bump_identity(&snapshot, &cut.branch())?;
         ensure!(
             snapshot.pr.state == PrState::Open,
-            "{} is closed, draft, or changed identity; review it (gh pr ready {} for a draft), then thirdshift release {}",
+            "{} is closed, draft, or changed identity; review it (gh pr ready {} for a draft), then {}",
             pr.url,
             pr.url,
-            cut.version
+            request.retry(&cut.version)
         );
         if snapshot.head_commit != cut.head {
             ensure!(
@@ -280,10 +312,10 @@ fn ready(
         if snapshot.mergeable == Mergeable::No || failed {
             ensure!(
                 !fixed,
-                "{} remains failing/conflicted after one targeted Fix run; recover with thirdshift fix {} --no-merge --no-base-fix, then thirdshift release {}",
+                "{} remains failing/conflicted after one targeted Fix run; recover with thirdshift fix {} --no-merge --no-base-fix, then {}",
                 pr.url,
                 pr.url,
-                cut.version
+                request.retry(&cut.version)
             );
             fixed = true;
             drop(label.take());
@@ -304,9 +336,9 @@ fn ready(
             });
         ensure!(
             !checks.is_empty() || started.elapsed() < poll::release_grace_period(),
-            "no release bump checks appeared at {}; inspect GitHub Actions, then thirdshift release {}",
+            "no release bump checks appeared at {}; inspect GitHub Actions, then {}",
             cut.head,
-            cut.version
+            request.retry(&cut.version)
         );
         if green {
             if snapshot.mergeable == Mergeable::Yes {

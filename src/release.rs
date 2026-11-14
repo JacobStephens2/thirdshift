@@ -99,7 +99,7 @@ impl Version {
     }
 }
 
-/// Own the locks, worktree and live PR label through interruption cleanup.
+/// What a `thirdshift release` invocation asked for.
 pub struct Request<'a> {
     pub version: Option<&'a str>,
     pub bump: Option<Bump>,
@@ -107,6 +107,21 @@ pub struct Request<'a> {
     pub review: bool,
 }
 
+impl Request<'_> {
+    /// The command that resumes `version`, still asking for the Experiment
+    /// when this run did.
+    fn retry(&self, version: &str) -> String {
+        let experiment = if self.with_experiment {
+            " --with-experiment"
+        } else {
+            ""
+        };
+        format!("thirdshift release {version}{experiment}")
+    }
+}
+
+/// Own the locks, worktree and live PR label through interruption cleanup.
+/// `Ok(None)` is a skipped Pass.
 pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, FailedRun> {
     let mut pr_url = None;
     let mut trace = None;
@@ -238,15 +253,30 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                 }
             }
         };
+        let pin = format!("refs/thirdshift/release-candidates/{}", cut.version);
         if request.with_experiment && !cut.published {
-            let pin = format!("refs/thirdshift/release-candidates/{}", cut.version);
-            git_run(&launch, &["fetch", "--quiet", "origin", &cut.base])?;
+            // Fetch from this run's own repository by path, so the Launch
+            // directory's origin settings and remote helpers never run.
+            let source = git
+                .dir()
+                .to_str()
+                .context("non-UTF8 release repository path")?;
+            git_run(
+                &launch,
+                &[
+                    "fetch",
+                    "--quiet",
+                    "--no-write-fetch-head",
+                    source,
+                    &cut.base,
+                ],
+            )?;
             git_run(&launch, &["update-ref", &pin, &cut.base])?;
         }
         if cut.head.is_empty() {
             cut.commit(git)?;
         }
-        workflow::finish(
+        let finished = workflow::finish(
             git,
             &github,
             &mut cut,
@@ -258,7 +288,16 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
             },
             automatic_summary,
             &mut pr_url,
-        )?;
+        );
+        // Once its branch is on origin, the branch records the content
+        // commit. A pin left behind would outlive an abandoned release and
+        // block every later run.
+        if matches!(recovery::remote_head(git, &cut.branch()), Ok(Some(_)))
+            && let Err(error) = git_run(&launch, &["update-ref", "-d", &pin])
+        {
+            progress::warn(&error, format_args!("could not remove {pin}"));
+        }
+        finished?;
         Ok(Some(Ended {
             pr_url: cut.pr.context("release has no PR")?.url,
             version: cut.version,

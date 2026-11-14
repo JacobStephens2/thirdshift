@@ -17,12 +17,7 @@ fn release_start_requires_admin_including_the_named_person() {
                 &format!("{path}-{scope}"),
                 &["--scopes", scope],
             );
-            let response = reqwest::blocking::Client::new()
-                .post(format!("{}{path}", console.address))
-                .bearer_auth(token)
-                .json(&request)
-                .send()
-                .unwrap();
+            let response = post_to(&console, path, &token, &request);
             assert_eq!(
                 response.status(),
                 403,
@@ -33,12 +28,7 @@ fn release_start_requires_admin_including_the_named_person() {
     }
     let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
     for path in ["/api/v1/runs", "/api/v1/start"] {
-        let response = reqwest::blocking::Client::new()
-            .post(format!("{}{path}", console.address))
-            .bearer_auth(&admin)
-            .json(&request)
-            .send()
-            .unwrap();
+        let response = post_to(&console, path, &admin, &request);
         assert_eq!(response.status(), 422, "{}", response.text().unwrap());
         let error = response.json::<Value>().unwrap();
         assert!(
@@ -158,12 +148,8 @@ fn release_start_accepts_versionless_and_pinned_passes_with_admin_scope() {
             if let Some(bump) = bump {
                 request["bump"] = json!(bump);
             }
-            let response = reqwest::blocking::Client::new()
-                .post(format!("{}{path}", console.address))
-                .bearer_auth(&admin)
-                .json(&request)
-                .send()
-                .unwrap();
+            // The request spans a whole Release Pass.
+            let response = post_to(&console, path, &admin, &request);
             assert_eq!(response.status(), 200);
             let ended = response.json::<Value>().unwrap();
             assert_eq!(ended["outcome"], "skipped", "{request}: {ended}");
@@ -687,11 +673,20 @@ pub(super) fn server(scenario: &support::Scenario) -> Console {
 }
 
 fn post(console: &Console, token: &str, body: &Value) -> reqwest::blocking::Response {
+    post_to(console, "/api/v1/runs", token, body)
+}
+
+fn post_to(
+    console: &Console,
+    path: &str,
+    token: &str,
+    body: &Value,
+) -> reqwest::blocking::Response {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
         .unwrap()
-        .post(format!("{}/api/v1/runs", console.address))
+        .post(format!("{}{path}", console.address))
         .bearer_auth(token)
         .json(body)
         .send()

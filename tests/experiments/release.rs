@@ -119,6 +119,13 @@ fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_
         overridden.stderr
     );
     assert!(
+        overridden
+            .stderr
+            .contains("then thirdshift release 0.2.0 --with-experiment"),
+        "{}",
+        overridden.stderr
+    );
+    assert!(
         !scenario
             .origin_git(&["branch", "--list", "release-0.2.0"])
             .is_empty()
