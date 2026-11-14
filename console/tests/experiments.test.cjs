@@ -103,7 +103,7 @@ test('Custom runner identity in retained pair evidence stays blind', async t => 
   });
   const path = join(folder, 'pairs', `${customRunner.pair}.json`);
   const pair = JSON.parse(await readFile(path, 'utf8'));
-  pair.baseline.diff[0].patch = `+Runner: outside-review\n+Digest: ${'d'.repeat(64)}\n+Roles: inspect<role> role-model\n+Keep this change.\n`;
+  pair.baseline.diff[0].patch = `+Runner: outside-review\n+Digest: ${'d'.repeat(64)}\n+Roles: inspect<role> role-model\n+| Role | Model | Effort |\n+| inspect<role> | role-model | high |\n+Keep this change.\n`;
   pair.baseline.base = [{ command: ['outside-review', '--check'], passed: true, reason: 'outside-review passed with role-model' }];
   pair.baseline.test_files = ['outside-review_test.py'];
   await writeFile(path, JSON.stringify(pair));
@@ -132,6 +132,9 @@ test('blinding runner roles and effort preserves ordinary source evidence', asyn
   pair.candidate.diff[0].patch = patches[1];
   pair.baseline.diff[0].path = 'tests/test_highest.py';
   pair.baseline.test_files = ['tests/test_highest.py'];
+  patches.push('+struct Settings {\n+    runner: bool,\n+}\n', '+role = load_user_role()\n+return role.permissions\n');
+  pair.baseline.diff.push({ path: 'src/settings.rs', test: false, patch: patches[2] });
+  pair.candidate.diff.push({ path: 'src/roles.py', test: false, patch: patches[3] });
   await writeFile(path, JSON.stringify(pair));
   const value = customRunner.record();
   value.prepared.baseline.runner.manifest.roles.test = { model: 'role-model', effort: 'high' };

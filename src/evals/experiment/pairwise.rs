@@ -662,12 +662,12 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
     let runner_identities = runner_identities(&stored.description);
     for side in [&mut a, &mut b] {
         side.diff.sort_by_key(|file| file.test);
+        blind_runner_side(side, &runner_identities);
         // Blinded as the panel's packet is: added lines that would name the
         // Arm go, and so does error text, which can name retained paths.
         for file in &mut side.diff {
             file.patch = blind_diff(&file.patch);
         }
-        blind_runner_side(side, &runner_identities);
         if side.error.is_some() {
             side.error = Some("the evidence could not run".into());
         }
@@ -751,31 +751,7 @@ fn blind_runner_side(side: &mut pairs::Side, identities: &RunnerIdentities) {
         }
     };
     for file in &mut side.diff {
-        // A role or effort can also be an ordinary source identifier. Remove
-        // added attribution fields, preserving code such as highest_score.
-        file.patch = file
-            .patch
-            .lines()
-            .filter(|line| {
-                let Some(added) = line.strip_prefix('+').filter(|_| !line.starts_with("+++"))
-                else {
-                    return true;
-                };
-                let normalized = added
-                    .trim()
-                    .trim_start_matches(['#', '>', '-', ' '])
-                    .replace(['*', '_', '`'], "")
-                    .to_ascii_lowercase();
-                !["runner", "runner digest", "roles", "role"]
-                    .iter()
-                    .any(|key| {
-                        normalized
-                            .strip_prefix(key)
-                            .is_some_and(|rest| rest.trim_start().starts_with([':', '=']))
-                    })
-            })
-            .map(|line| format!("{line}\n"))
-            .collect();
+        file.patch = blind_runner_diff(&file.patch, identities);
         blind(&mut file.path, &identities.attribution);
         blind(&mut file.patch, &identities.attribution);
     }
@@ -785,11 +761,70 @@ fn blind_runner_side(side: &mut pairs::Side, identities: &RunnerIdentities) {
     for check in side.base.iter_mut().chain(&mut side.cross) {
         for argument in check.command.iter_mut().flatten() {
             blind(argument, &identities.attribution);
-            blind(argument, &identities.role_metadata);
         }
         blind(&mut check.reason, &identities.attribution);
         blind(&mut check.reason, &identities.role_metadata);
     }
+}
+
+fn blind_runner_diff(diff: &str, identities: &RunnerIdentities) -> String {
+    let mut role_table = false;
+    let mut blinded = String::new();
+    for line in diff.lines() {
+        let Some(added) = line.strip_prefix('+').filter(|_| !line.starts_with("+++")) else {
+            role_table = false;
+            blinded.push_str(line);
+            blinded.push('\n');
+            continue;
+        };
+        let normalized = added
+            .trim()
+            .trim_start_matches(['#', '>', '-', ' '])
+            .replace(['*', '_', '`'], "")
+            .to_ascii_lowercase();
+        if normalized.starts_with('|') {
+            let cells: Vec<_> = normalized
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            role_table |= cells.iter().any(|cell| matches!(*cell, "role" | "roles"));
+            if role_table {
+                continue;
+            }
+        } else {
+            role_table = false;
+        }
+        let attribution = ["runner", "runner digest", "roles", "role"]
+            .iter()
+            .any(|key| {
+                normalized
+                    .strip_prefix(key)
+                    .and_then(|rest| rest.trim_start().strip_prefix([':', '=']))
+                    .is_some_and(|value| {
+                        identities
+                            .attribution
+                            .iter()
+                            .chain(&identities.role_metadata)
+                            .any(|identity| {
+                                let identity = identity.to_ascii_lowercase();
+                                value.match_indices(&identity).any(|(index, _)| {
+                                    let identifier = |c: char| c.is_alphanumeric() || c == '_';
+                                    !value[..index].chars().next_back().is_some_and(identifier)
+                                        && !value[index + identity.len()..]
+                                            .chars()
+                                            .next()
+                                            .is_some_and(identifier)
+                                })
+                            })
+                    })
+            });
+        if !attribution {
+            blinded.push_str(line);
+            blinded.push('\n');
+        }
+    }
+    blinded
 }
 
 /// The retained pair named by `key`, which must be one of the Experiment's.
