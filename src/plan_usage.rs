@@ -3,8 +3,9 @@
 //! wire frames; `thirdshift plan-usage` refreshes it on demand with official
 //! non-billed reads, at most once a minute per Harness, and never on a
 //! background timer. A Command routed by the User config's routes reads it
-//! before each session Step ([`router`]), refreshing a stale Codex or Muse
-//! snapshot first, and never asks a Fleet peer.
+//! before each session Step ([`router`]), refreshing a stale snapshot of a
+//! Harness whose read reports Plan windows first, and never asks a Fleet
+//! peer.
 
 use std::time::Duration;
 
@@ -88,18 +89,21 @@ pub fn subscription_named(name: &str) -> Result<Harness> {
 fn refresh(store: &Store) -> Result<()> {
     let saved = store.read()?;
     let now = Utc::now();
-    let fresh = TimeDelta::from_std(FRESH).expect("a minute fits");
     let stale: Vec<Harness> = read::READABLE
         .into_iter()
         .filter(|harness| harness.installed())
-        .filter(|harness| {
-            saved
-                .get(harness.name())
-                .and_then(|state| state.read_at)
-                .is_none_or(|read| now - read >= fresh || read > now)
-        })
+        .filter(|harness| !read_lately(saved.get(harness.name()), now))
         .collect();
     read_into(store, &stale)
+}
+
+/// Whether `state`'s non-billed read ran within the last minute, so it is
+/// not run again yet.
+fn read_lately(state: Option<&store::State>, now: chrono::DateTime<Utc>) -> bool {
+    let fresh = TimeDelta::from_std(FRESH).expect("a minute fits");
+    state
+        .and_then(|state| state.read_at)
+        .is_some_and(|read| read <= now && now - read < fresh)
 }
 
 /// Run each of `stale`'s non-billed reads side by side, and take their
@@ -129,17 +133,18 @@ fn read_into(store: &Store, stale: &[Harness]) -> Result<()> {
 }
 
 /// Before routing a session Step, run the non-billed read of each of
-/// `harnesses` that has one routing uses (Codex's and Muse's) and is
-/// installed, when its saved snapshot is missing, more than five minutes
-/// old or past a reset, side by side. Only this machine is read.
+/// `harnesses` that reports Plan windows ([`read::WINDOWED`]) and is
+/// installed, when its saved snapshot is stale for routing, side by side.
+/// Only this machine is read.
 fn refresh_for_routing(store: &Store, harnesses: &[Harness]) -> Result<()> {
     let saved = store.read()?;
     let now = Utc::now();
     let mut stale: Vec<Harness> = Vec::new();
     for harness in harnesses {
-        if matches!(harness, Harness::Codex | Harness::Muse)
+        if read::WINDOWED.contains(harness)
             && !stale.contains(harness)
             && harness.installed()
+            && !read_lately(saved.get(harness.name()), now)
             && router::stale(saved.get(harness.name()), now)
         {
             stale.push(*harness);

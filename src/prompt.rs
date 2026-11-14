@@ -432,18 +432,34 @@ pub fn local_implement(issue: &IssueUrl, base: &str, branch: &str) -> String {
     )
 }
 
-/// The continuation prompt, for a run that picks up an existing Issue branch.
-/// With `pr_url`, the agent updates that PR; otherwise it creates one.
-pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&str>) -> String {
-    let review = ReviewInstruction::Implement;
-    let pr = match pr_url {
+/// What a Continuation asks of the pull request: update `pr_url`, or
+/// create one against `base`.
+fn pull_request_instruction(base: &str, pr_url: Option<&str>) -> String {
+    match pr_url {
         Some(url) => format!(
             "Update PR {url} using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review."
         ),
         None => format!(
             "Create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review."
         ),
-    };
+    }
+}
+
+/// `continuation`, a Continuation prompt written before the branch had a
+/// pull request, as the Continuation prompt for its open pull request
+/// `pr_url`: the same prompt [`continuation`] gives with that PR.
+pub fn with_open_pr(continuation: &str, base: &str, pr_url: &str) -> String {
+    continuation.replace(
+        &pull_request_instruction(base, None),
+        &pull_request_instruction(base, Some(pr_url)),
+    )
+}
+
+/// The continuation prompt, for a run that picks up an existing Issue branch.
+/// With `pr_url`, the agent updates that PR; otherwise it creates one.
+pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&str>) -> String {
+    let review = ReviewInstruction::Implement;
+    let pr = pull_request_instruction(base, pr_url);
     format!(
         "/thirdshift-implement {url}\n\
          \n\

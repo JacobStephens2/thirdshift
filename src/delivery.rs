@@ -104,6 +104,14 @@ pub struct Opening {
     pub continuation: Option<String>,
 }
 
+impl Opening {
+    /// Rewrite the prompt, and the continuation prompt with it, alike.
+    pub fn each_prompt(&mut self, rewrite: impl Fn(&str) -> String) {
+        self.prompt = rewrite(&self.prompt);
+        self.continuation = self.continuation.as_deref().map(&rewrite);
+    }
+}
+
 /// Which session a Delivery opens with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpeningSession {
@@ -1235,9 +1243,17 @@ impl Outside for InWorktree<'_> {
         prompt: &str,
         continuation: Option<&str>,
     ) -> Result<Option<String>> {
-        let final_message = self
-            .sessions
-            .run_implementation(kind, prompt, continuation)?;
+        let base = self.base;
+        let pull_request = &mut *self.pull_request;
+        let mut continue_with = |committed: bool| match continuation {
+            Some(continuation) => {
+                crate::implement::continue_with(continuation, committed, base, pull_request)
+            }
+            None => Ok(None),
+        };
+        let final_message =
+            self.sessions
+                .run_implementation(kind, prompt, Some(&mut continue_with))?;
         self.pull_request.ensure_actionable(false)?;
         Ok(final_message)
     }

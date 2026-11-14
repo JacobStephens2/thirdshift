@@ -14,8 +14,8 @@ use super::store::{State, Store};
 use super::view::Availability;
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
 
-/// How old a Codex or Muse snapshot may grow before routing refreshes it
-/// with the Harness's non-billed read.
+/// How old a snapshot of a Harness whose read reports Plan windows may grow
+/// before routing refreshes it with that read.
 const FRESH_MINUTES: i64 = 5;
 
 /// One route a session Step may take: the configured entry, for its
@@ -86,12 +86,13 @@ impl Router {
         security_review: Option<&Choice>,
         security_default: Option<&Choice>,
     ) -> Self {
+        let routes: Vec<Candidate> = routing
+            .routes
+            .iter()
+            .map(|route| Candidate::of(route, settings, ChosenBy::Routes))
+            .collect();
         let ordinary = if harness.chosen_by == ChosenBy::Routes {
-            routing
-                .routes
-                .iter()
-                .map(|route| Candidate::of(route, settings, ChosenBy::Routes))
-                .collect()
+            routes.clone()
         } else {
             Vec::new()
         };
@@ -112,13 +113,8 @@ impl Router {
                             .iter()
                             .map(|route| Candidate::of(route, settings, ChosenBy::SecurityConfig)),
                     );
-                } else if !routing.routes.is_empty() {
-                    security.extend(
-                        routing
-                            .routes
-                            .iter()
-                            .map(|route| Candidate::of(route, settings, ChosenBy::Routes)),
-                    );
+                } else if !routes.is_empty() {
+                    security.extend(routes);
                 } else {
                     security.push(Candidate::chosen(&default));
                 }
@@ -168,7 +164,7 @@ impl Router {
 
     /// The first route of this kind not in `tried` that could take a
     /// session now, by this machine's saved Plan usage, refreshing a stale
-    /// Codex or Muse snapshot with its non-billed read first. None when
+    /// snapshot with the Harness's non-billed read first. None when
     /// every untried route is unavailable, or there are fewer than two.
     pub fn pick(&self, security: bool, tried: &[usize]) -> Option<Picked> {
         let candidates = self.candidates(security);
@@ -240,18 +236,12 @@ fn select(
 }
 
 /// Whether routing should refresh `state` with a non-billed read before
-/// judging it: nothing saved, the last observation more than five minutes
-/// old, or a window or cooldown past its reset; but never twice a minute.
+/// judging it: nothing saved, the last observation more than
+/// [`FRESH_MINUTES`] old, or a window or cooldown past its reset.
 pub(super) fn stale(state: Option<&State>, now: DateTime<Utc>) -> bool {
     let Some(state) = state else {
         return true;
     };
-    if state
-        .read_at
-        .is_some_and(|read| read <= now && now - read < TimeDelta::minutes(1))
-    {
-        return false;
-    }
     state.observed_at.is_none_or(|observed| {
         observed > now || now - observed >= TimeDelta::minutes(FRESH_MINUTES)
     }) || state.windows.iter().any(|window| window.reset_by(now))
@@ -465,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_snapshots_are_refreshed_at_most_once_a_minute() {
+    fn old_or_reset_snapshots_are_stale_for_routing() {
         let now = Utc::now();
         assert!(stale(None, now));
         let fresh = window(10.0, now + TimeDelta::hours(1));
@@ -488,10 +478,5 @@ mod tests {
             ..fresh.clone()
         };
         assert!(stale(Some(&lapsed), now));
-        let just_read = State {
-            read_at: Some(now - TimeDelta::seconds(10)),
-            ..old
-        };
-        assert!(!stale(Some(&just_read), now));
     }
 }

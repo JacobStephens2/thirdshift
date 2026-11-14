@@ -89,9 +89,7 @@ fn a_step_starts_on_its_first_route_below_its_reserve_ceiling() {
     let record = scenario.command_record("issue");
     let stages = record["stages"].as_array().unwrap();
     assert!(
-        stages.iter().any(|stage| stage["harness"]
-            .as_str()
-            .is_some_and(|h| h.starts_with("codex"))),
+        stages.iter().any(|stage| stage["harness"] == "codex"),
         "{record:#}"
     );
     // The pull request keeps the Command's single primary Built-with tuple.
@@ -385,4 +383,132 @@ exit 1
     );
     let cooldown = &saved(&scenario)["harnesses"]["claude"]["cooldown"];
     assert_eq!(cooldown["backoff_minutes"], json!(120), "{cooldown:#}");
+}
+
+#[test]
+fn a_limit_after_the_pr_opened_continues_by_updating_that_pr() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(ROUTES);
+    scenario.agent_does(&format!(
+        r#"
+if [ -n "${{FAKE_CODEX_ERROR:-}}" ]; then
+    exit 0
+fi
+{OPENS_PR}
+git push -q origin issue-7
+{WORKING}
+echo '{limit}'
+exit 1
+"#,
+        limit = claude_limit(),
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    let calls = scenario.codex_calls();
+    assert_eq!(calls.len(), 1, "{}", result.stderr);
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("Update PR https://github.com/acme/widgets/pull/1"),
+        "{prompt}"
+    );
+    assert!(
+        !prompt.contains("Create a pull request against main"),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn a_security_review_on_harness_routes_does_not_route_on_a_startup_error() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(ROUTES);
+    let error = json!({"type": "result", "subtype": "error_during_execution",
+        "is_error": true, "errors": ["Not signed in."]});
+    scenario.agent_does(&format!(
+        r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+    echo '{error}'
+    exit 1
+fi
+{OPENS_PR}
+"#
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review"]);
+
+    assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("its next route"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_security_review_walks_security_routes_after_its_security_harness() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[harness]\ndefault = \"claude\"\n[security]\nharness = \"codex\"\nroutes = [\"agy\", \"claude\"]\n",
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+    let cooldown = json!({"since": "2026-01-01T00:00:00Z", "until": "2096-10-02T07:06:40Z"});
+    plan_usage_is(
+        &scenario,
+        json!({
+            "codex": {"observed_at": now, "read_at": now, "cooldown": cooldown},
+            "agy": {"observed_at": now, "cooldown": cooldown}
+        }),
+    );
+    let reviewed = scenario.path("reviewed");
+    scenario.agent_does(&format!(
+        r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+    touch '{reviewed}'
+    report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+    test -n "$report"
+    printf '%s\n' '[]' > "$report"
+    printf '%s\n' 'Security review: {{"unaddressed_count":0,"findings":[],"pre_existing_count":0}}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    exit 0
+fi
+{OPENS_PR}
+"#,
+        reviewed = reviewed.display()
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(reviewed.exists(), "{}", result.stderr);
+    assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.agy_calls().is_empty(), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("routed by Plan usage: codex is in cooldown; agy is in cooldown"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_model_named_on_the_command_stays_pinned_past_a_reserve_ceiling() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(&format!("{ROUTES}max_utilization = 85\n"));
+    plan_usage_is(
+        &scenario,
+        json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
+            "windows": [{"name": "five_hour", "used_percent": 90.0, "resets_at": "2096-10-02T07:06:40Z"}]}}),
+    );
+    scenario.agent_does_for(7, OPENS_PR);
+
+    let result = scenario.run(&[&scenario.issue_url(7), "--model", "sonnet"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(claude_sessions(&scenario).len(), 1);
+    assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("routed by Plan usage"),
+        "{}",
+        result.stderr
+    );
 }

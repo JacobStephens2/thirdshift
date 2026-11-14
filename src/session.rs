@@ -55,6 +55,29 @@ pub enum Purpose {
     SecurityReview,
 }
 
+impl Purpose {
+    /// A Security run's, Security fix publishing's or Security review's
+    /// session: it walks the Security routes, and ends incomplete with
+    /// killed work.
+    fn is_security(self) -> bool {
+        match self {
+            Self::Security | Self::SecurityPublishing | Self::SecurityReview => true,
+            Self::Ordinary | Self::CodeReview => false,
+        }
+    }
+
+    /// The launch policy of a session given `prompt`: the shared
+    /// review-report contract identifies code review sessions before
+    /// expansion.
+    fn of_prompt(prompt: &str) -> Self {
+        if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
+            Self::CodeReview
+        } else {
+            Self::Ordinary
+        }
+    }
+}
+
 /// Where Session traces go: beside the owning Command log in
 /// `commands/<command>/` under the repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
@@ -355,14 +378,7 @@ impl<'a> Sessions<'a> {
     /// succeeds, leaving the steps that follow to decide the outcome.
     /// Returns the final message while retaining the prompt's launch policy.
     pub fn run(&self, kind: Kind, prompt: &str) -> Result<Option<String>> {
-        // The shared review-report contract identifies code review sessions
-        // before expansion. Retain that policy even if report setup fails.
-        let purpose = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
-            Purpose::CodeReview
-        } else {
-            Purpose::Ordinary
-        };
-        self.run_to_final_message(purpose, kind, prompt)
+        self.run_implementation(kind, prompt, None)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
@@ -386,17 +402,18 @@ impl<'a> Sessions<'a> {
         self.run_step(purpose, kind, prompt, None)
     }
 
-    /// Run an implement session as [`Sessions::run`] does, given the
-    /// `continuation` prompt it starts again with when Plan usage moves it
-    /// to another route after it made commits: the existing Continuation
-    /// prompt, so no prompt says why.
+    /// Run an implement session as [`Sessions::run`] does. When Plan usage
+    /// moves it to another route after work began, `continuation` is asked,
+    /// given whether the session made commits, for the prompt it starts
+    /// again with: the existing Continuation prompt, so no prompt says why.
+    /// The prompt's launch policy holds even if report setup fails.
     pub fn run_implementation(
         &self,
         kind: Kind,
         prompt: &str,
-        continuation: Option<&str>,
+        continuation: Option<ContinueWith<'_>>,
     ) -> Result<Option<String>> {
-        self.run_step(Purpose::Ordinary, kind, prompt, continuation)
+        self.run_step(Purpose::of_prompt(prompt), kind, prompt, continuation)
             .map(|ended| ended.final_message)
     }
 
@@ -406,14 +423,14 @@ impl<'a> Sessions<'a> {
     /// structured Plan-usage evidence, starts again, as a fresh session, on
     /// the next route it has not tried. A session that stopped after work
     /// began has its uncommitted changes discarded first, its commits kept;
-    /// an implement session that made commits starts again on
-    /// `continuation`. A cybersecurity safeguard refusal never routes.
+    /// an implement session starts again on what `continuation` gives. A
+    /// cybersecurity safeguard refusal never routes.
     fn run_step(
         &self,
         purpose: Purpose,
         kind: Kind,
         prompt: &str,
-        continuation: Option<&str>,
+        mut continuation: Option<ContinueWith<'_>>,
     ) -> Result<Ended> {
         // Progress lines name the session by its kind's token.
         let label = kind.token();
@@ -430,10 +447,7 @@ impl<'a> Sessions<'a> {
         } else {
             None
         };
-        let security = matches!(
-            purpose,
-            Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview
-        );
+        let security = purpose.is_security();
         let routes = self.outside.borrow().routes(security);
         if routes.len() < 2 {
             return self.unrouted(purpose, kind, prompt, reports.as_ref());
@@ -457,6 +471,7 @@ impl<'a> Sessions<'a> {
             // falls back as a Security review always has.
             let started = !failure.before_first_turn;
             let unstarted_security = security
+                && routes[current].chosen_by == ChosenBy::SecurityConfig
                 && current == 0
                 && !started
                 && failure
@@ -504,16 +519,21 @@ impl<'a> Sessions<'a> {
                 self.step(format!(
                     "{label}: kept the session's commits and discarded its uncommitted changes"
                 ));
-                if committed && let Some(continuation) = continuation {
-                    prompt = continuation.to_owned();
+                if let Some(continue_with) = continuation.as_deref_mut()
+                    && let Some(next) = continue_with(committed)?
+                {
+                    prompt = next;
                 }
             }
             current = next;
-            let route = logged.route + 1;
-            logged = if kind == Kind::SecurityReview {
-                Logged::of(Kind::SecurityReviewFallback).on_route(route - 1)
-            } else {
-                Logged::of(kind).on_route(route)
+            // Each later attempt has its own Session trace. A Security
+            // review's first move keeps its long-standing
+            // `security-review-fallback` name; later ones number from there.
+            logged = match (kind, logged.kind) {
+                (Kind::SecurityReview, Kind::SecurityReview) => {
+                    Logged::of(Kind::SecurityReviewFallback)
+                }
+                _ => logged.on_route(logged.route + 1),
             };
         }
     }
@@ -532,10 +552,7 @@ impl<'a> Sessions<'a> {
         tried: &mut Vec<usize>,
         after_a_stop: bool,
     ) -> Result<Option<usize>> {
-        let security = matches!(
-            purpose,
-            Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview
-        );
+        let security = purpose.is_security();
         loop {
             let picked = self.outside.borrow_mut().pick(security, tried);
             let Some(Picked { index, passed }) = picked else {
@@ -640,10 +657,7 @@ impl<'a> Sessions<'a> {
         }
         if !ended.killed.is_empty() {
             let ending = ending_with(&ended.killed_work());
-            if matches!(
-                purpose,
-                Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview
-            ) {
+            if purpose.is_security() {
                 return Err(anyhow!(
                     "{label}: the {ended_last} {ending}; Security session incomplete"
                 ));
@@ -759,6 +773,11 @@ trait Outside {
     fn step(&mut self, line: String);
 }
 
+/// Asked, once a routed implement session's uncommitted changes are
+/// discarded, whether it made commits; gives the prompt it starts again
+/// with, if not its own.
+pub type ContinueWith<'a> = &'a mut dyn FnMut(bool) -> Result<Option<String>>;
+
 /// The worktree as a routed Step found it: its commit, and the pinned
 /// commit and message of a conflicted merge in progress, as a conflict
 /// Repair starts with.
@@ -805,6 +824,17 @@ struct OnMachine {
     router: Router,
 }
 
+impl OnMachine {
+    /// What this purpose's sessions run on now: a Security review's on
+    /// `security_review` when it is given, every other on `harness`.
+    fn current(&self, purpose: Purpose) -> (&Choice, &'static dyn Adapter) {
+        match (purpose, &self.security_review) {
+            (Purpose::SecurityReview, Some((review, adapter))) => (review, *adapter),
+            _ => (&self.harness, self.adapter),
+        }
+    }
+}
+
 impl Outside for OnMachine {
     fn routes(&self, security: bool) -> Vec<Choice> {
         self.router
@@ -819,11 +849,7 @@ impl Outside for OnMachine {
     }
 
     fn switch(&mut self, purpose: Purpose, choice: &Choice) -> Result<()> {
-        let current = match (purpose, &self.security_review) {
-            (Purpose::SecurityReview, Some((review, _))) => review,
-            _ => &self.harness,
-        };
-        if current.runs_as(choice) {
+        if self.current(purpose).0.runs_as(choice) {
             return Ok(());
         }
         let mut checked = choice.clone();
@@ -938,16 +964,13 @@ impl Outside for OnMachine {
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let (harness, adapter) = match (purpose, &self.security_review) {
-            (Purpose::SecurityReview, Some((choice, adapter))) => {
-                progress::step(format!(
-                    "{label}: on {choice}, chosen by {}",
-                    choice.chosen_by
-                ));
-                (choice, *adapter)
-            }
-            _ => (&self.harness, self.adapter),
-        };
+        let (harness, adapter) = self.current(purpose);
+        if matches!(purpose, Purpose::SecurityReview) && self.security_review.is_some() {
+            progress::step(format!(
+                "{label}: on {harness}, chosen by {}",
+                harness.chosen_by
+            ));
+        }
         crate::logs::session_choice(harness);
         let (mut invocation, policy) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
@@ -1373,7 +1396,13 @@ mod tests {
             Path::new("/unused"),
             Box::new(routed),
             || Ok(()),
-            |sessions| sessions.run_implementation(Kind::Implementation, "do it", Some("go on")),
+            |sessions| {
+                // The Continuation prompt, once the session made commits.
+                let mut continue_with = |committed: bool| -> Result<Option<String>> {
+                    Ok(committed.then(|| "go on".to_string()))
+                };
+                sessions.run_implementation(Kind::Implementation, "do it", Some(&mut continue_with))
+            },
         );
         (taken, calls.take(), moves.take())
     }

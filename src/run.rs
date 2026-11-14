@@ -13,7 +13,7 @@ use crate::branch::{self, Selection};
 use crate::child_run::{ChildAsks, Kind, SpecPr};
 use crate::claim::{self, Claim};
 use crate::command_limit;
-use crate::delivery::{Delivery, Opening, OpeningSession};
+use crate::delivery::{Delivery, Opening};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
 use crate::interrupt;
@@ -412,17 +412,11 @@ fn start_in_worktree<O: Outside>(
         Selection::Fresh { .. } => Checkout::Fresh,
         Selection::Continuation { .. } => Checkout::Continuation,
     };
-    let prompt = crate::implement::prompt(issue, base, selection);
-    let continuation = crate::implement::continuation(issue, base, selection);
+    let opening = crate::implement::opening(issue, base, selection);
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
     }
-    let opening = Opening {
-        session: OpeningSession::Implementation,
-        prompt,
-        continuation,
-    };
     outside.deliver(worktree, base, opening, selection)
 }
 
@@ -683,6 +677,7 @@ mod tests {
 
     use super::*;
     use crate::base_fix::BaseFixAsk;
+    use crate::delivery::OpeningSession;
     use crate::github::{PrState, PullRequest};
     use crate::harness::Choice;
     use crate::labels::Labels;

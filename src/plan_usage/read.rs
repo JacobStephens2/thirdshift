@@ -23,6 +23,11 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The Harnesses with a non-billed read.
 pub const READABLE: [Harness; 3] = [Harness::Claude, Harness::Codex, Harness::Muse];
 
+/// The Harnesses whose read says how much of their Plan windows is used,
+/// which routing refreshes before choosing a route. Claude Code's says only
+/// who is signed in.
+pub const WINDOWED: [Harness; 2] = [Harness::Codex, Harness::Muse];
+
 /// What one Harness's read answered, before it is taken into the saved
 /// state under the snapshot's lock.
 pub enum Reading {

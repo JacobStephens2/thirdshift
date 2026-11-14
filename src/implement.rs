@@ -9,7 +9,25 @@ use crate::issue::IssueUrl;
 use crate::labels::Labels;
 use crate::{prompt, worktree::Worktree};
 
-pub fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> String {
+/// The implement session a Delivery opens with on `selection`: the fresh or
+/// Continuation prompt, and for a fresh Issue branch the Continuation prompt
+/// it starts again with if Plan usage moves it to another route after it
+/// made commits, saying nothing of why.
+pub fn opening(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> Opening {
+    let continuation = match selection {
+        crate::branch::Selection::Fresh { .. } => {
+            Some(prompt::continuation(issue, base, selection.branch(), None))
+        }
+        crate::branch::Selection::Continuation { .. } => None,
+    };
+    Opening {
+        session: OpeningSession::Implementation,
+        prompt: prompt(issue, base, selection),
+        continuation,
+    }
+}
+
+fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> String {
     let branch = selection.branch();
     match selection {
         crate::branch::Selection::Fresh { .. } => prompt::fresh(issue, base, branch),
@@ -19,21 +37,21 @@ pub fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection
     }
 }
 
-/// The Continuation prompt a fresh Issue branch's implement session starts
-/// again with if Plan usage moves it to another route after it made
-/// commits: the prompt a later Run on the branch would get, saying nothing
-/// of why. None for a Continuation, whose prompt already is one.
-pub fn continuation(
-    issue: &IssueUrl,
+/// What an implement session starts again with once Plan usage moved it
+/// to another route: `continuation`, naming the branch's open pull request
+/// if it has one by now, once the session `committed` or opened one; none
+/// to keep its own prompt.
+pub(crate) fn continue_with<A: crate::pull_request::Adapter>(
+    continuation: &str,
+    committed: bool,
     base: &str,
-    selection: &crate::branch::Selection,
-) -> Option<String> {
-    match selection {
-        crate::branch::Selection::Fresh { .. } => {
-            Some(prompt::continuation(issue, base, selection.branch(), None))
-        }
-        crate::branch::Selection::Continuation { .. } => None,
-    }
+    pull_request: &mut crate::pull_request::PullRequest<A>,
+) -> Result<Option<String>> {
+    pull_request.ensure_actionable(false)?;
+    Ok(match pull_request.info() {
+        Some(pr) => Some(prompt::with_open_pr(continuation, base, &pr.url)),
+        None => committed.then(|| continuation.to_owned()),
+    })
 }
 
 pub enum Completed {
@@ -53,20 +71,14 @@ pub fn prepare(
 ) -> Result<Opening> {
     if labels.is_some_and(|labels| labels.has(crate::labels::FLAKY_TEST)) {
         const FLAKY: &str = "\nThis is a Flaky-test Ticket. The recorded CI failure is the evidence: the same commit passed on re-run. Implement a fix for the test's dependence on timing or scheduling, or the race it exposes. Do not require reproduction on demand or end with needs-info because the failure does not reproduce.\n";
-        opening.prompt.push_str(FLAKY);
-        if let Some(continuation) = &mut opening.continuation {
-            continuation.push_str(FLAKY);
-        }
+        opening.each_prompt(|prompt| format!("{prompt}{FLAKY}"));
     } else if let Some(labels) = labels
         && labels.has(crate::labels::Label::new("bug", "A reported bug"))
         && !labels.has(crate::security::fixing::SECURITY_FIX)
     {
         opening.session = OpeningSession::BugDiagnosis;
         let merge_base = worktree.ahead_merge_base(base)?;
-        opening.prompt = prompt::diagnosing_bugs(issue, &opening.prompt, merge_base.as_deref());
-        opening.continuation = opening.continuation.as_deref().map(|continuation| {
-            prompt::diagnosing_bugs(issue, continuation, merge_base.as_deref())
-        });
+        opening.each_prompt(|prompt| prompt::diagnosing_bugs(issue, prompt, merge_base.as_deref()));
     }
     Ok(opening)
 }

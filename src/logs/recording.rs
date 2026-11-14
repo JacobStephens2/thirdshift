@@ -614,6 +614,8 @@ impl<O: Outside> Record<O> {
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
                 harness: None,
+                model: None,
+                effort: None,
                 suspended_seconds: 0,
                 suspensions: Vec::new(),
             });
@@ -629,7 +631,9 @@ impl<O: Outside> Record<O> {
             return;
         };
         if let Some(stage) = tree.active().stages.last_mut() {
-            stage.harness = Some(choice.to_string());
+            stage.harness = Some(choice.harness.name().to_string());
+            stage.model = choice.model.clone();
+            stage.effort = choice.effort.clone();
         }
         self.write_record();
     }
