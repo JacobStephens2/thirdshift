@@ -223,6 +223,14 @@ pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
     pub session_log: Option<PathBuf>,
+    /// The Harness, Model and Effort the stage's latest session ran on: a
+    /// Step Plan usage routed runs on another route than the Command's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub suspended_seconds: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

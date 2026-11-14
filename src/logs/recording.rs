@@ -613,11 +613,27 @@ impl<O: Outside> Record<O> {
                 name: name.into(),
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
+                harness: None,
+                model: None,
+                effort: None,
                 suspended_seconds: 0,
                 suspensions: Vec::new(),
             });
         } else if let Some(stage) = facts.stages.last_mut() {
             stage.session_log = facts.session_log.clone();
+        }
+        self.write_record();
+    }
+
+    /// Name what the current stage's session runs on.
+    pub(super) fn session_choice(&mut self, choice: &Choice) {
+        let Some((_, tree)) = &mut self.command_record else {
+            return;
+        };
+        if let Some(stage) = tree.active().stages.last_mut() {
+            stage.harness = Some(choice.harness.name().to_string());
+            stage.model = choice.model.clone();
+            stage.effort = choice.effort.clone();
         }
         self.write_record();
     }

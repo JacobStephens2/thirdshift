@@ -187,6 +187,7 @@ fn deliver(outside: &mut Scripted, goal: Goal, spec: bool) -> Result<String, Fai
             OpeningSession::Implementation
         },
         prompt: String::new(),
+        continuation: None,
     };
     let outcome = if spec {
         route.process_steps(

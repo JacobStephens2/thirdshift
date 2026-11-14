@@ -347,12 +347,18 @@ pub fn continuation(issue: &IssueUrl, asks: &crate::asks::Asks, is_spec: bool) -
         goal: Some(asks.goal),
         parallel: is_spec.then_some(asks.tickets_at_once),
         base_fix: Some(asks.base_fix.clone()),
-        harness: harness::Asked {
-            harness: Some(asks.harness.harness),
-            model_and_effort: crate::harness::ModelAndEffort {
-                model: asks.harness.model.clone(),
-                effort: asks.harness.effort.clone(),
-            },
+        // A Command routed by `harness.routes` continues routed, not pinned
+        // to the route its first Step happened to take.
+        harness: if asks.harness.chosen_by == harness::ChosenBy::Routes {
+            harness::Asked::default()
+        } else {
+            harness::Asked {
+                harness: Some(asks.harness.harness),
+                model_and_effort: crate::harness::ModelAndEffort {
+                    model: asks.harness.model.clone(),
+                    effort: asks.harness.effort.clone(),
+                },
+            }
         },
         security_fix: Some(if asks.security_fix {
             crate::security::FixAsk::Allow

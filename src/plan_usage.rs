@@ -2,7 +2,10 @@
 //! saved per machine. Running sessions update it passively from structured
 //! wire frames; `thirdshift plan-usage` refreshes it on demand with official
 //! non-billed reads, at most once a minute per Harness, and never on a
-//! background timer.
+//! background timer. A Command routed by the User config's routes reads it
+//! before each session Step ([`router`]), refreshing a stale snapshot of a
+//! Harness whose read reports Plan windows first, and never asks a Fleet
+//! peer.
 
 use std::time::Duration;
 
@@ -12,11 +15,13 @@ use chrono::{TimeDelta, Utc};
 pub(crate) mod observation;
 mod read;
 pub mod route;
+pub mod router;
 mod store;
 mod view;
 
 pub use observation::Observation;
 pub use route::Routing;
+pub use router::Router;
 use store::Store;
 
 use crate::config::UserConfig;
@@ -84,17 +89,26 @@ pub fn subscription_named(name: &str) -> Result<Harness> {
 fn refresh(store: &Store) -> Result<()> {
     let saved = store.read()?;
     let now = Utc::now();
-    let fresh = TimeDelta::from_std(FRESH).expect("a minute fits");
     let stale: Vec<Harness> = read::READABLE
         .into_iter()
         .filter(|harness| harness.installed())
-        .filter(|harness| {
-            saved
-                .get(harness.name())
-                .and_then(|state| state.read_at)
-                .is_none_or(|read| now - read >= fresh || read > now)
-        })
+        .filter(|harness| !read_lately(saved.get(harness.name()), now))
         .collect();
+    read_into(store, &stale)
+}
+
+/// Whether `state`'s non-billed read ran within the last minute, so it is
+/// not run again yet.
+fn read_lately(state: Option<&store::State>, now: chrono::DateTime<Utc>) -> bool {
+    let fresh = TimeDelta::from_std(FRESH).expect("a minute fits");
+    state
+        .and_then(|state| state.read_at)
+        .is_some_and(|read| read <= now && now - read < fresh)
+}
+
+/// Run each of `stale`'s non-billed reads side by side, and take their
+/// answers into the snapshot.
+fn read_into(store: &Store, stale: &[Harness]) -> Result<()> {
     let read: Vec<(Harness, read::Reading)> = std::thread::scope(|scope| {
         let reads: Vec<_> = stale
             .iter()
@@ -116,6 +130,27 @@ fn refresh(store: &Store) -> Result<()> {
             reading.apply(harnesses.entry(harness.name().into()).or_default(), now);
         }
     })
+}
+
+/// Before routing a session Step, run the non-billed read of each of
+/// `harnesses` that reports Plan windows ([`read::WINDOWED`]) and is
+/// installed, when its saved snapshot is stale for routing, side by side.
+/// Only this machine is read.
+fn refresh_for_routing(store: &Store, harnesses: &[Harness]) -> Result<()> {
+    let saved = store.read()?;
+    let now = Utc::now();
+    let mut stale: Vec<Harness> = Vec::new();
+    for harness in harnesses {
+        if read::WINDOWED.contains(harness)
+            && !stale.contains(harness)
+            && harness.installed()
+            && !read_lately(saved.get(harness.name()), now)
+            && router::stale(saved.get(harness.name()), now)
+        {
+            stale.push(*harness);
+        }
+    }
+    read_into(store, &stale)
 }
 
 /// `thirdshift plan-usage`.

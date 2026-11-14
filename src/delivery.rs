@@ -98,6 +98,18 @@ pub struct Delivery<'a> {
 pub struct Opening {
     pub session: OpeningSession,
     pub prompt: String,
+    /// The Continuation prompt an implement session on a fresh Issue
+    /// branch starts again with when Plan usage moves it to another route
+    /// after it made commits; none for any other opening.
+    pub continuation: Option<String>,
+}
+
+impl Opening {
+    /// Rewrite the prompt, and the continuation prompt with it, alike.
+    pub fn each_prompt(&mut self, rewrite: impl Fn(&str) -> String) {
+        self.prompt = rewrite(&self.prompt);
+        self.continuation = self.continuation.as_deref().map(&rewrite);
+    }
 }
 
 /// Which session a Delivery opens with.
@@ -330,6 +342,7 @@ impl Delivery<'_> {
             Opening {
                 session: OpeningSession::SpecReview,
                 prompt,
+                continuation: None,
             },
             pull_request,
             Some(checklist),
@@ -814,8 +827,8 @@ impl Route<'_> {
         let session = opening.session;
         outside.stage(session.stage());
         if let crate::implement::Completed::NotReproduced(comment_url) =
-            crate::implement::run(self.issue, opening, |prompt| {
-                outside.session(session.kind(), prompt)
+            crate::implement::run(self.issue, opening, |prompt, continuation| {
+                outside.implementation(session.kind(), prompt, continuation)
             })?
         {
             outside.confirm_needs_info()?;
@@ -1050,6 +1063,16 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
+    /// Run the implement session given `prompt`, starting again on
+    /// `continuation` if Plan usage moves it after it made commits.
+    fn implementation(
+        &mut self,
+        kind: Kind,
+        prompt: &str,
+        _continuation: Option<&str>,
+    ) -> Result<Option<String>> {
+        self.session(kind, prompt)
+    }
     fn confirm_needs_info(&mut self) -> Result<()>;
     /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
@@ -1210,6 +1233,27 @@ impl Outside for InWorktree<'_> {
 
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>> {
         let final_message = self.sessions.run(kind, prompt)?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(final_message)
+    }
+
+    fn implementation(
+        &mut self,
+        kind: Kind,
+        prompt: &str,
+        continuation: Option<&str>,
+    ) -> Result<Option<String>> {
+        let base = self.base;
+        let pull_request = &mut *self.pull_request;
+        let mut continue_with = |committed: bool| match continuation {
+            Some(continuation) => {
+                crate::implement::continue_with(continuation, committed, base, pull_request)
+            }
+            None => Ok(None),
+        };
+        let final_message =
+            self.sessions
+                .run_implementation(kind, prompt, Some(&mut continue_with))?;
         self.pull_request.ensure_actionable(false)?;
         Ok(final_message)
     }

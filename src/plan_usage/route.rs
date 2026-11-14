@@ -45,6 +45,18 @@ impl Route {
         }
     }
 
+    /// What a session on this route runs on: its Harness, with its own
+    /// Model and Effort, else those `[harness.<name>]` in `settings` sets.
+    pub fn choice(&self, settings: &Settings, chosen_by: ChosenBy) -> Choice {
+        let set = settings.of(self.harness);
+        Choice {
+            harness: self.harness,
+            model: self.model.clone().or_else(|| set.model.clone()),
+            effort: self.effort.clone().or_else(|| set.effort.clone()),
+            chosen_by,
+        }
+    }
+
     /// Whether a session on `choice` runs as this route does, given the
     /// `[harness.<name>]` Model and Effort it inherits from `settings`.
     fn runs_as(&self, choice: &Choice, settings: &Settings) -> bool {
@@ -77,6 +89,16 @@ impl Default for Routing {
 }
 
 impl Routing {
+    /// What a Command that asks for no Harness, Model or Effort runs on
+    /// when `harness.routes` is set: its first route, which Plan usage may
+    /// move each session Step away from. None with no routes, when
+    /// `harness.default` decides alone.
+    pub fn first(&self, settings: &Settings) -> Option<Choice> {
+        self.routes
+            .first()
+            .map(|route| route.choice(settings, ChosenBy::Routes))
+    }
+
     /// The ceiling `route` switches away at, as a percentage.
     pub fn ceiling(&self, route: &Route) -> u8 {
         route.max_utilization.unwrap_or(self.max_utilization)
@@ -89,7 +111,7 @@ impl Routing {
     pub fn allows_credits(&self, choice: &Choice, settings: &Settings) -> bool {
         matches!(
             choice.chosen_by,
-            ChosenBy::UserConfig | ChosenBy::SecurityConfig
+            ChosenBy::UserConfig | ChosenBy::Routes | ChosenBy::SecurityConfig
         ) && self
             .routes
             .iter()
