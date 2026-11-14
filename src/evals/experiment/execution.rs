@@ -482,7 +482,8 @@ impl<'a> Execution<'a> {
         .map_err(|_| anyhow::anyhow!("PATH is not valid Unicode"))?;
         let mut launched = if let Some(runner) = &arm.runner {
             let attempt = path.parent().context("Trial request has no directory")?;
-            let argv = custom::command(runner, attempt)?;
+            let environment = self.runner_environment(attempt, &path_env, toolchains)?;
+            let argv = custom::confined(custom::command(runner, attempt)?, &environment)?;
             let args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
             let mut launched = crate::scope::trial_command(
                 Path::new(&argv[0]),
@@ -491,6 +492,8 @@ impl<'a> Execution<'a> {
                 request.attempt,
                 caps,
             )?;
+            // These belong to systemd-run and `--oom-exec`. The runner sees
+            // only the allowlist inside `env -i`.
             launched
                 .command()
                 .current_dir(attempt.join("repository"))
@@ -535,6 +538,53 @@ impl<'a> Execution<'a> {
             launched.command().env("CARGO_HOME", toolchains);
         }
         Ok(launched)
+    }
+
+    /// The runner's whole environment. Native Trials drop the operator
+    /// environment with `bwrap --clearenv`; this is the same boundary for the
+    /// Custom runner seam until #2189 supplies the Trial sandbox.
+    fn runner_environment(
+        &self,
+        attempt: &Path,
+        path_env: &str,
+        toolchains: Option<&Path>,
+    ) -> Result<Vec<(String, String)>> {
+        let home = attempt.join("home");
+        let text = |path: &Path, what: &str| {
+            path.to_str()
+                .with_context(|| format!("{what} must be UTF-8"))
+                .map(str::to_string)
+        };
+        let mut environment = vec![
+            ("PATH".into(), path_env.to_string()),
+            ("HOME".into(), text(&home, "runner HOME")?),
+            ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+        ];
+        for (name, relative) in crate::harness::PRIVATE_HOME_XDG {
+            environment.push((
+                name.to_string(),
+                text(&home.join(relative), "runner XDG directory")?,
+            ));
+        }
+        environment.push((
+            limits::SIGNAL_ENV.to_string(),
+            text(self.signal, "limit signal path")?,
+        ));
+        if let Some(toolchains) = toolchains {
+            environment.push((
+                "CARGO_HOME".into(),
+                text(toolchains, "toolchain directory")?,
+            ));
+        }
+        for name in ["LANG", "LC_ALL", "LC_CTYPE"] {
+            if let Ok(value) = std::env::var(name)
+                && custom::locale_token(&value)
+            {
+                environment.push((name.to_string(), value));
+            }
+        }
+        Ok(environment)
     }
 }
 

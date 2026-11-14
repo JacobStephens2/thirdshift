@@ -72,6 +72,49 @@ pub(super) fn command(runner: &arms::Runner, attempt: &Path) -> Result<Vec<Strin
     Ok(command)
 }
 
+/// Argv for the scope's program. `env -i` applies to the runner, after
+/// `--oom-exec`, so the scope launcher can still reach the user bus. The
+/// shell only `exec`s the runner; assignments stay in the allowlist, including
+/// a program path that itself contains `=`.
+pub(super) fn confined(argv: Vec<String>, environment: &[(String, String)]) -> Result<Vec<String>> {
+    ensure!(!argv.is_empty(), "Custom runner command is empty");
+    let mut command = Vec::with_capacity(environment.len() + argv.len() + 6);
+    command.push("/usr/bin/env".into());
+    command.push("-i".into());
+    command.push("--".into());
+    for (name, value) in environment {
+        ensure!(
+            portable_name(name),
+            "Custom runner environment name is not portable"
+        );
+        ensure!(
+            !value.chars().any(|c| matches!(c, '\0' | '\n' | '\r')),
+            "Custom runner environment value must be a single line"
+        );
+        command.push(format!("{name}={value}"));
+    }
+    command.push("/bin/sh".into());
+    command.push("-c".into());
+    command.push(r#"exec "$0" "$@""#.into());
+    command.extend(argv);
+    Ok(command)
+}
+
+fn portable_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Operator locale tokens safe to pass through. Anything else can name a
+/// file or carry a value that is not a locale.
+pub(super) fn locale_token(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '+' | '-'))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResultDocument {

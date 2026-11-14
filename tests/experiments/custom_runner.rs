@@ -1,5 +1,56 @@
 use super::*;
 #[test]
+fn custom_runner_does_not_inherit_the_operator_environment() {
+    let fixture = process::fixture();
+    runner(
+        &fixture,
+        &(String::from(
+            r#"leaked = os.environ.get("THIRDSHIFT_OPERATOR_TOKEN")
+assert leaked is None, leaked
+assert os.environ["HOME"]
+assert os.environ["PATH"]
+"#,
+        ) + DELIVER),
+    );
+    let result = fixture.scenario.run_with_env(
+        &[
+            "experiment",
+            "--baseline-runner",
+            "fixture",
+            "--candidate-runner",
+            "fixture",
+            "--suite",
+            "process",
+            "--json",
+            "--yes",
+            "--draws",
+            "100",
+            "--min-discriminating-tasks",
+            "1",
+        ],
+        &[
+            NO_SANDBOX[0],
+            ("THIRDSHIFT_OPERATOR_TOKEN", "dummy-operator-token"),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        !result.stdout.contains("dummy-operator-token"),
+        "{}",
+        result.stdout
+    );
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+        assert!(
+            !result.to_string().contains("dummy-operator-token"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
 fn custom_runner_reports_ignored_uncommitted_scratch_in_trial_diagnostics() {
     let fixture = process::fixture();
     runner(

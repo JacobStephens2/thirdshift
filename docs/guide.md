@@ -1304,7 +1304,10 @@ The manifest's argv command, mapped files and skill trees are frozen by SHA-256,
 including dirty local edits with Git provenance. The runner works unattended,
 commits HEAD and writes result.json; stopping to ask fails its Score. Code
 Graders ignore uncommitted scratch, and committing a manifest `git_exclude`
-path fails the Trial. See the [Custom runner contract](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation).
+path fails the Trial. The runner's process environment is an allowlist: a fresh
+HOME, PATH, the private XDG directories, and git settings that ignore system
+and operator git config. It does not include the operator's other environment
+variables. See the [Custom runner contract](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation).
 Provider sandbox adapters and session recording follow in #2189 and #2191.
 
 From a local thirdshift clone, `thirdshift experiment <candidate>` compares a

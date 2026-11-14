@@ -488,6 +488,13 @@ end in `/` and hash their ordered subtree, preserving empty folders. Each Trial
 verifies both frozen Arms and copies verified bytes into its private runner directory
 and HOME. A frozen-input mismatch stops the Experiment before launch.
 
+Each Trial starts the runner with an empty environment. thirdshift sets `PATH`,
+`HOME` to that Trial's fresh home, the home's XDG base directories,
+`THIRDSHIFT_EVAL_LIMIT_SIGNAL`, `CARGO_HOME` when a toolchain was prepared,
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, and `LANG`, `LC_ALL` or
+`LC_CTYPE` when the operator set one and it is a single locale token. The
+runner does not receive the rest of the operator's environment.
+
 Custom runners receive version-1 request.json with `repository`, `issue_file`,
 `issue_url`, `base`, `branch`, `runner_dir`, `output_dir` and `record_command`.
 The recorder field is null until #2191 adds the live recorder. The runner
