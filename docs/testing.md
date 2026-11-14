@@ -167,7 +167,7 @@ subtrees and cleans up its recorded children even on a failed assertion.
 
 ## Release fixture child lifetime
 
-Linux release-script and script-function tests use `FixtureChild` from the same
+Linux Release command and release-notes helper tests use `FixtureChild` from the same
 child-lifetime helper. Each command has a 120-second wait bound, with stdout and
 stderr included in a timeout panic. File-backed input and output keep inherited
 descriptors and large input from blocking that wait.
@@ -180,16 +180,17 @@ requests the same cleanup before the guardian exits. The immediate command also
 uses the setup helper's Linux parent-death signal. Cleanup names only unreaped
 children of that guardian; git maintenance remains disabled in these fixtures.
 
-`cargo test --test release lifetime::` runs the full release script with a focused
-fake `gh`. Missing and pending runs at both CI and release-workflow waits trigger
+`cargo test --test release lifetime::` runs the compiled `thirdshift release`
+with an isolated bare origin and fake `gh` and Harness executables. Missing and
+pending runs at both CI and release-workflow waits trigger
 a 500ms fixture deadline; an outer supervisor allows five seconds for the fixture
 to fail with captured diagnostics. Separate cases cover successful completion,
 assertion unwinding and SIGKILL of the fixture harness. The supervisor adopts and
-reaps recorded script, guardian and descendant PIDs. A hung summary Harness is
+reaps recorded Command, guardian and descendant PIDs. A hung sandboxed summary Harness is
 also covered on timeout and SIGKILL. Fixture setup and its
 supervisor handshake use the shared 120-second readiness bound.
 
-Release-script tests run on Linux. These deadlines belong to tests;
+Release tests run on Linux. These deadlines belong to tests;
 production release polling still has no overall timeout and resumes on rerun.
 
 ## Scenario Run lifetime

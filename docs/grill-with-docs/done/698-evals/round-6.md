@@ -6,7 +6,7 @@ Part of the [#698 grilling](README.md).
 
 **Q6.1 - Where an Experiment stops a change: at the merge or at the release.** Q1.1 wants to know whether a change makes the agents worse before it reaches production, and production is the release, not `main` (Q5.3's note). You answered Q5.3 with (a): a Run whose change touches an Eval suite leaves its pull request for review, unless the User config lets it Self-merge. The options:
 - (a) **At the release.** Runs Self-merge as now. A release whose changes since the last one touch an Eval suite (Q3.3) waits for an Experiment on the commit being released, with the last release as the Baseline arm, both built as Q4.3 builds Arms.
-  - A pass releases. A fail or an inconclusive verdict waits for you, as `scripts/release.sh --review` does now.
+  - A pass releases. A fail or an inconclusive verdict waits for you, as `the former release shell script --review` does now.
   - One Experiment covers every change in the release, so a fail doesn't say which change caused it. You'd revert, or run an Experiment on each change.
 - (b) **At the merge,** as you answered Q5.3, with a User config key for whether such Runs may Self-merge. Each pull request gets an Experiment of its own, and a release needs none.
 - (c) **Both:** (a) always, and (b)'s key for anyone who wants each change judged alone.
@@ -15,7 +15,7 @@ Part of the [#698 grilling](README.md).
 
 *Answer:* agree
 
-*Checked (2026-10-21):* not in CI. The Experiment runs on the `thirdshift` host, like every Experiment (Settled, "Running"), and `scripts/release.sh` waits for its verdict, as it waits for CI now. Q7.1 settles how the script gets the verdict. GitHub's CI can't run an Experiment:
+*Checked (2026-10-21):* not in CI. The Experiment runs on the `thirdshift` host, like every Experiment (Settled, "Running"), and the former release shell script waits for its verdict, as it waits for CI now. Q7.1 settles how the script gets the verdict. GitHub's CI can't run an Experiment:
 - the Eval tasks are private files on that host (Q2.5);
 - Trials run on your subscriptions, through the Harness logins on that host, and putting those logins and the sessions on GitHub's runners would break Q2.2's rule that eval data stays on machines you run;
 - an Experiment is dozens of sessions, two at a time, that pause at a plan-limit warning and resume later (Q3.7).

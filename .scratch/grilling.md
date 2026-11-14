@@ -832,7 +832,7 @@ That matches
 ## 7
 /to-tickets
 
-# 2026-09-30, release to gh on release.sh, spec 211
+# 2026-09-30, release to gh on the retired release shell script, spec 211
 /grill-with-docs I ran the following release process, but github did not get a release of v0.5.0: [Pasted text #2 +21 lines]
 
 ## 2

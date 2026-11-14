@@ -148,6 +148,38 @@ impl GitHub {
         self.gh_stdout(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
+    pub(crate) fn release_failure(&self, id: u64) -> Result<String> {
+        let detail = self.gh_json(&[
+            "run",
+            "view",
+            &id.to_string(),
+            "--repo",
+            crate::release::REPOSITORY,
+            "--json",
+            "url,jobs",
+        ])?;
+        let url = detail["url"]
+            .as_str()
+            .context("release workflow has no URL")?;
+        let jobs = detail["jobs"]
+            .as_array()
+            .context("release workflow has no jobs")?;
+        let failed = jobs
+            .iter()
+            .filter(|job| {
+                !matches!(
+                    job["conclusion"].as_str(),
+                    Some("success" | "skipped" | "neutral")
+                )
+            })
+            .filter_map(|job| job["name"].as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "{failed} at {url}; recover with gh run rerun --failed {id}"
+        ))
+    }
+
     pub(crate) fn open_release(&self, version: &str, branch: &str, body: &str) -> Result<String> {
         use std::io::Write;
         let mut file = tempfile::NamedTempFile::new()?;

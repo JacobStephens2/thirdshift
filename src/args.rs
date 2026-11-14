@@ -181,8 +181,6 @@ pub enum Command {
         follow: bool,
         json: bool,
     },
-    /// Internal interface for scripts/release.sh: prompt on stdin.
-    ReleaseSummary,
     Release(ReleaseArgs),
     Skill {
         name: String,
@@ -971,12 +969,6 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 machine,
                 local,
             });
-        }
-        Some("--release-summary") => {
-            return match &args[1..] {
-                [] => Ok(Command::ReleaseSummary),
-                [extra, ..] => bail!("unexpected argument after --release-summary: {extra}"),
-            };
         }
         Some("skill") => {
             return match &args[1..] {

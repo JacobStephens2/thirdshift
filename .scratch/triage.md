@@ -51,8 +51,8 @@ thirdshift: logging the session to /home/jacob/.thirdshift/logs/JacobStephens2-t
 thirdshift: repair-1: session started
 thirdshift: repair-1: $ git status && git log --oneline -3 MERGE_HEAD && git log --oneline HEAD..MERGE_HEAD && git diff --na…
 thirdshift: repair-1: $ git diff; gh issue view 158 | head -60; gh issue view 159 | head -50
-thirdshift: repair-1: $ cat scripts/release.sh; echo ======THEIRS; git show MERGE_HEAD:scripts/release.sh
-thirdshift: repair-1: $ git show HEAD:scripts/release.sh | sed -n '/^# pr_body/,/^# wait_for/p'; git show HEAD:tests/fakes/g…
+thirdshift: repair-1: [historical comparison of the retired release shell script omitted]
+thirdshift: repair-1: [historical release helper and fake comparison omitted]
 thirdshift: repair-1: $ python3 - <<'EOF'
 thirdshift: repair-1: $ python3 - <<'EOF'
 thirdshift: repair-1: $ grep -n "run:" .github/workflows/ci.yml

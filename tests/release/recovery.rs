@@ -13,7 +13,7 @@ fn a_failed_unpublished_release_is_recut_from_the_newest_green_main_commit() {
     release.release_workflow(json!({"pending_polls": 2}));
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
@@ -27,18 +27,18 @@ fn a_failed_unpublished_release_is_recut_from_the_newest_green_main_commit() {
     let calls = release.gh_calls();
     let edit = calls
         .iter()
-        .position(|call| call.starts_with(&["pr".into(), "edit".into()]))
+        .position(|call| {
+            call.starts_with(&["api".into(), "--method".into(), "PATCH".into()])
+                && call.iter().any(|arg| arg.starts_with("body="))
+        })
         .unwrap();
     let checks = calls
         .iter()
-        .rposition(|call| {
-            call.iter()
-                .any(|arg| arg.contains("actions/runs?head_sha="))
-        })
+        .rposition(|call| call.iter().any(|arg| arg.contains("/check-runs")))
         .unwrap();
     assert!(edit < checks);
     assert_eq!(release.release_run()["pending_polls"], 0);
-    assert!(stderr(&output).contains(&release_url()));
+    assert!(stderr(&output).contains("Release 0.2.0 published"));
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn a_release_view_outage_does_not_move_a_published_tag() {
     let mut failed = failed_release();
     failed["published"] = json!(true);
     release.release_workflow(failed);
-    let first = release.run_script("0.2.0");
+    let first = release.run("0.2.0");
     assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
     let head = release.pr_head("release-0.2.0");
     let branch = release.origin(&["rev-parse", "refs/heads/release-0.2.0"]);
@@ -58,7 +58,7 @@ fn a_release_view_outage_does_not_move_a_published_tag() {
     // A transport failure is not "release not found". The tag is published.
     release.gh(&["fake", "fails", "release view"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert_eq!(
         release.origin_tag("v0.2.0"),
@@ -75,7 +75,7 @@ fn a_release_view_outage_does_not_move_a_published_tag() {
     assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(
-        err.contains("could not tell whether v0.2.0 is already published"),
+        err.contains("cannot verify GitHub Release publication for v0.2.0"),
         "{err}"
     );
     assert!(!err.contains("moved unpublished"), "{err}");
@@ -88,13 +88,13 @@ fn a_published_release_is_never_recut_even_after_a_workflow_failure() {
     let mut failed = failed_release();
     failed["published"] = json!(true);
     release.release_workflow(failed);
-    let first = release.run_script("0.2.0");
+    let first = release.run("0.2.0");
     assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
     let head = release.pr_head("release-0.2.0");
     release.merge_pr("newer", "New content after publication", "");
     release.main_ci("completed", "success");
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
@@ -115,7 +115,7 @@ fn an_immediately_failed_recovery_attempt_leaves_the_bump_pr_open() {
     let head = release.pr_head("release-0.2.0");
     let main = release.origin(&["rev-parse", "main"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert_release_failed(&release, &output, &head);
     assert_eq!(release.release_run()["attempt"], 2);
@@ -130,15 +130,16 @@ fn recovery_resumes_after_the_recut_bump_checks_failed() {
     release.merge_pr("newer", "New recovery content", "");
     release.main_ci("completed", "success");
     release.ci_reports(RED);
-    let stopped = release.run_script("0.2.0");
+    let stopped = release.run("0.2.0");
     assert_eq!(stopped.status.code(), Some(1), "{}", stderr(&stopped));
     let head = release.pr_head("release-0.2.0");
     assert_ne!(head, old);
     assert_eq!(release.origin_tag("v0.2.0"), Some(old));
     release.gh(&["fake", "checks", &head, GREEN]);
+    release.gh(&["pr", "ready", "release-0.2.0"]);
     release.release_workflow(json!({}));
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
@@ -154,12 +155,12 @@ fn a_pending_release_attempt_finishes_before_the_open_bump_pr_is_merged() {
         "run",
         &json!({
             "databaseId": release.release_run()["databaseId"],
-            "conclusion": "success", "pending_polls": 2,
+            "conclusion": "success", "pending_polls": 20,
         })
         .to_string(),
     ]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
@@ -167,8 +168,9 @@ fn a_pending_release_attempt_finishes_before_the_open_bump_pr_is_merged() {
     assert_eq!(release.release_run()["pending_polls"], 0);
     let err = unstamped(&output);
     assert!(
-        err.find("waiting for the release workflow at").unwrap()
-            < err.find("release: merged").unwrap()
+        err.find("waiting for release workflow publication")
+            .unwrap()
+            < err.find("Release 0.2.0 published").unwrap()
     );
 }
 
@@ -183,7 +185,7 @@ fn an_old_merged_bump_can_be_recut_with_a_new_bump_pr() {
     release.release_workflow(json!({}));
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.prs_from("release-0.2.0").len(), 2);
@@ -196,10 +198,7 @@ fn an_old_merged_bump_can_be_recut_with_a_new_bump_pr() {
     assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
     let calls = release.agent_calls();
     let prompt = calls[1]["prompt"].as_str().unwrap();
-    assert!(
-        prompt.contains("Pull requests merged since v0.1.0"),
-        "{prompt}"
-    );
+    assert!(!prompt.contains("Old news."), "{prompt}");
     assert!(prompt.contains("Add the frobnicator"), "{prompt}");
     assert!(prompt.contains("Tidy the site"), "{prompt}");
     assert!(

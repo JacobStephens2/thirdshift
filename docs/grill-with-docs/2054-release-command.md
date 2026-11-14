@@ -14,10 +14,10 @@ Research: see "Research results" below
 
 *Answer:* agreed
 
-**Q2 - Scope and fate of `scripts/release.sh`.** Should `thirdshift release` be native Rust scoped to `JacobStephens2/thirdshift` and replace `scripts/release.sh`?
-- (a) **Native Rust in `thirdshift`, scoped to `JacobStephens2/thirdshift`, retiring `scripts/release.sh`**: port the release state machine into Rust, verify the **Launch directory**'s `origin` is `JacobStephens2/thirdshift`, move `scripts/release-summary.md` into `src/prompt.rs`, and delete `scripts/release.sh`, `scripts/release-experiment.py` and `--release-summary`.
-- (b) Native Rust replacing `scripts/release.sh`, generalized to any Cargo + `cargo-dist` GitHub repository.
-- (c) Keep `scripts/release.sh` and have `thirdshift release` shell out to it.
+**Q2 - Scope and fate of the former release shell script.** Should `thirdshift release` be native Rust scoped to `JacobStephens2/thirdshift` and replace the former release shell script?
+- (a) **Native Rust in `thirdshift`, scoped to `JacobStephens2/thirdshift`, retiring the former release shell script**: port the release state machine into Rust, verify the **Launch directory**'s `origin` is `JacobStephens2/thirdshift`, move the former shell summary prompt into `src/prompt.rs`, and delete the former release shell script, the former release Experiment helper and the former summary shim.
+- (b) Native Rust replacing the former release shell script, generalized to any Cargo + `cargo-dist` GitHub repository.
+- (c) Keep the former release shell script and have `thirdshift release` shell out to it.
 
 *Recommended:* (a).
 
@@ -105,7 +105,7 @@ Research: see "Research results" below
 
 **Q12 - Installed binary execution (#336) and sandboxed/traced summary session (#653).**
 - (a) **Run everything from the executing `thirdshift` binary against fetched `origin/main` (closing #336), and run the summary/bump session as a recorded `Session` inside the fresh-home `bwrap` sandbox (closing #653)**.
-- (b) Run from the executing binary (#336), keeping unsandboxed `harness::summary::write` (#653 separate).
+- (b) Run from the executing binary (#336), keeping the former unsandboxed Harness summary driver (#653 separate).
 
 *Recommended:* (a).
 
@@ -151,7 +151,7 @@ Research: see "Research results" below
 
 ## Settled by earlier answers (shout if any is wrong)
 
-- **Release run** (`thirdshift release`) is a native Rust **Command** scoped to `JacobStephens2/thirdshift`, replacing `scripts/release.sh`, `scripts/release-experiment.py` and `--release-summary` while keeping `scripts/release-notes.sh` for `.github/workflows/release-notes.yml`. Added to `GLOSSARY.md` and `ADR 0026`. (Q1, Q2, Q16)
+- **Release run** (`thirdshift release`) is a native Rust **Command** scoped to `JacobStephens2/thirdshift`, replacing the former release shell script, the former release Experiment helper and the former summary shim while keeping `scripts/release-notes.sh` for `.github/workflows/release-notes.yml`. Added to `GLOSSARY.md` and `ADR 0026`. (Q1, Q2, Q16)
 - CLI shape: `thirdshift release [<version> | --major | --minor | --patch] [--with-experiment] [--review] [--harness <name>] [--model <name>] [--effort <level>] [--email [<addr>] | --email-unless-merged [<addr>] | --no-email]`, with `<version>` and the bump flags mutually exclusive. (Q4, Q5, Q8)
 - Any versionless invocation (`thirdshift release`, `--patch`, `--minor`, `--major`) is a **Pass**; `thirdshift release <version>` is a direct **Command** that cuts or resumes `<version>` even without shipped changes. (Q1, Q3, Q8)
 - In Pass mode, a candidate `main` commit needs at least one diff since the last `v*` tag in shipped-artifact or release-pipeline paths (`src/`, `skills/`, `processes/`, `Cargo.toml`, `Cargo.lock`, `dist-workspace.toml`, `rust-toolchain.toml`, `README.md`, `LICENSE`, `.github/workflows/release*`, `.github/workflows/publish-crates.yml`, `scripts/release*`). Docs-only, `site/`-only, `.agents/`-only and test-only days skip quietly. (Q3)
@@ -173,8 +173,8 @@ Research: see "Research results" below
 - Live GitHub settings (`gh api repos/JacobStephens2/thirdshift`): public repo, `rulesets: []`, `main` unprotected (404), tag protection absent (404), `environments: []`. Collaborators with `push`: `JacobStephens2` (`admin`) and `vsto-eta` (`write`). Authenticated host user: `JacobStephens2`.
 - Outsiders and non-collaborator `CONTRIBUTOR`s cannot push branches/tags, merge PRs, trigger `JacobStephens2/thirdshift` tag workflows from forks, pass crates.io OIDC trusted publishing (`.github/workflows/publish-crates.yml`), or pass `src/trust.rs` (`OWNER`, `MEMBER`, `COLLABORATOR` only).
 - `processes/` is compiled into the binary (`src/processes/catalog.rs`, `include_dir!("$CARGO_MANIFEST_DIR/processes")`), alongside `skills/` (`src/skills.rs`), though `RELEASE_PATHS` in `scripts/generate-release.py` previously omitted `processes/**`.
-- Because `release.sh` tags `vX.Y.Z` on `release-X.Y.Z` before merging `release-X.Y.Z` into `main`, `origin/main` always has at least that merge commit ahead of `vX.Y.Z` even when nothing landed after the release (`git log --graph origin/main`).
-- `v0.29.2`'s GitHub Release duplicated `## What's Changed` because `scripts/release.sh` wrote `generate-notes` inside `<!-- release-summary:start -->` on agent failure and `scripts/release-notes.sh` appended `generate-notes` again.
+- Because the retired release shell script tags `vX.Y.Z` on `release-X.Y.Z` before merging `release-X.Y.Z` into `main`, `origin/main` always has at least that merge commit ahead of `vX.Y.Z` even when nothing landed after the release (`git log --graph origin/main`).
+- `v0.29.2`'s GitHub Release duplicated `## What's Changed` because the former release shell script wrote `generate-notes` inside `<!-- release-summary:start -->` on agent failure and `scripts/release-notes.sh` appended `generate-notes` again.
 - Every factory Harness session carries `THIRDSHIFT_SESSION` (`src/process/session.rs:13`).
 - Open issues directly subsumed by this design: [#336](https://github.com/JacobStephens2/thirdshift/issues/336) (release without `git pull` / local working-tree `cargo run`) and [#653](https://github.com/JacobStephens2/thirdshift/issues/653) (sandbox release summary with `bwrap`).
 

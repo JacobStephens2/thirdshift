@@ -18,7 +18,7 @@ def git(*args, data=None, env=None):
 
 
 def bump(data, version, package=None):
-    """Match release.sh's version-only rewrite, leaving every other line alone."""
+    """Match the Release run's version-only rewrite, leaving every other line alone."""
     lines = []
     ours = False
     done = False

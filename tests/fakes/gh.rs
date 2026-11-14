@@ -91,7 +91,7 @@
 //! gh's `{owner}/{repo}` placeholder, here and in the commit endpoints.
 //! `gh api repos/<repo>/actions/runs?head_sha=<sha>` answers with the workflow
 //! runs on <sha>: `.workflow_runs[]` reads REST-shaped metadata from `runs`
-//! (with `headSha` and `databaseId` as for `gh fake run`); the release script's
+//! (with `headSha` and `databaseId` as for `gh fake run`); the Release run's
 //! line query reads its check runs as the check-runs endpoint reads them.
 //! `gh api repos/<repo>/commits/<sha>/pulls` answers with the PRs <sha>
 //! belongs to, as GitHub does: those merged as <sha> and those whose head is
@@ -565,8 +565,6 @@ const LATEST_RUN_LINE: &str = r#".[] | "\(.headSha) \(.status) \(.conclusion)""#
 const RELEASE_RUN_LINE: &str =
     r#".[] | "\(.databaseId) \(.url) \(.status) \(.conclusion) \(.attempt)""#;
 
-const FAILED_JOB_NAMES: &str = r#"[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | .name] | join(", ")"#;
-
 /// Newest first. `--search head:<prefix>` matches head branches starting with
 /// <prefix>, as GitHub's search does; `--head <branch>` matches that branch
 /// exactly. `--jq` supports the newest-PR line with or without its ownership.
@@ -626,7 +624,7 @@ fn pr_ready(state: &mut Json, positional: &[String], flags: &Flags) {
     save(state);
 }
 
-/// The release script updates an open bump PR with a regenerated body.
+/// The Release run updates an open bump PR with a regenerated body.
 fn pr_edit(state: &mut Json, positional: &[String], flags: &Flags) {
     let at = selected_pr(state, &positional[0]);
     let pr = &mut state.at_mut("prs").items_mut()[at];
@@ -1271,7 +1269,7 @@ fn repo_prefix(path: &str) -> Option<(&str, &str)> {
 }
 
 /// The signed-in user, the two commit endpoints thirdshift reads CI from, the
-/// workflow runs on a commit that the release script waits for, or the PRs a
+/// workflow runs on a commit that the Release run waits for, or the PRs a
 /// commit belongs to that the Release notes script looks through. Each
 /// answers one page, each item of the list `--jq '.<list>[]'` names on its
 /// own line, for the workflow runs one `<status> <conclusion> <name>` line
@@ -2157,7 +2155,7 @@ fn pr_patch(state: &mut Json, args: &[&str]) {
     save(state);
 }
 
-/// Only the flags the release script reads workflow runs with are
+/// Only the flags the Release run reads workflow runs with are
 /// supported, and only its two `--jq`s: the latest CI run on a branch and the
 /// release workflow run on a commit.
 fn run_list(state: &mut Json, flags: &Flags) {
@@ -2248,10 +2246,9 @@ fn run_list(state: &mut Json, flags: &Flags) {
     }
 }
 
-/// `gh run view <id> --json jobs`, with only the release script's `--jq`: the
-/// names of the jobs of its current attempt that did not succeed.
+/// Release workflow diagnostics from its current attempt.
 fn run_view(state: &Json, positional: &[String], flags: &Flags) {
-    if flag(flags, "json") != Some("jobs") || flag(flags, "jq") != Some(FAILED_JOB_NAMES) {
+    if flag(flags, "json") != Some("url,jobs") || flags.contains_key("jq") {
         die(&format!("fake gh: unsupported run view flags {flags:?}"), 2);
     }
     let id = &positional[0];
@@ -2259,13 +2256,7 @@ fn run_view(state: &Json, positional: &[String], flags: &Flags) {
     let Some(run) = runs.iter().find(|run| run.at("databaseId").python() == *id) else {
         die(&format!("could not find any workflow run with ID {id}"), 1)
     };
-    let jobs = run.get("jobs").map(Json::items).unwrap_or_default();
-    let failed: Vec<String> = jobs
-        .iter()
-        .filter(|job| is_failure(job.at("conclusion").str()))
-        .map(|job| job.at("name").python())
-        .collect();
-    println!("{}", failed.join(", "));
+    println!("{}", json_fields(run, &wanted_fields(flags)));
 }
 
 /// `gh release view <tag> --json url --jq .url`: the Release's URL, for a tag

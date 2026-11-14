@@ -474,7 +474,6 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::Release(args)) => return release(args),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
         Ok(Command::Review(command)) => return printed(processes::review::run(command)),
@@ -802,28 +801,6 @@ fn score() -> ExitCode {
     started.finish(Ending::Scoring(
         scoring::sample(&config, started_at).map_err(Into::into),
     ))
-}
-
-/// The release script's internal interface: the prompt on stdin, only the
-/// summary on stdout, and failures on stderr for its generated-notes fallback.
-#[cfg(target_os = "linux")]
-fn release_summary() -> ExitCode {
-    use std::io::Read;
-    let summary = (|| -> anyhow::Result<String> {
-        interrupt::install()?;
-        let config = UserConfig::load()?;
-        let mut prompt = String::new();
-        std::io::stdin().read_to_string(&mut prompt)?;
-        resources::wait()?;
-        harness::write_summary(&config.harness, &prompt)
-    })();
-    match summary {
-        Ok(summary) => {
-            println!("{summary}");
-            ExitCode::SUCCESS
-        }
-        Err(error) => failure(&error),
-    }
 }
 
 /// A Console settings view or action, with machine-readable output on stdout.

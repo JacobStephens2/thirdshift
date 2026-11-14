@@ -26,11 +26,9 @@ pub(crate) mod opencode;
 pub(crate) mod process;
 pub(crate) mod settings;
 mod skill_load;
-mod summary;
 pub(crate) mod version;
 
 pub use adapter::{Adapter, Probe};
-pub use summary::write as write_summary;
 
 /// A private Harness home's data directory, relative to that home.
 pub(crate) const PRIVATE_HOME_DATA: &str = ".local/share";

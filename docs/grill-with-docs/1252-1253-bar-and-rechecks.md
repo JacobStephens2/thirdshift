@@ -2,7 +2,7 @@
 
 Issues: https://github.com/JacobStephens2/thirdshift/issues/1252, https://github.com/JacobStephens2/thirdshift/issues/1253
 Parent Spec: https://github.com/JacobStephens2/thirdshift/issues/977
-Research: `src/verdict.rs`, `src/evals/experiment/grading.rs`, `src/evals/experiment/rechecks.rs` and `scripts/release.sh` on `issue-977`; the simulations under "Research results"
+Research: `src/verdict.rs`, `src/evals/experiment/grading.rs`, `src/evals/experiment/rechecks.rs` and the former release shell script on `issue-977`; the simulations under "Research results"
 
 ## Round 1 (answered)
 
@@ -23,7 +23,7 @@ Research: `src/verdict.rs`, `src/evals/experiment/grading.rs`, `src/evals/experi
 
 *Answer:* agree
 
-**Q1.3 - What should a release do on an inconclusive Verdict?** `scripts/release.sh:259` asks "release anyway? [y/N]" on both fail and inconclusive. With a Bar no real release can pass, that prompt gets answered yes every time, and then it stops protecting anything. The options:
+**Q1.3 - What should a release do on an inconclusive Verdict?** the former release shell script (line 259) asks "release anyway? [y/N]" on both fail and inconclusive. With a Bar no real release can pass, that prompt gets answered yes every time, and then it stops protecting anything. The options:
 - (a) Keep the prompt on inconclusive, and set the Bar (later rounds) so that a release which changes nothing usually passes. Then an inconclusive is rare, and a reason to stop.
 - (b) Prompt only on fail. An inconclusive releases with its intervals in the release summary. The gate then only catches a regression the data shows clearly: with 30 tasks, a large one.
 - (c) Keep everything as it is, and accept the override as the normal path for now.
@@ -134,7 +134,7 @@ The options:
 - From #1006: borderline Scores are always rechecked. Only the rule for *decisive* Scores is open here.
 - From Q1.1: this file is the one decision record for #1252 and #1253, and both are closed or rewritten from it. The recheck rule waits for the Bar.
 - From Q1.2: both leave #977's sub-issues, with a comment on each. The Tickets this grill produces are a follow-up linking #977, and #977's Spec run completes without them.
-- From Q1.3: `release.sh` keeps prompting on fail and on inconclusive. The goal for the Bar is that an Experiment of a change that changes nothing usually passes.
+- From Q1.3: the retired release shell script keeps prompting on fail and on inconclusive. The goal for the Bar is that an Experiment of a change that changes nothing usually passes.
 - From Q1.3: #1252's option 4, staying inconclusive and saying why, isn't the end state. Naming the reason for an inconclusive can still be added on top.
 - From Q2.1: one A/A Experiment on the `thirdshift` host measures how often two runs of one setup disagree, once #1251 is merged. If `experiment` refuses identical Arms, allowing it is part of the work. It runs on the User config's Harness, Model and Effort, the setup releases are judged on. Until the new Bar ships, releases use today's Bar and its override.
 - From Q2.2: an agent drafts `criteria` for #1252's 7 strong code-review candidates (#847, #686, #652, #1153 and the other three in its table), and you approve each before it can run. That brings code review to 17 tasks. The 5 partly visible candidates stay out.

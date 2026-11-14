@@ -4,7 +4,7 @@ Part of the [#698 grilling](README.md).
 
 *Q7.1 and Q7.2 follow from Q6.1's release gate. Q7.3 names Round 6's ideas, and Q7.4 revisits Q4.13's Specs, since the Scoring run needs neither Session traces nor Experiments.*
 
-**Q7.1 - How a release waits for its Experiment.** Under Q6.1, a release that touches an Eval suite waits for an Experiment on the commit being released. Releases are cut on the `thirdshift` host, where Experiments run, and `scripts/release.sh` already waits there for CI with no overall timeout. An Experiment takes far longer: dozens of sessions two at a time, paused at any plan-limit warning (Q3.7). The options:
+**Q7.1 - How a release waits for its Experiment.** Under Q6.1, a release that touches an Eval suite waits for an Experiment on the commit being released. Releases are cut on the `thirdshift` host, where Experiments run, and the former release shell script already waits there for CI with no overall timeout. An Experiment takes far longer: dozens of sessions two at a time, paused at any plan-limit warning (Q3.7). The options:
 - (a) **The script starts the Experiment and waits for it.**
   - Before it opens the release pull request, it works out which Eval suites the changes since the last release touch (Q3.3). If any are touched, it starts `thirdshift experiment` on the commit it will release, with the last release as the Baseline arm, and waits for the verdict, printing progress.
   - A pass carries on. A fail or an inconclusive verdict shows the interval, and asks whether to release anyway, as `--review` asks about the summary.

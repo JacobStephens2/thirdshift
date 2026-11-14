@@ -20,13 +20,18 @@ pub(super) fn finish(
     if !cut.published {
         let same_tag = cut.tagged.as_deref() == Some(&cut.head);
         if cut.tagged.is_none() || cut.recut || !same_tag {
+            let merged = match &cut.pr {
+                Some(pr) => github.pr_state(&pr.issue, &pr.url)? == PrState::Merged,
+                None => false,
+            };
             controls::experiment(git, cut, request.with_experiment)?;
             let body = notes.body(git, github, cut, request.review, automatic)?;
             fetch(git)?;
             recovery::ensure_previous(git, github, cut.previous.as_deref())?;
-            if !(cut.recut
-                && cut.tagged.is_some()
-                && Version::parse(&cut.version)? == main_version(git)?)
+            if !(merged
+                || cut.recut
+                    && cut.tagged.is_some()
+                    && Version::parse(&cut.version)? == main_version(git)?)
             {
                 validate_version(git, &Version::parse(&cut.version)?)?;
             }
@@ -118,7 +123,7 @@ pub(super) fn finish(
         !github.review_blocks_merge(&pr.issue, pr.issue.number),
         "review required before merging the release bump pull request; the GitHub Release remains published"
     );
-    github.merge(&pr.issue, pr.issue.number, &cut.head).context("GitHub Release was published, but the bump pull request was not merged; the Day shift must merge it")?;
+    github.merge(&pr.issue, pr.issue.number, &cut.head).with_context(|| format!("GitHub Release was published, but the bump pull request was not merged; the Day shift must merge {}", pr.url))?;
     ensure!(
         github.pr_state(&pr.issue, &pr.url)? == PrState::Merged,
         "GitHub Release was published, but the bump pull request has not merged"

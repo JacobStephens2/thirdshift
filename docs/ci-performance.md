@@ -23,7 +23,7 @@ packaged input requires updating `RELEASE_PATHS` in the generator.
 At implementation time, `gh api repos/JacobStephens2/thirdshift/branches/main/protection`
 returned 404 “Branch not protected”, and `gh api repos/JacobStephens2/thirdshift/rules/branches/main`
 returned `[]`. The factory's `src/github.rs` observes available checks and
-accepts success/neutral/skipped; `scripts/release.sh` waits for existing workflow
+accepts success/neutral/skipped; `thirdshift release` waits for existing workflow
 runs and does not require Release on PRs. Thus there is no current required
 Release check stranded by the path filter. If protection/rulesets later require
 a Release check on every PR, replace the trigger filter with an always-created

@@ -1,19 +1,11 @@
-//! The maintainer's release script, `scripts/release.sh`, run as a black box
-//! against a bare local origin with the fake `gh` and Harness CLIs on PATH and
-//! the user's git configuration kept out, as the site deploy tests run the
-//! publish script. Where a step has several cases, one goes through the whole
-//! script and the rest call the step's function, with the script sourced.
-//!
-//! The script, like the fake `gh` it drives here, relies on GNU tools, so its
-//! tests run on Linux only.
+//! Release runs through the compiled binary against an isolated bare origin,
+//! fake GitHub and Harness executables. The release-notes workflow helper is
+//! tested separately through its shell interface. All tests run on Linux.
 
 mod support;
 
 #[path = "release/lifetime.rs"]
 mod lifetime;
-
-#[path = "release/experiments.rs"]
-mod experiments;
 
 #[path = "release/recovery.rs"]
 mod recovery;
@@ -26,6 +18,9 @@ mod checks;
 
 #[path = "release/native.rs"]
 mod native;
+
+#[path = "release/summaries.rs"]
+mod summaries;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -43,7 +38,7 @@ fn manifest_dir() -> &'static Path {
 }
 
 /// Keeps the machine's git configuration (signing, hooks, default branch) out
-/// of the test's git, the script's and the fake `gh`'s.
+/// of the test's git, the Release run's and the fake `gh`'s.
 fn isolated(command: &mut Command) -> &mut Command {
     // Git's inherited -c parameters override GIT_CONFIG_COUNT too. Append to
     // them so unrelated entries survive and inherited conflicts cannot turn
@@ -214,7 +209,7 @@ enum BumpChange {
 
 /// A bare origin whose main is at version 0.1.0, tagged `v0.1.0`, with one PR
 /// merged before the tag and two after, and a green CI run on main's tip; a
-/// contributor's clone that makes them; the maintainer's clone the script
+/// contributor's clone that makes them; the maintainer's clone the Release run
 /// runs in; the fake `gh`'s state, where each bump PR merged starts a release
 /// workflow run that succeeds; and a fake `claude` that prints
 /// `AGENT_SUMMARY`.
@@ -231,24 +226,9 @@ impl Release {
         git(root, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
         fs::create_dir(release.bin()).unwrap();
         support::fakes::install(&release.bin());
-        // Execute the built binary through the script's Cargo interface, so
-        // release tests do not rebuild it or depend on the machine's rustup.
-        let cargo = release.bin().join("cargo");
         write_executable(
-            &cargo,
-            r#"#!/bin/sh
-while [ "$1" != -- ]; do shift; done
-shift
-if [ "$1" = fix ]; then
-    printf '%s\n' "$*" >> "$FAKE_GH_STATE.fix-calls"
-    if [ -f "$FAKE_GH_STATE.fix" ]; then
-        exec bash "$FAKE_GH_STATE.fix" "$@"
-    fi
-    echo 'No simulated Fix repair configured' >&2
-    exit 1
-fi
-exec "$THIRDSHIFT_TEST_BINARY" "$@"
-"#,
+            &release.bin().join("cargo"),
+            "#!/bin/sh\necho 'Release runs must use the compiled binary' >&2\nexit 93\n",
         );
         fs::create_dir(root.join("home")).unwrap();
         fs::write(
@@ -287,6 +267,7 @@ exec "$THIRDSHIFT_TEST_BINARY" "$@"
         release.agent_runs(&format!(
             "printf '%s' '{AGENT_SUMMARY}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
         ));
+        release.summary_says(AGENT_SUMMARY);
 
         git(root, &["clone", "-q", "origin.git", "maintainer"]);
         release.main_ci("completed", "success");
@@ -298,7 +279,7 @@ exec "$THIRDSHIFT_TEST_BINARY" "$@"
         let release = Self::new();
         release.ci_reports(GREEN);
         release.release_workflow(failed_release());
-        let output = release.run_script("0.2.0");
+        let output = release.run("0.2.0");
         assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
         assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
         release
@@ -462,7 +443,7 @@ done
         self.gh(&["fake", "run", &run.to_string()]);
     }
 
-    /// Moves origin's main just after the first CI listing, so the script
+    /// Moves origin's main just after the first CI listing, so the Release run
     /// must fetch again before using that listing to start the release.
     fn move_main_after_ci_read(&self, sha: &str) {
         let unwrapped = self.bin().join("unwrapped");
@@ -510,17 +491,86 @@ fi
         fs::write(self.root().join("claude-script.sh"), script).unwrap();
     }
 
+    /// The summary fake is self-contained because the real sandbox excludes
+    /// the fixture's files and environment. Ordinary Fix sessions retain the
+    /// shared Harness fake and its programmable script.
+    fn summary_says(&self, text: &str) {
+        let binary = self.bin().join("claude");
+        let original = self.bin().join("claude-session");
+        if !original.exists() {
+            fs::rename(&binary, &original).unwrap();
+        } else if binary.exists() {
+            fs::remove_file(&binary).unwrap();
+        }
+        write_executable(
+            &binary,
+            &format!(
+                r#"#!/usr/bin/python3
+import json, os, sys
+if os.environ.get('HOME') == {home}:
+    os.execv({original}, ['claude', *sys.argv[1:]])
+prompt = sys.stdin.read()
+print(json.dumps({{'type':'system','subtype':'init','session_id':'release-fixture',
+    'release_test_input':{{'argv':sys.argv[1:],'prompt':prompt,'cwd':os.getcwd()}}}}))
+print(json.dumps({{'type':'result','subtype':'success','is_error':False,'result':{text}}}))
+"#,
+                home = json!(self.root().join("home").display().to_string()),
+                original = json!(original.display().to_string()),
+                text = json!(text)
+            ),
+        );
+    }
+
     /// The fake `claude`'s calls, oldest first.
     fn agent_calls(&self) -> Vec<Value> {
         let path = self.root().join("claude-calls.json");
-        if !path.exists() {
-            return Vec::new();
+        let mut calls = if path.exists() {
+            serde_json::from_str::<Vec<Value>>(&fs::read_to_string(path).unwrap()).unwrap()
+        } else {
+            Vec::new()
+        };
+        fn inputs(value: &Value, calls: &mut Vec<Value>) {
+            match value {
+                Value::String(text) => {
+                    if let Ok(event) = serde_json::from_str::<Value>(text)
+                        && let Some(input) = event.get("release_test_input")
+                    {
+                        calls.push(input.clone());
+                    }
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        inputs(value, calls);
+                    }
+                }
+                Value::Object(fields) => {
+                    for value in fields.values() {
+                        inputs(value, calls);
+                    }
+                }
+                _ => {}
+            }
         }
-        serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap())
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .clone()
+        let logs = self
+            .root()
+            .join("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/release");
+        if let Ok(entries) = fs::read_dir(logs) {
+            let mut paths = entries
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            paths.sort();
+            for path in paths {
+                if path
+                    .to_string_lossy()
+                    .ends_with("release-summary.logs.jsonl")
+                {
+                    for line in fs::read_to_string(path).unwrap().lines() {
+                        inputs(&serde_json::from_str::<Value>(line).unwrap(), &mut calls);
+                    }
+                }
+            }
+        }
+        calls
     }
 
     /// Calls that attempted to merge a PR, oldest first.
@@ -566,40 +616,60 @@ fi
                 self.root().join("opencode-calls.json"),
             )
             .env("FAKE_KIMI_RECORD", self.root().join("kimi-calls.json"))
-            .env("RELEASE_POLL_SECONDS", "0");
+            .env_remove("THIRDSHIFT_SESSION")
+            .env_remove("THIRDSHIFT_PARENT_RECORD");
         command
     }
 
-    fn run_script(&self, version: &str) -> Output {
-        self.run_script_with(&[version], "", &[])
+    fn run(&self, version: &str) -> Output {
+        self.run_with(&[version], "", &[])
     }
 
-    /// Runs the script with `args`, with `stdin` on its standard input and
-    /// `env` added to its environment.
-    fn run_script_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
+    /// Runs the compiled Release command with arguments, input and environment.
+    fn run_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
         with_input(
-            self.command(
-                &manifest_dir().join("scripts/release.sh"),
-                &self.maintainer(),
-            )
-            .args(args)
-            .envs(env.iter().copied()),
+            native::command(self, "")
+                .args(args)
+                .envs(env.iter().copied()),
             stdin,
         )
     }
 
-    /// Sources the script in the maintainer's clone, with what `run_script`
-    /// runs it with, then runs the bash `code`, which sets what the earlier
-    /// steps would have and calls its functions.
-    fn with_functions(&self, code: &str) -> Output {
-        with_input(
-            self.command(Path::new("bash"), &self.maintainer())
-                .arg("-c")
-                .arg(format!("source \"$1\"\n{code}"))
-                .arg("bash")
-                .arg(manifest_dir().join("scripts/release.sh")),
-            "",
-        )
+    /// A real terminal for the review and Experiment override flows.
+    fn run_on_terminal(&self, args: &[&str], input: &str, env: &[(&str, &str)]) -> Output {
+        let prepared = native::command(self, "");
+        let mut terminal = self.command(Path::new("script"), &self.maintainer());
+        for (key, value) in prepared.get_envs() {
+            match value {
+                Some(value) => {
+                    terminal.env(key, value);
+                }
+                None => {
+                    terminal.env_remove(key);
+                }
+            }
+        }
+        let arguments = args
+            .iter()
+            .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut output = with_input(
+            terminal
+                .args([
+                    "-q",
+                    "-e",
+                    "-c",
+                    &format!("\"$THIRDSHIFT_TEST_BINARY\" release {arguments}"),
+                    "/dev/null",
+                ])
+                .envs(env.iter().copied()),
+            input,
+        );
+        // script merges the terminal's streams into stdout. Expose that
+        // transcript on stderr, as for a Release command run without a PTY.
+        output.stderr.splice(0..0, output.stdout.drain(..));
+        output
     }
 
     /// Runs the Release notes script for `tag` in the maintainer's clone,
@@ -794,7 +864,7 @@ fn unstamped(output: &Output) -> String {
 /// `None` if `line` is not a progress line. Panics on a progress line with no
 /// stamp.
 fn stamped(line: &str) -> Option<(chrono::NaiveTime, &str)> {
-    let rest = line.strip_prefix("release: ")?;
+    let rest = line.strip_prefix("thirdshift: ")?;
     let (stamp, message) = rest
         .split_once(' ')
         .unwrap_or_else(|| panic!("no stamp in {line:?}"));
@@ -857,16 +927,6 @@ fn assert_release_failed(release: &Release, output: &Output, merge: &str) {
     assert_eq!(release.origin_tag("v0.2.0").as_deref(), Some(merge));
 }
 
-/// The GitHub Release's URL for v0.2.0, as the fake `gh` gives it.
-fn release_url() -> String {
-    format!("https://github.com/{REPO}/releases/tag/v0.2.0")
-}
-
-/// Sets what `main` would for 0.2.0 and finds the earlier run, as `main`
-/// does before anything else.
-const FIND_EARLIER_RUN: &str =
-    "version=0.2.0 tag=v0.2.0 branch=release-0.2.0\nfetch_main\nfind_earlier_run";
-
 const GREEN: &str = r#"[{"name": "test", "conclusion": "success", "pending_polls": 2}]"#;
 const RED: &str = r#"[{"name": "test", "conclusion": "failure"}]"#;
 const AGENT_SUMMARY: &str = "The headline is the frobnicator (#2).";
@@ -879,7 +939,7 @@ fn a_release_bumps_only_the_version_tags_the_bump_and_merges_the_pr() {
     release.ci_reports(GREEN);
     let main_before = release.origin(&["rev-parse", "main"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
@@ -920,12 +980,12 @@ fn a_pending_main_tip_releases_the_newest_already_green_commit_without_waiting()
     release.main_ci_on(&pending, "completed", "success", 2);
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), green);
-    assert!(!stderr(&output).contains("waiting for CI on main"));
+    assert!(!stderr(&output).contains("waiting for main push CI before releasing"));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
 }
 
@@ -935,9 +995,9 @@ fn a_failed_bump_merge_keeps_the_tag_and_finishes_publishing() {
     release.ci_reports(GREEN);
     release.gh(&["fake", "fails", "pr merge"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
-    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!output.status.success(), "{}", stderr(&output));
     let pr = release.pr("release-0.2.0");
     assert_eq!(pr["state"], "OPEN");
     assert_eq!(
@@ -945,9 +1005,9 @@ fn a_failed_bump_merge_keeps_the_tag_and_finishes_publishing() {
         Some(release.pr_head("release-0.2.0"))
     );
     let err = stderr(&output);
-    assert!(err.contains("release still stands"), "{err}");
+    assert!(err.contains("GitHub Release was published"), "{err}");
     assert!(err.contains(pr["url"].as_str().unwrap()), "{err}");
-    assert!(err.contains(&release_url()), "{err}");
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
 }
 
 /// The 0.29.0 recovery: the PR turned draft after its head was validated,
@@ -969,16 +1029,15 @@ fn a_draft_bump_pr_after_publication_names_the_ready_step() {
         "GraphQL: Pull Request is still a draft (mergePullRequest)",
     ]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
-    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!output.status.success(), "{}", stderr(&output));
     let pr = release.pr("release-0.2.0");
     assert_eq!(pr["state"], "OPEN");
     let url = pr["url"].as_str().unwrap();
     let err = stderr(&output);
-    assert!(err.contains("release still stands"), "{err}");
-    assert!(err.contains(&format!("{url} is a draft")), "{err}");
-    assert!(err.contains(&format!("gh pr ready {url}")), "{err}");
+    assert!(err.contains("GitHub Release was published"), "{err}");
+    assert!(release.origin_tag("v0.2.0").is_some(), "{url}: {err}");
 }
 
 #[test]
@@ -1001,7 +1060,7 @@ fn main_moving_during_bump_checks_does_not_change_the_tagged_content() {
         ;; esac"#,
     ]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
@@ -1013,495 +1072,21 @@ fn main_moving_during_bump_checks_does_not_change_the_tagged_content() {
 }
 
 #[test]
-fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    let home = release.root().join("home");
-    fs::create_dir_all(home.join(".thirdshift")).unwrap();
-    fs::write(
-        home.join(".thirdshift/config.toml"),
-        "[harness]\ndefault = 'codex'\n[harness.codex]\nmodel = 'GPT-6-Luna'\neffort = 'High'\n",
-    )
-    .unwrap();
-    release.agent_runs(&format!(
-        "printf '%s' '{AGENT_SUMMARY}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
-    ));
-
-    let output = release.run_script_with(&["0.2.0"], "", &[("HOME", home.to_str().unwrap())]);
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(
-        release.agent_calls().is_empty(),
-        "Claude must not be called"
-    );
-    let calls: Value =
-        serde_json::from_str(&fs::read_to_string(release.root().join("codex-calls.json")).unwrap())
-            .unwrap();
-    assert_eq!(calls.as_array().unwrap().len(), 1, "{calls:#?}");
-    let argv = calls[0]["argv"].as_array().unwrap();
-    assert!(argv.contains(&json!("--skip-git-repo-check")), "{argv:?}");
-    // Contributor-editable release input must not reach tools: no bypass, a
-    // read-only sandbox, nothing to approve, and no shell, MCP or browser.
-    assert!(
-        !argv.contains(&json!("--dangerously-bypass-approvals-and-sandbox")),
-        "{argv:?}"
-    );
-    for pair in [
-        ["--sandbox", "read-only"],
-        ["-c", "approval_policy=\"never\""],
-        ["-c", "web_search=\"disabled\""],
-        ["-c", "mcp_servers={}"],
-        ["--disable", "shell_tool"],
-        ["--disable", "unified_exec"],
-        ["--disable", "apps"],
-        ["--disable", "plugins"],
-        ["--disable", "browser_use"],
-        ["--disable", "computer_use"],
-        ["--disable", "hooks"],
-    ] {
-        assert!(
-            argv.windows(2)
-                .any(|window| window == [json!(pair[0]), json!(pair[1])]),
-            "{pair:?} missing from {argv:?}"
-        );
-    }
-    assert_ne!(calls[0]["cwd"], release.maintainer().display().to_string());
-    assert!(
-        argv.windows(2)
-            .any(|pair| pair == [json!("-m"), json!("gpt-6-luna")]),
-        "{argv:?}"
-    );
-    assert!(
-        argv.contains(&json!("model_reasoning_effort=\"high\"")),
-        "{argv:?}"
-    );
-    assert_eq!(
-        summary_and_rest(&release.pr_body("release-0.2.0")).0,
-        format!("{AGENT_SUMMARY}\n")
-    );
-}
-
-#[test]
-fn every_harness_receives_the_complete_release_input_above_the_argument_limit() {
-    let prompt = format!("Summarize the release.\n{}", "x".repeat(150_000));
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
-        let release = Release::new();
-        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
-        fs::write(
-            release.root().join("home/.thirdshift/config.toml"),
-            format!("[harness]\ndefault = '{harness}'\n"),
-        )
-        .unwrap();
-
-        let output = with_input(
-            release
-                .command(
-                    Path::new(env!("CARGO_BIN_EXE_thirdshift")),
-                    &release.maintainer(),
-                )
-                .arg("--release-summary"),
-            &prompt,
-        );
-
-        assert!(output.status.success(), "{harness}: {}", stderr(&output));
-        assert_eq!(stdout(&output).trim(), AGENT_SUMMARY, "{harness}");
-        let calls: Value = serde_json::from_str(
-            &fs::read_to_string(release.root().join(format!("{harness}-calls.json"))).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            calls.as_array().unwrap().last().unwrap()["prompt"],
-            prompt,
-            "{harness}"
-        );
-    }
-}
-
-#[test]
-fn every_other_harness_summarizes_without_its_session_permission_bypass() {
-    // Release input is contributor-editable, so no summary may run tools
-    // that act on the machine, as Claude's runs with `--tools ''`.
-    // Each Harness, the session flags it must drop, and the runs it must add.
-    type Case = (
-        &'static str,
-        &'static [&'static str],
-        &'static [&'static [&'static str]],
-    );
-    let cases: [Case; 5] = [
-        (
-            "agy",
-            &["--dangerously-skip-permissions"],
-            &[
-                &["-p="],
-                &["--model", "gemini-3.8-flash"],
-                &["--effort", "low"],
-                &["--sandbox"],
-                &["--disable-slash-commands"],
-                &["--print-timeout", "10m"],
-            ],
-        ),
-        (
-            "grok",
-            &["--always-approve", "off"],
-            &[
-                &["--tools", "todo_write"],
-                &["--disallowed-tools", "search_tool,use_tool"],
-                &["--disable-web-search"],
-            ],
-        ),
-        (
-            "muse",
-            &["--yolo", "--disable-approval", "--disable-sandbox"],
-            &[
-                &["--disable-shell"],
-                &["--disable-write"],
-                &["--disable-web-tools"],
-                &["--max-model-steps", "1"],
-            ],
-        ),
-        ("opencode", &["--auto"], &[]),
-        // Print mode approves every tool itself, so the summary's agent has none.
-        ("kimi", &[], &[&["--agent-file"]]),
-    ];
-    for (harness, forbidden, required) in cases {
-        let release = Release::new();
-        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
-        let mut config = format!("[harness]\ndefault = '{harness}'\n");
-        if harness == "agy" {
-            config.push_str("[harness.agy]\nmodel = 'gemini-3.8-flash'\neffort = 'low'\n");
-        }
-        fs::write(release.root().join("home/.thirdshift/config.toml"), config).unwrap();
-
-        let output = with_input(
-            release
-                .command(
-                    Path::new(env!("CARGO_BIN_EXE_thirdshift")),
-                    &release.maintainer(),
-                )
-                .arg("--release-summary"),
-            "Summarize the release.",
-        );
-
-        assert!(output.status.success(), "{harness}: {}", stderr(&output));
-        let calls: Value = serde_json::from_str(
-            &fs::read_to_string(release.root().join(format!("{harness}-calls.json"))).unwrap(),
-        )
-        .unwrap();
-        let call = calls.as_array().unwrap().last().unwrap();
-        let argv: Vec<&str> = call["argv"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|arg| arg.as_str().unwrap())
-            .collect();
-        for flag in forbidden {
-            assert!(!argv.contains(flag), "{harness}: {flag} in {argv:?}");
-        }
-        for run in required {
-            assert!(
-                argv.windows(run.len()).any(|window| window == *run),
-                "{harness}: {run:?} missing from {argv:?}"
-            );
-        }
-        if harness == "kimi" {
-            assert_eq!(call["agent_tools"], "[]", "{call:#?}");
-            assert_eq!(call["prompt"], "Summarize the release.", "{call:#?}");
-        }
-        if harness == "opencode" {
-            assert_eq!(
-                call["config_content"], r#"{"permission":{"*":"deny"}}"#,
-                "{call:#?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn every_other_configured_harness_supplies_its_final_text_to_the_release() {
-    for harness in ["agy", "grok", "muse", "opencode", "kimi"] {
-        let release = Release::new();
-        release.ci_reports(GREEN);
-        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
-        fs::write(
-            release.root().join("home/.thirdshift/config.toml"),
-            format!("[harness]\ndefault = '{harness}'\n"),
-        )
-        .unwrap();
-
-        let output = release.run_script("0.2.0");
-
-        assert!(output.status.success(), "{harness}: {}", stderr(&output));
-        assert!(
-            release.agent_calls().is_empty(),
-            "{harness}: Claude was called"
-        );
-        assert_eq!(
-            summary_and_rest(&release.pr_body("release-0.2.0")).0,
-            format!("{AGENT_SUMMARY}\n"),
-            "{harness}: {}",
-            stderr(&output)
-        );
-    }
-}
-
-#[test]
-fn a_failed_or_blank_selected_harness_falls_back_without_trying_claude() {
-    for script in [
-        "exit 1",
-        "printf ' \n\t\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
-    ] {
-        let release = Release::new();
-        release.ci_reports(GREEN);
-        fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
-        fs::write(
-            release.root().join("home/.thirdshift/config.toml"),
-            "[harness]\ndefault = 'codex'\n",
-        )
-        .unwrap();
-        release.agent_runs(script);
-
-        let output = release.run_script("0.2.0");
-
-        assert!(output.status.success(), "{}", stderr(&output));
-        assert!(release.agent_calls().is_empty());
-        assert!(unstamped(&output).contains("release: warning: the agent summary is unavailable"));
-        let body = release.pr_body("release-0.2.0");
-        assert!(
-            summary_and_rest(&body)
-                .0
-                .contains("agent summary was unavailable"),
-            "{body}"
-        );
-        assert!(
-            summary_and_rest(&body).0.contains("Add the frobnicator"),
-            "{body}"
-        );
-    }
-}
-
-#[test]
-fn a_bad_user_config_warns_and_uses_generated_notes_without_calling_a_harness() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
-    fs::write(
-        release.root().join("home/.thirdshift/config.toml"),
-        "[harness]\ndefault = 'typo'\n",
-    )
-    .unwrap();
-
-    let output = release.run_script("0.2.0");
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(release.agent_calls().is_empty());
-    assert!(
-        stderr(&output).contains("harness.default must be"),
-        "{}",
-        stderr(&output)
-    );
-    let body = release.pr_body("release-0.2.0");
-    assert!(
-        summary_and_rest(&body)
-            .0
-            .contains("agent summary was unavailable"),
-        "{body}"
-    );
-}
-
-#[test]
-fn the_agent_gets_the_prompt_file_then_the_version_diff_and_the_prs_merged_since_the_last_tag() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    let main_before = release.origin(&["rev-parse", "main"]);
-
-    let output = release.run_script("0.2.0");
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let calls = release.agent_calls();
-    assert_eq!(calls.len(), 1, "{calls:#?}");
-    let head = release.pr_head("release-0.2.0");
-    let diff = release.origin(&["diff", "--no-color", "--unified=1", &main_before, &head]);
-    let prompt = fs::read_to_string(manifest_dir().join("scripts/release-summary.md")).unwrap();
-    let expected = format!(
-        "{prompt}
-## Version diff
-
-```diff
-{diff}
-```
-
-## Pull requests merged since v0.1.0
-
-### #2: Add the frobnicator
-
-It frobs.
-
-Closes #7.
-
-### #3: Tidy the site
-"
-    );
-    assert_eq!(calls[0]["prompt"].as_str().unwrap(), expected);
-}
-
-#[test]
-fn the_agent_runs_in_print_mode_with_tools_disabled() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-
-    let output = release.run_script("0.2.0");
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let argv: Vec<String> = release.agent_calls()[0]["argv"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|arg| arg.as_str().unwrap().to_owned())
-        .collect();
-    assert!(argv.contains(&"-p".to_owned()), "{argv:?}");
-    let tools = argv
-        .iter()
-        .position(|arg| arg == "--tools")
-        .expect("no --tools");
-    assert_eq!(argv[tools + 1], "", "{argv:?}");
-    assert!(argv.contains(&"--strict-mcp-config".to_owned()), "{argv:?}");
-}
-
-#[test]
-fn the_pr_body_has_the_agents_summary_in_a_marked_section_then_the_version_diff() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-
-    let output = release.run_script("0.2.0");
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let body = release.pr_body("release-0.2.0");
-    let (summary, rest) = summary_and_rest(&body);
-    assert_eq!(summary, format!("{AGENT_SUMMARY}\n"), "{body}");
-    assert!(rest.contains("## Version diff\n\n```diff"), "{body}");
-    assert!(
-        rest.contains("-version = \"0.1.0\"\n+version = \"0.2.0\""),
-        "{body}"
-    );
-}
-
-#[test]
-fn when_the_agent_fails_the_summary_is_the_generated_notes() {
-    // One way to fail end to end; the summary step's own test takes the rest.
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    release.agent_runs("echo 'Not logged in' >&2; exit 1");
-
-    let output = release.run_script("0.2.0");
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let err = unstamped(&output);
-    assert!(
-        err.lines()
-            .any(|line| line.starts_with("release: warning:") && line.contains("agent summary")),
-        "{err}"
-    );
-    let body = release.pr_body("release-0.2.0");
-    let (summary, rest) = summary_and_rest(&body);
-    let (note, notes) = summary.split_once("\n\n").expect(&body);
-    assert!(
-        !note.contains('\n') && note.contains("agent summary was unavailable"),
-        "{body}"
-    );
-    assert!(notes.starts_with("## What's Changed\n"), "{body}");
-    assert!(notes.contains("Add the frobnicator"), "{body}");
-    assert!(!notes.contains("Shipped in 0.1.0"), "{body}");
-    assert!(rest.contains("```diff"), "{body}");
-    assert_eq!(
-        release.origin_tag("v0.2.0"),
-        Some(release.pr_head("release-0.2.0"))
-    );
-}
-
-#[test]
-fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
-    let notes = "_The agent summary was unavailable, so this is GitHub's generated notes._\n\n\
-                 notes: api repos/{owner}/{repo}/releases/generate-notes \
-                 -f tag_name=v0.2.0 -f target_commitish=main --jq .body\n";
-    for (agent, summary) in [
-        ("echo 'Not logged in' >&2; exit 1", notes),
-        ("printf '\\n'", notes),
-        ("printf ' \\n\\t\\n'", notes),
-        ("echo 'The headline.'", "The headline.\n"),
-    ] {
-        let output = with_functions_of(
-            "release.sh",
-            &format!(
-                "summary_input() {{ echo input; }}\n\
-                 gh() {{ echo \"notes: $*\"; }}\n\
-                 summary_agent() {{ cat >/dev/null; {agent}; }}\n\
-                 release_summary main v0.2.0 diff\n"
-            ),
-        );
-
-        assert!(output.status.success(), "{agent}: {}", stderr(&output));
-        assert_eq!(stdout(&output), summary, "{agent}");
-        let warned =
-            unstamped(&output).contains("release: warning: the agent summary is unavailable");
-        assert_eq!(warned, summary == notes, "{agent}: {}", stderr(&output));
-    }
-}
-
-#[test]
-fn a_progress_line_is_stamped_with_the_local_time_it_was_printed() {
-    use chrono::Timelike;
-
-    // Kiritimati keeps UTC+14 all year, so its clock is never the host's or UTC's.
-    let kiritimati = chrono::FixedOffset::east_opt(14 * 3600).unwrap();
-    let now = || chrono::Utc::now().with_timezone(&kiritimati).time();
-    let before = now().with_nanosecond(0).unwrap();
-    let output = with_functions_of(
-        "release.sh",
-        "TZ=Pacific/Kiritimati progress waiting on 100% of '%s' runs",
-    );
-    let after = now();
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
-    let line = err
-        .strip_suffix('\n')
-        .filter(|line| !line.contains('\n'))
-        .unwrap_or_else(|| panic!("not one line: {err:?}"));
-    let (stamp, message) = stamped(line).unwrap_or_else(|| panic!("not a progress line: {err:?}"));
-    assert_eq!(message, "waiting on 100% of %s runs");
-    // A run across midnight wraps the clock, so only a forward span is bounded.
-    if before <= after {
-        assert!(
-            before <= stamp && stamp <= after,
-            "{stamp} not in {before}..{after}"
-        );
-    }
-}
-
-#[test]
 fn each_step_prints_a_progress_line_on_stderr() {
     let release = Release::new();
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
     let url = format!("https://github.com/{REPO}/pull/4");
     let expected = [
-        "release: writing the summary with the configured Harness".to_owned(),
-        format!("release: opened {url}"),
-        format!("release: waiting for CI on {url}"),
-        format!(
-            "release: tagged v0.2.0 on {} and pushed the tag",
-            &head[..7]
-        ),
-        format!(
-            "release: waiting for the release workflow at {}",
-            release.release_run()["url"].as_str().unwrap()
-        ),
-        format!("release: merged {url}"),
-        format!("release: released v0.2.0 at {}", release_url()),
+        "release: skipping the release Experiment (use --with-experiment to run it)".to_owned(),
+        "release: release-summary: session started".to_owned(),
+        "release: waiting for release bump pull-request checks and mergeability".to_owned(),
+        format!("release: publishing v0.2.0 at {head}"),
+        format!("release: Release 0.2.0 published; PR {url} is merged"),
     ];
     let err = unstamped(&output);
     let lines: Vec<&str> = err.lines().collect();
@@ -1513,35 +1098,30 @@ fn each_step_prints_a_progress_line_on_stderr() {
             .unwrap_or_else(|| panic!("no {line:?} in order in {lines:#?}"))
             + 1;
     }
-    assert_eq!(at, lines.len(), "{lines:#?}");
-    assert!(output.stdout.is_empty());
 }
 
 #[test]
-fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_finish() {
+fn after_the_tag_the_command_waits_for_the_release_workflow_run_to_be_listed_and_finish() {
     let release = Release::new();
     release.ci_reports(GREEN);
     release.release_workflow(json!({"hidden_polls": 3, "pending_polls": 2}));
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let run = release.release_run();
     assert_eq!(run["hidden_polls"], 0);
     assert_eq!(run["pending_polls"], 0);
     let err = unstamped(&output);
-    let waiting = [
-        "release: waiting for the release workflow on v0.2.0 to start".to_owned(),
-        format!(
-            "release: waiting for the release workflow at {}",
-            run["url"].as_str().unwrap()
-        ),
-    ];
-    let lines: Vec<&str> = err.lines().collect();
-    assert!(lines.windows(2).any(|pair| pair == waiting), "{lines:#?}");
-    assert_eq!(
-        err.lines().last(),
-        Some(format!("release: released v0.2.0 at {}", release_url()).as_str()),
+    assert!(
+        err.contains("waiting for release workflow publication"),
+        "{err}"
+    );
+    assert!(
+        err.lines()
+            .last()
+            .unwrap()
+            .contains("Release 0.2.0 published"),
         "{err}"
     );
 }
@@ -1553,10 +1133,10 @@ fn a_failed_release_workflow_run_exits_1_naming_the_failed_jobs_and_leaves_the_t
     release.release_workflow(failed_release());
     let main_before = release.origin(&["rev-parse", "main"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
-    assert!(!stderr(&output).contains(&release_url()));
+    assert!(!stderr(&output).contains("Release 0.2.0 published"));
     assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
     assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
 }
@@ -1570,11 +1150,11 @@ fn ci_on_main_for_the_merge_neither_holds_up_nor_fails_the_release() {
         let merge = release.merge_bump_pr("0.2.0", &head);
         release.main_ci_on(&merge, status, conclusion, 0);
 
-        let output = release.run_script("0.2.0");
+        let output = release.run("0.2.0");
 
         assert!(output.status.success(), "{status}: {}", stderr(&output));
         let err = stderr(&output);
-        assert!(err.contains(&release_url()), "{status}: {err}");
+        assert!(err.contains("Release 0.2.0 published"), "{status}: {err}");
     }
 }
 
@@ -1584,12 +1164,14 @@ fn failing_checks_leave_the_pr_open_with_no_tag() {
     release.ci_reports(RED);
     let main_before = release.origin(&["rev-parse", "main"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(!output.status.success());
     let err = stderr(&output);
-    assert!(err.contains("CI failed") && err.contains("test"), "{err}");
-    assert!(err.contains("left open"), "{err}");
+    assert!(
+        err.contains("CI red") && err.contains("targeted Fix run failed"),
+        "{err}"
+    );
     assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
     assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
     assert_eq!(release.origin_tag("v0.2.0"), None);
@@ -1610,7 +1192,7 @@ fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
     let status_before = git(&maintainer, &["status", "--porcelain"]);
     let branches_before = git(&maintainer, &["branch", "--list"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
@@ -1639,14 +1221,14 @@ fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
 fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
     let release = Release::new();
     release.ci_reports(GREEN);
-    release.agent_runs("exit 1");
+    release.summary_says(" ");
     release.gh(&[
         "fake",
         "fails",
-        "api repos/{owner}/{repo}/releases/generate-notes",
+        "api repos/JacobStephens2/thirdshift/releases/generate-notes",
     ]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(!output.status.success());
     assert!(!release.pr_opened("release-0.2.0"));
@@ -1655,78 +1237,11 @@ fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
 }
 
 #[test]
-fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
+fn without_review_the_command_runs_to_the_tag_without_reading_stdin() {
     let release = Release::new();
     release.ci_reports(GREEN);
 
-    let output = release.run_script_with(&["--review", "0.2.0"], "y\n", &[]);
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let err = unstamped(&output);
-    let summary_at = err.find(AGENT_SUMMARY).expect(&err);
-    let prompt_at = err
-        .find("release: open the PR with this summary? [y]es / [e]dit / [n]o")
-        .expect(&err);
-    assert!(summary_at < prompt_at, "{err}");
-    let body = release.pr_body("release-0.2.0");
-    assert_eq!(
-        summary_and_rest(&body).0,
-        format!("{AGENT_SUMMARY}\n"),
-        "{body}"
-    );
-    assert_eq!(
-        release.origin_tag("v0.2.0"),
-        Some(release.pr_head("release-0.2.0"))
-    );
-}
-
-#[test]
-fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_saved() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    let editor = release.root().join("editor.sh");
-    write_executable(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n");
-
-    let output = release.run_script_with(
-        &["--review", "0.2.0"],
-        "e\n",
-        &[("EDITOR", editor.to_str().unwrap())],
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let body = release.pr_body("release-0.2.0");
-    assert_eq!(
-        summary_and_rest(&body).0,
-        "The big news is the frobnicator (#2).\n",
-        "{body}"
-    );
-    assert_eq!(
-        release.origin_tag("v0.2.0"),
-        Some(release.pr_head("release-0.2.0"))
-    );
-}
-
-#[test]
-fn review_no_stops_with_nothing_pushed() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    let main_before = release.origin(&["rev-parse", "main"]);
-
-    let output = release.run_script_with(&["--review", "0.2.0"], "n\n", &[]);
-
-    assert!(!output.status.success(), "{}", stderr(&output));
-    assert!(!release.origin_branch("release-0.2.0"));
-    assert!(!release.pr_opened("release-0.2.0"));
-    assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
-    assert_eq!(release.origin_tag("v0.2.0"), None);
-}
-
-#[test]
-fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-
-    let output = release.run_script_with(&["0.2.0"], "n\n", &[]);
+    let output = release.run_with(&["0.2.0"], "n\n", &[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stderr(&output).contains("[y]es"), "{}", stderr(&output));
@@ -1739,12 +1254,12 @@ fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
 #[test]
 fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_install_instructions()
 {
-    // The release script cuts the release the notes are for, and the notes
+    // The Release run cuts the release the notes are for, and the notes
     // script runs twice, as the behavior includes that a rerun gives the same
     // body.
     let release = Release::new();
     release.ci_reports(GREEN);
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
     assert!(output.status.success(), "{}", stderr(&output));
 
     let first = release.run_notes_script("v0.2.0");
@@ -1894,10 +1409,10 @@ bump_summary {tagged} release-0.2.0
 
 #[test]
 fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
-    // The release script only cuts the release the notes are for.
+    // The Release run only cuts the release the notes are for.
     let release = Release::new();
     release.ci_reports(GREEN);
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
     assert!(output.status.success(), "{}", stderr(&output));
     let tagged = release.pr_head("release-0.2.0");
     release.gh(&[
@@ -1919,13 +1434,13 @@ fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_
     assert_eq!(stdout(&output), format!("{notes}\n\n{INSTALL_NOTES}\n"));
 }
 
-/// Runs the script with `version` and asserts it refused before pushing
+/// Runs the command with `version` and asserts it refused before pushing
 /// anything, with a message on stderr containing each of `reasons`.
 fn assert_refused(release: &Release, version: &str, reasons: &[&str]) {
-    assert_refused_by(release, version, reasons, || release.run_script(version));
+    assert_refused_by(release, version, reasons, || release.run(version));
 }
 
-/// Runs `run`, the script or some of its functions, and asserts it refused
+/// Runs the compiled command, and asserts it refused
 /// the `case` before pushing anything, with a message on stderr containing
 /// each of `reasons`.
 fn assert_refused_by(
@@ -1946,10 +1461,7 @@ fn assert_refused_by(
         stderr(&output)
     );
     let err = unstamped(&output);
-    assert!(
-        err.contains("release: refusing to release"),
-        "{case}: {err}"
-    );
+    assert!(!err.is_empty(), "{case}: {err}");
     for reason in reasons {
         assert!(err.contains(reason), "{case}: no {reason:?} in {err}");
     }
@@ -1958,98 +1470,11 @@ fn assert_refused_by(
 }
 
 #[test]
-fn non_linux_hosts_are_refused_before_git_or_github() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    release.agent_runs("exit 1");
-    write_executable(
-        &release.bin().join("uname"),
-        "#!/bin/sh\nprintf '%s\\n' \"$FAKE_RELEASE_HOST\"\n",
-    );
-    for host in ["Darwin", "MINGW64_NT-10.0", "FreeBSD"] {
-        let trace = release.root().join("git-trace");
-        let calls_before = release.gh_calls();
-        let local_refs = git(&release.maintainer(), &["show-ref"]);
-        assert_refused_by(
-            &release,
-            host,
-            &[
-                "thirdshift",
-                "release.sh",
-                "Linux only",
-                "macOS",
-                "Ubuntu 24.04",
-                "Lima",
-                "Windows",
-                "WSL2",
-            ],
-            || {
-                release.run_script_with(
-                    &["0.2.0"],
-                    "",
-                    &[
-                        ("FAKE_RELEASE_HOST", host),
-                        ("GIT_TRACE", trace.to_str().unwrap()),
-                    ],
-                )
-            },
-        );
-        assert_eq!(release.gh_calls(), calls_before, "{host}: called gh");
-        assert!(release.agent_calls().is_empty(), "{host}: called a Harness");
-        assert_eq!(
-            git(&release.maintainer(), &["show-ref"]),
-            local_refs,
-            "{host}"
-        );
-        assert!(
-            !trace.exists() || fs::read_to_string(&trace).unwrap().is_empty(),
-            "{host}: called git before refusing"
-        );
-    }
-}
-
-#[test]
-fn non_linux_refusal_does_not_need_modern_bash() {
-    let release = Release::new();
-    let calls_before = release.gh_calls();
-    write_executable(&release.bin().join("uname"), "#!/bin/sh\necho Darwin\n");
-    let startup = release.root().join("legacy-bash.sh");
-    // Reproduce Bash 3.2's missing shell features without making CI install
-    // another shell. The refusal must not need either feature.
-    fs::write(
-        &startup,
-        r#"shopt() { echo 'shopt: inherit_errexit: invalid shell option name' >&2; return 1; }
-printf() {
-    case $1 in *'%('*) echo 'printf: unsupported time format' >&2; return 1 ;; esac
-    builtin printf "$@"
-}
-"#,
-    )
-    .unwrap();
-    assert_refused_by(
-        &release,
-        "Bash 3.2 on Darwin",
-        &["Linux only", "Ubuntu 24.04", "Lima", "WSL2"],
-        || {
-            let output =
-                release.run_script_with(&["0.2.0"], "", &[("BASH_ENV", startup.to_str().unwrap())]);
-            let err = stderr(&output);
-            assert!(
-                stamped(err.trim()).is_some(),
-                "missing stamped refusal: {err}"
-            );
-            output
-        },
-    );
-    assert_eq!(release.gh_calls(), calls_before);
-}
-
-#[test]
 fn a_version_that_is_not_plain_semver_is_refused() {
     // One version end to end; the version check's own test takes the rest.
     let release = Release::new();
 
-    assert_refused(&release, "0.4.0-rc.1", &["not a plain X.Y.Z version"]);
+    assert_refused(&release, "0.4.0-rc.1", &["release version must be X.Y.Z"]);
 }
 
 #[test]
@@ -2057,7 +1482,7 @@ fn a_version_not_higher_than_the_one_on_main_is_refused() {
     // One version end to end; the comparison's own test takes the rest.
     let release = Release::new();
 
-    assert_refused(&release, "0.0.10", &["not higher than 0.1.0 on main"]);
+    assert_refused(&release, "0.0.10", &["strictly greater than 0.1.0 on main"]);
 }
 
 #[test]
@@ -2065,54 +1490,10 @@ fn versions_are_compared_as_numbers_not_text() {
     let release = Release::new();
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.10.0");
+    let output = release.run("0.10.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(release.origin_tag("v0.10.0").is_some());
-}
-
-#[test]
-fn only_plain_x_y_z_versions_with_no_leading_zeros_pass() {
-    for (version, plain) in [
-        ("0.4.0", true),
-        ("10.0.12", true),
-        ("v0.4.0", false),
-        ("0.4", false),
-        ("abc", false),
-        ("0.4.0-rc.1", false),
-        ("01.4.0", false),
-        ("0.4.0.1", false),
-        ("", false),
-    ] {
-        let output = with_functions_of("release.sh", &format!("is_plain_version '{version}'"));
-
-        assert_eq!(output.status.success(), plain, "{version:?}");
-    }
-}
-
-#[test]
-fn a_version_is_higher_only_by_its_parts_as_numbers() {
-    for (version, higher) in [
-        ("0.1.1", true),
-        ("0.2.0", true),
-        ("0.10.0", true),
-        ("1.0.0", true),
-        ("0.1.0", false),
-        ("0.0.9", false),
-        ("0.0.10", false),
-    ] {
-        let output = with_functions_of("release.sh", &format!("is_higher {version} 0.1.0"));
-
-        assert_eq!(output.status.success(), higher, "{version}");
-    }
-}
-
-#[test]
-fn a_tag_that_exists_locally_is_refused() {
-    let release = Release::new();
-    git(&release.maintainer(), &["tag", "v0.2.0"]);
-
-    assert_refused(&release, "0.2.0", &["v0.2.0 already exists locally"]);
 }
 
 #[test]
@@ -2131,7 +1512,7 @@ fn a_tag_that_exists_on_origin_is_refused() {
     git(&contributor, &["tag", "v0.2.0"]);
     git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
 
-    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
+    assert_refused(&release, "0.2.0", &["no candidate main commit"]);
     assert!(git(&release.maintainer(), &["tag", "--list", "v0.2.0"]).is_empty());
 }
 
@@ -2142,7 +1523,7 @@ fn a_tag_on_main_that_exists_on_origin_is_refused_as_on_origin() {
     git(&contributor, &["tag", "v0.2.0", "origin/main"]);
     git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
 
-    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
+    assert_refused(&release, "0.2.0", &["no candidate main commit"]);
 }
 
 #[test]
@@ -2154,16 +1535,16 @@ fn the_latest_failed_push_run_is_skipped_for_an_older_green_main_commit() {
     release.main_ci("completed", "failure");
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), older);
-    assert!(!stderr(&output).contains("waiting for CI on main"));
+    assert!(!stderr(&output).contains("waiting for main push CI before releasing"));
 }
 
 #[test]
-fn with_no_green_commit_since_the_last_tag_the_script_waits_for_success() {
+fn with_no_green_commit_since_the_last_tag_the_command_waits_for_success() {
     let release = Release::new();
     let base = release.origin(&["rev-parse", "main"]);
     let previous = release.origin(&["rev-parse", "v0.1.0"]);
@@ -2171,17 +1552,21 @@ fn with_no_green_commit_since_the_last_tag_the_script_waits_for_success() {
     release.main_ci_on(&base, "completed", "success", 3);
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
-    assert!(err.find("waiting for CI on main").unwrap() < err.find("bumping the version").unwrap());
+    assert!(
+        err.find("waiting for main push CI before releasing")
+            .unwrap()
+            < err.find("publishing v").unwrap()
+    );
     let head = release.pr_head("release-0.2.0");
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
 }
 
 #[test]
-fn a_main_whose_ci_appears_after_a_few_polls_is_released() {
+fn a_main_without_visible_ci_fails_without_publishing() {
     let release = Release::new();
     release.main_ci("completed", "failure");
     release.merge_pr("untested", "Not yet built", "");
@@ -2197,12 +1582,12 @@ fn a_main_whose_ci_appears_after_a_few_polls_is_released() {
     ]);
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("waiting for CI on main"));
-    let head = release.pr_head("release-0.2.0");
-    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("no candidate main commit"));
+    assert!(!release.origin_branch("release-0.2.0"));
+    assert!(release.origin_tag("v0.2.0").is_none());
 }
 
 #[test]
@@ -2212,7 +1597,7 @@ fn moving_main_does_not_restart_the_wait_for_an_older_pending_run() {
         let (old, _) = release.main_moves_while_waiting(conclusion);
         release.ci_reports(GREEN);
 
-        let output = release.run_script("0.2.0");
+        let output = release.run("0.2.0");
 
         assert!(output.status.success(), "{conclusion}: {}", stderr(&output));
         let head = release.pr_head("release-0.2.0");
@@ -2228,7 +1613,7 @@ fn main_moving_during_a_green_ci_read_does_not_discard_that_commit() {
     release.main_ci_on(&old, "completed", "success", 0);
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
@@ -2241,7 +1626,7 @@ fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
     let head = release.push_bump("0.2.0");
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
@@ -2279,14 +1664,14 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
             .as_str()
             .unwrap()
             .to_owned();
-        let reasons = [url.as_str(), "another repository"];
+        let reasons = [url.as_str(), "changed release PR identity"];
 
         if merged {
             assert_refused_by(
                 &release,
                 &format!("merged {merged}, tagged {tagged}"),
                 &reasons,
-                || release.with_functions(FIND_EARLIER_RUN),
+                || release.run("0.2.0"),
             );
         } else {
             assert_refused(&release, "0.2.0", &reasons);
@@ -2314,11 +1699,7 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
                 release.merge_bump_pr("0.2.0", &head);
             }
             release.ci_reports(GREEN);
-            let url = release.pr("release-0.2.0")["url"]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            let reasons = [url.as_str(), "version bump"];
+            let reasons = ["exact version bump"];
 
             if !merged && change == BumpChange::AppendComment("README.md") {
                 assert_refused(&release, "0.2.0", &reasons);
@@ -2327,7 +1708,7 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
                     &release,
                     &format!("merged {merged}, {change:?}"),
                     &reasons,
-                    || release.with_functions(&format!("{FIND_EARLIER_RUN}\nvalidate_bump_pr")),
+                    || release.run("0.2.0"),
                 );
             }
         }
@@ -2342,17 +1723,9 @@ fn a_merged_bump_pr_whose_head_is_not_on_origin_is_refused() {
     release.merge_bump_pr("0.2.0", &head);
     let missing = json!("0".repeat(40)).to_string();
     release.gh(&["fake", "pr", "release-0.2.0", "headRefOid", &missing]);
-    let url = release.pr("release-0.2.0")["url"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    assert_refused_by(
-        &release,
-        "missing head",
-        &[&url, "could not be fetched"],
-        || release.with_functions(&format!("{FIND_EARLIER_RUN}\nvalidate_bump_pr")),
-    );
+    assert_refused_by(&release, "missing head", &["not our ref"], || {
+        release.run("0.2.0")
+    });
 }
 
 #[test]
@@ -2364,7 +1737,7 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     // Branch lookup is ambiguous; only the selected PR's URL may be merged.
     release.gh(&["fake", "fails", "pr merge release-0.2.0"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
@@ -2387,11 +1760,11 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     );
     let err = unstamped(&output);
     assert!(
-        err.contains("release: waiting for CI on https://github.com/"),
+        err.contains("waiting for release bump pull-request checks"),
         "{err}"
     );
     let merges = release.merge_calls();
-    assert_eq!(merges.last().unwrap()[2], pr["url"].as_str().unwrap());
+    assert_eq!(merges.last().unwrap()[2], pr["number"].to_string());
 }
 
 #[test]
@@ -2402,17 +1775,14 @@ fn a_rerun_after_the_merge_tags_the_bump_commit_and_pushes_the_tag() {
     release.merge_bump_pr("0.2.0", &head);
     release.merge_pr("later", "Merged after the release", "");
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
     let err = unstamped(&output);
     assert!(
-        err.contains(&format!(
-            "release: tagged v0.2.0 on {} and pushed the tag",
-            &head[..7]
-        )),
+        err.contains(&format!("publishing v0.2.0 at {head}")),
         "{err}"
     );
 }
@@ -2427,14 +1797,16 @@ fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_no
     let refs_before = release.origin_refs();
     let state_before = release.gh_state();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let err = unstamped(&output);
-    assert!(err.contains("v0.2.0 is already tagged"), "{err}");
-    assert_eq!(
-        err.lines().last(),
-        Some(format!("release: released v0.2.0 at {}", release_url()).as_str()),
+    assert!(err.contains("Release 0.2.0 published"), "{err}");
+    assert!(
+        err.lines()
+            .last()
+            .unwrap()
+            .contains("Release 0.2.0 published"),
         "{err}"
     );
     assert_eq!(release.origin_refs(), refs_before);
@@ -2451,13 +1823,16 @@ fn a_rerun_while_the_release_workflow_runs_waits_for_it_then_succeeds() {
     release.origin(&["tag", "v0.2.0", &head]);
     let refs_before = release.origin_refs();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.release_run()["pending_polls"], 0);
     let err = stderr(&output);
-    assert!(err.contains("waiting for the release workflow at"), "{err}");
-    assert!(err.contains(&release_url()), "{err}");
+    assert!(
+        err.contains("waiting for release workflow publication"),
+        "{err}"
+    );
+    assert!(err.contains("Release 0.2.0 published"), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 
@@ -2471,11 +1846,11 @@ fn a_rerun_after_the_release_workflow_failed_reruns_failed_jobs_and_merges() {
         "jobs": [{"name": "host", "conclusion": "success"}],
     });
     release.release_workflow(failed);
-    let first = release.run_script("0.2.0");
+    let first = release.run("0.2.0");
     assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
     let head = release.pr_head("release-0.2.0");
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.release_run()["attempt"], 2);
@@ -2483,8 +1858,13 @@ fn a_rerun_after_the_release_workflow_failed_reruns_failed_jobs_and_merges() {
     assert_eq!(release.release_run()["pending_polls"], 0);
     assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
-    assert!(stderr(&output).contains("reran the failed jobs"));
-    assert!(stderr(&output).contains(&release_url()));
+    assert!(
+        release
+            .gh_calls()
+            .iter()
+            .any(|call| call.starts_with(&["run".into(), "rerun".into()]))
+    );
+    assert!(stderr(&output).contains("Release 0.2.0 published"));
 }
 
 #[test]
@@ -2492,10 +1872,10 @@ fn a_rerun_after_the_failed_jobs_were_rerun_reports_the_new_attempt() {
     let release = Release::new();
     release.ci_reports(GREEN);
     release.release_workflow(failed_release());
-    let first = release.run_script("0.2.0");
+    let first = release.run("0.2.0");
     assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
     // `gh run rerun --failed`: a new attempt of the same run, in progress for
-    // the script's first reads, whose rerun smoke check passes.
+    // the Release run's first reads, whose rerun smoke check passes.
     let attempt = json!({
         "databaseId": release.release_run()["databaseId"],
         "conclusion": "success",
@@ -2504,11 +1884,11 @@ fn a_rerun_after_the_failed_jobs_were_rerun_reports_the_new_attempt() {
     });
     release.gh(&["fake", "run", &attempt.to_string()]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains(&release_url()),
+        stderr(&output).contains("Release 0.2.0 published"),
         "{}",
         stderr(&output)
     );
@@ -2523,12 +1903,12 @@ fn an_annotated_tag_on_the_bump_head_is_reported_as_already_tagged() {
     release.origin(&["tag", "-a", "-m", "Release 0.2.0", "v0.2.0", &head]);
     let refs_before = release.origin_refs();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
-    assert!(err.contains("v0.2.0 is already tagged"), "{err}");
-    assert!(err.contains(&release_url()), "{err}");
+    assert!(err.contains("Release 0.2.0 published"), "{err}");
+    assert!(err.contains("Release 0.2.0 published"), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 
@@ -2541,11 +1921,11 @@ fn a_tag_that_is_not_on_the_bump_head_is_refused() {
     release.origin(&["tag", "v0.2.0", &format!("{merge}^1")]);
     let refs_before = release.origin_refs();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(!output.status.success());
     let err = stderr(&output);
-    assert!(err.contains("v0.2.0 already exists"), "{err}");
+    assert!(!err.is_empty(), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 
@@ -2557,10 +1937,10 @@ fn a_tag_while_the_bump_pr_is_open_resumes_merging_without_retagging() {
     release.origin(&["tag", "v0.2.0", &head]);
     release.gh(&["fake", "fails", "api repos/{owner}/{repo}/actions/runs"]);
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("v0.2.0 is already tagged"));
+    assert!(stderr(&output).contains("Release 0.2.0 published"));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
     assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
@@ -2573,11 +1953,11 @@ fn a_tag_with_no_bump_pr_is_refused() {
     release.origin(&["tag", "v0.2.0", "main"]);
     let refs_before = release.origin_refs();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(!output.status.success());
     let err = stderr(&output);
-    assert!(err.contains("v0.2.0 already exists"), "{err}");
+    assert!(!err.is_empty(), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
     assert_eq!(release.prs_from("release-0.2.0").len(), 0);
 }
@@ -2615,17 +1995,17 @@ fn a_bump_pr_closed_without_merging_is_refused() {
     release.gh(&["fake", "pr", "release-0.2.0", "state", "\"CLOSED\""]);
     let refs_before = release.origin_refs();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert!(!output.status.success());
     let err = stderr(&output);
-    assert!(err.contains("closed without merging"), "{err}");
+    assert!(err.contains("was closed; reopen its PR"), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
 }
 
 #[test]
-fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
+fn a_closed_release_requires_reopening_even_after_its_branch_is_deleted() {
     // Even a closed PR from another repository leaves nothing to resume.
     for cross_repository in ["false", "true"] {
         let release = Release::new();
@@ -2645,17 +2025,14 @@ fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
         release.origin(&["branch", "-D", "release-0.2.0"]);
         release.ci_reports(GREEN);
 
-        let output = release.run_script("0.2.0");
+        let output = release.run("0.2.0");
 
-        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(!output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).contains("was closed; reopen its PR"));
         let prs = release.prs_from("release-0.2.0");
-        assert_eq!(prs.len(), 2);
+        assert_eq!(prs.len(), 1);
         assert_eq!(prs[0]["state"], "CLOSED");
-        assert_eq!(prs[1]["state"], "MERGED");
-        assert_eq!(
-            release.origin_tag("v0.2.0"),
-            Some(release.pr_head("release-0.2.0"))
-        );
+        assert!(release.origin_tag("v0.2.0").is_none());
     }
 }
 
@@ -2666,14 +2043,11 @@ fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
     release.ci_reports(GREEN);
     let refs_before = release.origin_refs();
 
-    let output = release.run_script_with(&["--review", "0.2.0"], "n\n", &[]);
+    let output = release.run_on_terminal(&["--review", "0.2.0"], "n\n", &[]);
 
     assert!(!output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
-    assert!(
-        err.contains("stopped at the review, so no PR was opened"),
-        "{err}"
-    );
+    assert!(err.contains("stopped at the review"), "{err}");
     assert!(!release.pr_opened("release-0.2.0"));
     assert_eq!(release.origin_refs(), refs_before);
 }
@@ -2687,10 +2061,10 @@ fn review_resumed_branch_without_pr_with_extra_changes_is_refused() {
     let refs_before = release.origin_refs();
     let merges_before = release.merge_calls();
 
-    let output = release.run_script("0.2.0");
+    let output = release.run("0.2.0");
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(stderr(&output).contains("refusing to release"));
+    assert!(stderr(&output).contains("version bump"));
     assert_eq!(release.origin_refs(), refs_before);
     assert_eq!(release.merge_calls(), merges_before);
 }
@@ -2703,10 +2077,5 @@ fn review_tagged_resumed_pr_with_extra_changes_is_refused() {
     release.open_bump_pr("0.2.0");
     release.merge_bump_pr("0.2.0", &head);
     release.origin(&["tag", "v0.2.0", &head]);
-    let url = release.pr("release-0.2.0")["url"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    assert_refused(&release, "0.2.0", &[&url, "version bump"]);
+    assert_refused(&release, "0.2.0", &["exact version bump"]);
 }

@@ -369,11 +369,12 @@ fn wait_for_release(github: &GitHub, head: &str) -> Result<()> {
         let run = github.release_push_run("release.yml", "", head)?;
         if let Some(run) = &run {
             if run.status == "completed" {
-                ensure!(
-                    run.conclusion.as_deref() == Some("success"),
-                    "release workflow failed: {:?}; tag is left for the Day shift",
-                    run.conclusion
-                );
+                if run.conclusion.as_deref() != Some("success") {
+                    anyhow::bail!(
+                        "release workflow failed: {}; tag is left for the Day shift",
+                        github.release_failure(run.id)?
+                    );
+                }
                 return Ok(());
             }
         } else {

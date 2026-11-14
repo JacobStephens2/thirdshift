@@ -100,7 +100,7 @@ fn a_forged_supersedes_trailer_cannot_drop_another_unfinished_release() {
 
 use super::*;
 
-fn command(release: &Release, version: &str) -> Command {
+pub(super) fn command(release: &Release, version: &str) -> Command {
     let launch = release.maintainer();
     git(
         &launch,
@@ -122,11 +122,10 @@ fn command(release: &Release, version: &str) -> Command {
         ],
     );
     fs::create_dir_all(release.root().join("home/.thirdshift")).unwrap();
-    fs::write(
-        release.root().join("home/.thirdshift/config.toml"),
-        "[harness]\ndefault = 'claude'\n",
-    )
-    .unwrap();
+    let config = release.root().join("home/.thirdshift/config.toml");
+    if !config.exists() {
+        fs::write(config, "[harness]\ndefault = 'claude'\n").unwrap();
+    }
     let mut command = release.command(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &launch);
     command.arg("release");
     if !version.is_empty() {
@@ -326,31 +325,15 @@ fn native_review_accepts_edits_or_cancels_on_a_terminal() {
         let release = Release::new();
         release.ci_reports(GREEN);
         sandbox_summary(&release);
-        let prepared = command(&release, "0.2.0");
         let editor = release.bin().join("release-editor");
         write_executable(
             &editor,
             "#!/bin/sh\nprintf 'Edited release summary' > \"$1\"\n",
         );
-        let mut terminal = release.command(Path::new("script"), &release.maintainer());
-        for (key, value) in prepared.get_envs() {
-            if let Some(value) = value {
-                terminal.env(key, value);
-            } else {
-                terminal.env_remove(key);
-            }
-        }
-        let output = with_input(
-            terminal
-                .args([
-                    "-q",
-                    "-e",
-                    "-c",
-                    "\"$THIRDSHIFT_TEST_BINARY\" release --review 0.2.0",
-                    "/dev/null",
-                ])
-                .env("EDITOR", editor),
+        let output = release.run_on_terminal(
+            &["--review", "0.2.0"],
             answer,
+            &[("EDITOR", editor.to_str().unwrap())],
         );
         assert_eq!(
             output.status.success(),
@@ -706,6 +689,19 @@ fn record(release: &Release) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
+fn inbox(release: &Release) -> Value {
+    let output = release
+        .command(
+            Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+            &release.maintainer(),
+        )
+        .args(["status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    serde_json::from_str(&stdout(&output)).unwrap()
+}
+
 fn sandbox_summary(release: &Release) {
     sandbox_reply(release, "A sandboxed release summary (#2).", false);
 }
@@ -822,6 +818,8 @@ fn release_pass_automatic_selection_never_chooses_major_and_falls_back_once() {
         shipped(&release);
         if let Some(reply) = reply {
             sandbox_reply(&release, reply, true);
+        } else {
+            release.summary_says(" ");
         }
         let output = command(&release, "").output().unwrap();
         assert!(output.status.success(), "{}", stderr(&output));
@@ -987,6 +985,7 @@ fn native_release_publishes_green_content_without_reading_the_launch_tree() {
 #[test]
 fn native_release_summary_failure_keeps_generated_notes_outside_markers() {
     let release = Release::new();
+    release.summary_says(" ");
     release.ci_reports(GREEN);
     let output = command(&release, "0.2.0").output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
@@ -1167,6 +1166,12 @@ fn native_release_email_unless_merged_suppresses_success_and_emails_unmerged_pub
             if merge { "MERGED" } else { "OPEN" }
         );
         assert!(release.origin_tag("v0.2.0").is_some());
+        let status = inbox(&release);
+        assert_eq!(
+            status["commands"][0]["group"],
+            if merge { "done" } else { "needs you" },
+            "{status}"
+        );
         if !merge {
             assert!(stderr(&output).contains(
                 "GitHub Release was published, but the bump pull request was not merged"
@@ -1213,6 +1218,7 @@ fn native_release_stop_releases_locks_reservation_and_live_label() {
     }
     let live = record(&release);
     assert!(live["outcome"].is_null(), "{live}");
+    assert_eq!(inbox(&release)["commands"][0]["group"], "working");
     assert!(
         release.pr("release-0.2.0")["labels"]
             .as_array()
