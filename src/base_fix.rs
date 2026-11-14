@@ -315,10 +315,22 @@ impl BaseFix {
                 taken.local_work = local_work;
                 bail!("interrupted")
             }
+            // No route has Plan usage: the Run pauses with its Base fix.
+            Ended::Paused { log, local_work } => {
+                taken.local_work = local_work;
+                if let Some(log) = log {
+                    outside.step(format!("Base fix #{number} session trace: {log}"));
+                }
+                Err(crate::session::limits::PlanUsagePaused::recorded(
+                    crate::plan_usage::latest_limit().unwrap_or_default(),
+                    Some(format!("Base fix #{number} paused")),
+                ))
+            }
             Ended::Failed {
                 cause,
                 log,
                 local_work,
+                ..
             } => {
                 taken.local_work = local_work;
                 if let Some(log) = log {

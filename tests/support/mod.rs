@@ -996,6 +996,20 @@ test -f {root}/{COPY_REPLACED}
 
     /// Write `toml` as the User config, `~/.thirdshift/config.toml` under the
     /// scenario's `$HOME`, and return its path.
+    /// Save `harnesses` as this machine's Plan usage snapshot,
+    /// `~/.thirdshift/plan-usage.json`, each Harness's state by name.
+    pub fn plan_usage_is(&self, harnesses: Value) {
+        let path = self.path("home/.thirdshift/plan-usage.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, json!({ "harnesses": harnesses }).to_string()).unwrap();
+    }
+
+    /// This machine's saved Plan usage snapshot, as written.
+    pub fn saved_plan_usage(&self) -> Value {
+        serde_json::from_slice(&fs::read(self.path("home/.thirdshift/plan-usage.json")).unwrap())
+            .unwrap()
+    }
+
     pub fn user_config_is(&self, toml: &str) -> PathBuf {
         let dir = self.path("home/.thirdshift");
         fs::create_dir_all(&dir).unwrap();

@@ -17,6 +17,9 @@ pub(crate) struct Inbox {
     pub idle_passes: Vec<IdlePass>,
     pub pass_starts: Vec<PassStart>,
     pub github_quota_wait: Option<String>,
+    /// Every configured default route on this machine is unavailable by
+    /// Plan usage, so scheduled Passes skip.
+    pub plan_usage_banner: Option<String>,
     pub warning: Option<&'static str>,
     pub github_warning: Option<String>,
 }
@@ -866,6 +869,7 @@ pub(super) fn from_read(
         idle_passes: snapshot.idle_passes.clone(),
         pass_starts: snapshot.pass_starts.clone(),
         github_quota_wait: kept.quota_wait(),
+        plan_usage_banner: crate::plan_usage::banner(config),
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),
     })
@@ -1159,6 +1163,7 @@ mod tests {
             idle_passes: Vec::new(),
             pass_starts: Vec::new(),
             github_quota_wait: None,
+            plan_usage_banner: None,
             warning: None,
             github_warning: None,
         };

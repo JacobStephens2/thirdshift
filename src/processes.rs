@@ -294,8 +294,8 @@ struct CommandChoice {
 }
 
 impl CommandChoice {
-    fn of(asked: &Asked, settings: &harness::Settings) -> Self {
-        let choice = Choice::of(asked, settings);
+    fn of(asked: &Asked, config: &UserConfig) -> Self {
+        let choice = crate::asks::choice(asked, config);
         let sources = Sources {
             harness: source_from(choice.chosen_by),
             model: Source::word(&asked.model_and_effort.model, &choice.model),
@@ -386,7 +386,7 @@ impl std::fmt::Display for Source {
 fn source_from(chosen_by: ChosenBy) -> Source {
     match chosen_by {
         ChosenBy::Command => Source::Command,
-        ChosenBy::UserConfig | ChosenBy::SecurityConfig => Source::UserConfig,
+        ChosenBy::UserConfig | ChosenBy::Routes | ChosenBy::SecurityConfig => Source::UserConfig,
         ChosenBy::Default => Source::Default,
         ChosenBy::Step => Source::Step,
     }
@@ -662,12 +662,15 @@ fn run(command: &ProcessRun) -> Result<String> {
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
         let skip = |reason: &command_limit::NotAdmitted| {
-            let choice = Choice::of(&command.asked, &config.harness);
+            let choice = crate::asks::choice(&command.asked, &config);
             progress::step(reason);
             logs::skipped_process(&repo, name, &choice, reason);
             String::new()
         };
-        if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
+        let harness = crate::asks::choice(&command.asked, &config);
+        if let Some(skipped) =
+            command_limit::early_skip(&repo, config.command_limit, &harness, false)
+        {
             return Ok(skip(&skipped));
         }
         let base = match launch::checked_out_base() {
@@ -758,7 +761,7 @@ fn run(command: &ProcessRun) -> Result<String> {
 /// A stop after the email check and before any Step is still a failed Process.
 fn failed_before_steps(notification: RunNotification, error: anyhow::Error) -> anyhow::Error {
     let cause = format!("{error:#}");
-    let outcome = failure_outcome();
+    let outcome = failure_outcome(&error);
     logs::ended(outcome);
     logs::complete(outcome, Some(&cause));
     notify(
@@ -1288,7 +1291,7 @@ fn finish_step(
             progress::step(format_args!(
                 "step {}: {duration} {}: {} ({})",
                 step.log_name(),
-                failure_outcome(),
+                failure_outcome(&error),
                 one_line(&error),
                 step.log_context()
             ));
@@ -1810,13 +1813,16 @@ fn worktree_path<'a>(worktrees: &'a [OwnedWorktree], name: Option<&str>) -> &'a 
 fn classify(result: &Result<String>) -> (&'static str, Option<String>) {
     match result {
         Ok(_) => ("succeeded", None),
-        Err(error) => (failure_outcome(), Some(one_line(error))),
+        Err(error) => (failure_outcome(error), Some(one_line(error))),
     }
 }
 
-fn failure_outcome() -> &'static str {
+/// `interrupted`, `paused` for a Paused Command, or `failed`.
+fn failure_outcome(error: &anyhow::Error) -> &'static str {
     if interrupt::requested() {
         "interrupted"
+    } else if session::limits::plan_usage_paused(error).is_some() {
+        "paused"
     } else {
         "failed"
     }
@@ -2050,7 +2056,7 @@ fn prepare_from(
         .collect();
     let skip = source.issue_checkout.and(issue_worktree.as_deref());
     let worktrees = create_worktrees(source.git, source.commit, &file, skip)?;
-    let mut command = CommandChoice::of(asked, &config.harness);
+    let mut command = CommandChoice::of(asked, config);
     let mut steps = Vec::new();
     for step in &file.steps {
         let checkout = resolve_dir(

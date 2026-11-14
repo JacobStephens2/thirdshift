@@ -156,6 +156,11 @@ const OFFER_BASE_FIX: &str = "--offer-base-fix";
 /// on. Not `--harness`, which is the `harness` flag with its dashes.
 const SESSIONS_HARNESS: &str = "--sessions-harness";
 
+/// The hidden argument saying the child Run's sessions run on the first of
+/// the User config's `harness.routes`, which Plan usage may route each
+/// session Step away from. Without it, the child's Harness is pinned.
+const SESSIONS_ROUTED: &str = "--sessions-routed";
+
 /// The hidden argument followed by the Model the child Run's sessions run
 /// on. Without it, the Model is left to the Harness.
 const SESSIONS_MODEL: &str = "--sessions-model";
@@ -209,6 +214,9 @@ impl Given {
             append_choice(&mut args, default, DEFAULT_FLAGS);
         }
         append_choice(&mut args, &self.asks.harness, SESSION_FLAGS);
+        if self.asks.harness.chosen_by == ChosenBy::Routes {
+            args.push(SESSIONS_ROUTED);
+        }
         if let Some(security) = &self.asks.security_review_harness {
             append_choice(&mut args, security, REVIEW_FLAGS);
         }
@@ -328,6 +336,7 @@ pub struct Reader {
     security_close: bool,
     suppress_otlp: bool,
     sessions: PendingChoice,
+    sessions_routed: bool,
     review: PendingChoice,
     review_default: PendingChoice,
 }
@@ -386,6 +395,12 @@ impl Reader {
                     bail!("repeated argument: {arg}");
                 }
                 self.security_close = true;
+            }
+            SESSIONS_ROUTED => {
+                if self.sessions_routed {
+                    bail!("repeated argument: {arg}");
+                }
+                self.sessions_routed = true;
             }
             SUPPRESS_OTLP => {
                 if self.suppress_otlp {
@@ -481,12 +496,13 @@ impl Reader {
                 || self.security_close
                 || self.suppress_otlp
                 || self.sessions.is_given()
+                || self.sessions_routed
                 || self.review.is_given()
                 || self.review_default.is_given()
             {
                 bail!(
                     "only a child Ticket run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
-                     {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, \
+                     {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, {SESSIONS_ROUTED}, \
                      {SECURITY_REVIEW_HARNESS}, {SECURITY_REVIEW_MODEL}, \
                      {SECURITY_REVIEW_EFFORT}, {SECURITY_REVIEW_DEFAULT}, \
                      {SECURITY_REVIEW_DEFAULT_MODEL}, {SECURITY_REVIEW_DEFAULT_EFFORT}, {LOGS_COMMAND} or \
@@ -502,7 +518,14 @@ impl Reader {
         let stamp = self.stamp.with_context(|| format!("missing {STAMP}"))?;
         let harness = self
             .sessions
-            .finish(SESSION_FLAGS, ChosenBy::Command)?
+            .finish(
+                SESSION_FLAGS,
+                if self.sessions_routed {
+                    ChosenBy::Routes
+                } else {
+                    ChosenBy::Command
+                },
+            )?
             .with_context(|| format!("missing {SESSIONS_HARNESS}"))?;
         Ok(Some(Given {
             process: self.process,
@@ -550,6 +573,12 @@ pub enum Ended {
     /// Why, and its session trace, as it reported them.
     Failed {
         cause: String,
+        log: Option<String>,
+        local_work: Vec<String>,
+    },
+    /// It ended as a Paused Command, as its exit code said: no route it may
+    /// take had available Plan usage. Neither success nor failure.
+    Paused {
         log: Option<String>,
         local_work: Vec<String>,
     },
@@ -909,6 +938,12 @@ impl Handle {
                 base_fix: ending.base_fix,
             },
             Err(_) if interrupt::requested() => Ended::Interrupted { local_work },
+            Err(failure) if status.code() == Some(i32::from(run_ending::PAUSED_EXIT)) => {
+                Ended::Paused {
+                    log: failure.log,
+                    local_work,
+                }
+            }
             Err(failure) => Ended::Failed {
                 cause: failure
                     .cause
@@ -1062,6 +1097,11 @@ mod tests {
             effort: Some("max".to_string()),
             ..on_claude.clone()
         };
+        let routed = Choice {
+            harness: Harness::Codex,
+            chosen_by: ChosenBy::Routes,
+            ..on_opus.clone()
+        };
         let reviewed_on_codex = Choice {
             harness: Harness::Codex,
             model: Some("gpt-6.1-sol".to_string()),
@@ -1072,7 +1112,7 @@ mod tests {
             chosen_by: ChosenBy::SecurityConfig,
             ..Choice::default()
         };
-        let harnesses = [on_claude, on_opus];
+        let harnesses = [on_claude, on_opus, routed];
         let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
         let securities = [
             (false, false, false),
@@ -1142,7 +1182,7 @@ mod tests {
     /// a kind, is rejected with.
     const ONLY_A_CHILD_RUN: &str = "only a child Ticket run is given --stamp, --allow-base-fix, \
         --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort, \
-        --security-review-harness, --security-review-model, --security-review-effort, \
+        --sessions-routed, --security-review-harness, --security-review-model, --security-review-effort, \
         --security-review-default, --security-review-default-model, --security-review-default-effort, \
         --logs-command or --suppress-otlp";
 

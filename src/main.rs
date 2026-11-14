@@ -77,6 +77,8 @@ mod pass;
 #[cfg(target_os = "linux")]
 mod pickup;
 #[cfg(target_os = "linux")]
+mod plan_usage;
+#[cfg(target_os = "linux")]
 mod poll;
 #[cfg(target_os = "linux")]
 mod process;
@@ -202,7 +204,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands and named Experiment waits, also shown in the Console
        thirdshift cronjobs [--fleet] [--json] | launch-directories [--json]  List schedules or Launch directories
-       thirdshift resources [--json]                  Show host memory, CPU load and session limits
+       thirdshift resources [--json] | plan-usage [[--fleet | --machine <name> | --local] [--json] | --clear [<harness>] [--json] | --push [<destination>]]  Show host limits, or subscription Plan usage across the Fleet; --clear forgets this machine's cooldowns, --push reports them
        thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
        thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -297,6 +299,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
+        Ok(Command::PlanUsage(action)) => return printed(plan_usage::execute(action)),
         Ok(Command::Config { key, value, json }) => {
             return printed(console::config(key.as_deref(), value.as_deref(), json));
         }

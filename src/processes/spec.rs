@@ -109,6 +109,7 @@ fn review_and_deliver(
     let opening = Opening {
         session: OpeningSession::SpecReview,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
+        continuation: None,
     };
     // The Spec review may have rewritten the body without the checklist.
     let delivered = outside.deliver(opening, checklist, steps);

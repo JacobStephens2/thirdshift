@@ -232,5 +232,8 @@ pub fn failure(error: &anyhow::Error) -> ExitCode {
     if crate::failed_run::out_of_disk(error) {
         progress::step(crate::failed_run::OUT_OF_DISK);
     }
+    if crate::session::limits::plan_usage_paused(error).is_some() {
+        return ExitCode::from(run_ending::PAUSED_EXIT);
+    }
     ExitCode::FAILURE
 }

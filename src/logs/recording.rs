@@ -530,7 +530,7 @@ impl<O: Outside> Record<O> {
         self.record_config_warnings(&root);
         // Quota waits compare this named Process's last reason even when
         // another Custom process fires between its Passes.
-        let history = if reason.is_quota_wait() {
+        let history = if reason.waits_on_the_machine() {
             History::ProcessSkip(name)
         } else {
             History::Kind(Kind::Process)
@@ -613,6 +613,9 @@ impl<O: Outside> Record<O> {
                 name: name.into(),
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
+                harness: None,
+                model: None,
+                effort: None,
                 suspended_seconds: 0,
                 suspensions: Vec::new(),
             });
@@ -620,6 +623,34 @@ impl<O: Outside> Record<O> {
             stage.session_log = facts.session_log.clone();
         }
         self.write_record();
+    }
+
+    /// Name what the current stage's session runs on.
+    pub(super) fn session_choice(&mut self, choice: &Choice) {
+        let Some((_, tree)) = &mut self.command_record else {
+            return;
+        };
+        if let Some(stage) = tree.active().stages.last_mut() {
+            stage.harness = Some(choice.harness.name().to_string());
+            stage.model = choice.model.clone();
+            stage.effort = choice.effort.clone();
+        }
+        self.write_record();
+    }
+
+    /// The Harness, Model and Effort the active run's latest implement
+    /// session ran on, as its record keeps them.
+    pub(super) fn implemented_on(&self) -> Option<(String, Option<String>, Option<String>)> {
+        let (_, tree) = self.command_record.as_ref()?;
+        let stage =
+            tree.active_ref().stages.iter().rev().find(|stage| {
+                stage.name == StageName::Implement.name() && stage.harness.is_some()
+            })?;
+        Some((
+            stage.harness.clone()?,
+            stage.model.clone(),
+            stage.effort.clone(),
+        ))
     }
 
     pub(super) fn quota_wait(&mut self, until: Option<&str>) {
@@ -661,6 +692,9 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         self.check_suspension();
+        if account.outcome == "paused" {
+            self.resumable_by_this_command();
+        }
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.finish(
@@ -690,6 +724,36 @@ impl<O: Outside> Record<O> {
     pub(super) fn resumable(&mut self, command: &str) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.resume_command = Some(command.into());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn handed_back_for_pickup(&mut self) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.handed_back_for_pickup = true;
+            if let Some(dispatched) = tree.active_dispatch() {
+                dispatched.handed_back_for_pickup = true;
+            }
+            self.write_record();
+        }
+    }
+
+    pub(super) fn recorded_handed_back_for_pickup(&self) -> bool {
+        self.command_record
+            .as_ref()
+            .is_some_and(|(_, tree)| tree.command.handed_back_for_pickup)
+    }
+
+    /// Keep this process's own command line as a Paused Command's resume
+    /// command, unless a more precise one, such as a Run's Continuation, is
+    /// already recorded.
+    pub(super) fn resumable_by_this_command(&mut self) {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Some((_, tree)) = &mut self.command_record
+            && tree.command.resume_command.is_none()
+            && let Ok(joined) = shlex::try_join(args.iter().map(String::as_str))
+        {
+            tree.command.resume_command = Some(format!("thirdshift {joined}"));
             self.write_record();
         }
     }
@@ -1041,7 +1105,7 @@ impl<O: Outside> Record<O> {
             };
             let last = match history {
                 History::Kind(kind) => activity::last_of(whole, kind),
-                History::ProcessSkip(name) => activity::last_process_skip(whole, name),
+                History::ProcessSkip(name) => activity::last_of_process(whole, name),
             };
             if last.map(|(_, text)| text) == Some(line) {
                 return Ok(());

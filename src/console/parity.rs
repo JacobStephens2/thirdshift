@@ -21,6 +21,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("CronJobs", "cronjobs"),
     ("LaunchDirectories", "launch-directories"),
     ("Resources", "resources"),
+    ("PlanUsage", "plan-usage"),
     ("Console", "console"),
     ("ConsoleInstall", "console install"),
     ("ConsolePassword", "console password"),
@@ -111,6 +112,11 @@ const ACTIONS: &[&str] = &[
     "metrics --fleet",
     "metrics --machine other",
     "metrics --push",
+    "plan-usage --fleet",
+    "plan-usage --machine other",
+    "plan-usage --local",
+    "plan-usage --clear agy",
+    "plan-usage --push",
     "update --check",
     "config spec.parallel",
     "config spec.parallel 3",
@@ -252,6 +258,22 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
         Command::Update { check, .. } => check.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
         Command::CronJobs { fleet, .. } => fleet.to_string(),
+        // Each machine choice reads differently; `--push` sends this
+        // machine's own view out.
+        Command::PlanUsage(action) => {
+            use crate::plan_usage::{Action, Selection};
+            match action {
+                Action::Show { selection, .. } => match selection {
+                    Selection::Default => "default",
+                    Selection::Fleet => "fleet",
+                    Selection::Machine(_) => "machine",
+                    Selection::Local => "local",
+                },
+                Action::Clear { .. } => "clear",
+                Action::Push { .. } => "push",
+            }
+            .to_owned()
+        }
         // `--machine` reads one Fleet machine through the same client;
         // `--push` sends this machine's own summary out.
         Command::Metrics(asked) => {

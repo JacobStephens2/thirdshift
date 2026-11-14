@@ -312,6 +312,7 @@ pub fn run(
         base,
         config.command_limit,
         Sharing::OneOfAKind(PassKind::Architect),
+        harness,
     ) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::NotAdmitted(running)) => {

@@ -170,6 +170,9 @@ pub enum ChosenBy {
     Command,
     /// The User config's `harness.default`.
     UserConfig,
+    /// The User config's `harness.routes`: Plan usage may move each of the
+    /// Command's session Steps to another route.
+    Routes,
     /// The User config's `security.harness`.
     SecurityConfig,
     /// Neither: Claude Code, the default.
@@ -343,6 +346,17 @@ pub fn warn_review_fallback(from: Harness, to: Harness, reason: &str) {
     ));
 }
 
+/// A routed Security review that could not start moves to its next
+/// configured route, with the same single-line warning.
+pub fn warn_review_reroute(from: Harness, to: Harness, reason: &str) {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::progress::step(format!(
+        "warning: Security review on {} can't be used ({reason}); reviewing on {}, its next route",
+        from.name(),
+        to.name()
+    ));
+}
+
 /// What a CLI said on stderr and stdout, trimmed, each on its own lines.
 fn said(output: &Output) -> String {
     [&output.stderr, &output.stdout]
@@ -379,6 +393,7 @@ impl fmt::Display for ChosenBy {
         f.write_str(match self {
             ChosenBy::Command => "the harness flag",
             ChosenBy::UserConfig => "harness.default in the User config",
+            ChosenBy::Routes => "harness.routes in the User config",
             ChosenBy::SecurityConfig => "security.harness in the User config",
             ChosenBy::Default => {
                 "the default, as neither the harness flag nor harness.default in the User \

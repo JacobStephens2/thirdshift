@@ -92,6 +92,7 @@ pub enum Command {
     Resources {
         json: bool,
     },
+    PlanUsage(crate::plan_usage::Action),
     Console {
         no_sign_in: bool,
     },
@@ -346,12 +347,18 @@ pub fn continuation(issue: &IssueUrl, asks: &crate::asks::Asks, is_spec: bool) -
         goal: Some(asks.goal),
         parallel: is_spec.then_some(asks.tickets_at_once),
         base_fix: Some(asks.base_fix.clone()),
-        harness: harness::Asked {
-            harness: Some(asks.harness.harness),
-            model_and_effort: crate::harness::ModelAndEffort {
-                model: asks.harness.model.clone(),
-                effort: asks.harness.effort.clone(),
-            },
+        // A Command routed by `harness.routes` continues routed, not pinned
+        // to the route its first Step happened to take.
+        harness: if asks.harness.chosen_by == harness::ChosenBy::Routes {
+            harness::Asked::default()
+        } else {
+            harness::Asked {
+                harness: Some(asks.harness.harness),
+                model_and_effort: crate::harness::ModelAndEffort {
+                    model: asks.harness.model.clone(),
+                    effort: asks.harness.effort.clone(),
+                },
+            }
         },
         security_fix: Some(if asks.security_fix {
             crate::security::FixAsk::Allow
@@ -938,6 +945,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 json,
             });
         }
+        Some("plan-usage") => return plan_usage(&args[1..]).map(Command::PlanUsage),
         Some("resources") => {
             return match &args[1..] {
                 [] => Ok(Command::Resources { json: false }),
@@ -1032,6 +1040,53 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     })))
+}
+
+/// `plan-usage [--fleet | --machine <name> | --local] [--json]`,
+/// `plan-usage --clear [<harness>] [--json]` or `plan-usage --push
+/// [<destination>]`, in any order. Clearing and pushing act on this machine
+/// alone.
+fn plan_usage(args: &[String]) -> Result<crate::plan_usage::Action> {
+    use crate::plan_usage::{Action, Selection};
+    let usage = "usage: thirdshift plan-usage [--fleet | --machine <name> | --local] [--json] | --clear [<harness>] [--json] | --push [<destination>]";
+    let (mut json, mut clear, mut harness) = (false, false, None);
+    let (mut push, mut destination) = (false, None);
+    let mut selection = Selection::Default;
+    let mut words = args.iter().peekable();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--json" if !json => json = true,
+            "--clear" if !clear => {
+                clear = true;
+                if let Some(name) = words.next_if(|name| !name.starts_with('-')) {
+                    harness = Some(crate::plan_usage::subscription_named(name)?);
+                }
+            }
+            "--push" if !push => {
+                push = true;
+                destination = words.next_if(|name| !name.starts_with('-')).cloned();
+            }
+            "--fleet" if selection == Selection::Default => selection = Selection::Fleet,
+            "--local" if selection == Selection::Default => selection = Selection::Local,
+            "--machine" if selection == Selection::Default => {
+                let name = words.next().context("--machine needs a Fleet name")?;
+                crate::config::console::fleet::validate_name(name)?;
+                selection = Selection::Machine(name.clone());
+            }
+            _ => bail!("{usage}"),
+        }
+    }
+    let shows = json || selection != Selection::Default;
+    Ok(match (clear, push) {
+        (true, true) => bail!("{usage}"),
+        (true, false) if selection != Selection::Default => bail!(
+            "--clear forgets this machine's cooldowns; run it on the Fleet machine or its Console\n{usage}"
+        ),
+        (true, false) => Action::Clear { harness, json },
+        (false, true) if shows => bail!("{usage}"),
+        (false, true) => Action::Push { destination },
+        (false, false) => Action::Show { selection, json },
+    })
 }
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {

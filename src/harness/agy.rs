@@ -13,6 +13,9 @@ use anyhow::Result;
 use std::path::Path;
 
 pub struct Agy;
+
+/// agy's per-session settings that keep it from spending credits.
+pub(crate) const NO_CREDITS: &str = r#"{"useG1Credits":false}"#;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Agy, &Agy);
 
 impl Adapter for Agy {
@@ -58,6 +61,12 @@ impl Adapter for Agy {
         }
         if let Some(id) = resume {
             args.extend(["--conversation".to_string(), id.to_string()]);
+        }
+        // Headless sessions hold included Plan windows ahead of personal
+        // Google AI credits, whatever agy's own settings say, unless the
+        // User config route they run as allows credits.
+        if !crate::plan_usage::credits_allowed(choice) {
+            args.extend(["--settings".to_string(), NO_CREDITS.to_string()]);
         }
         Invocation { args, stdin: None }
     }
@@ -199,7 +208,9 @@ mod tests {
                 "--effort",
                 "medium",
                 "--conversation",
-                "recorded-conversation"
+                "recorded-conversation",
+                "--settings",
+                r#"{"useG1Credits":false}"#
             ]
         );
         assert_eq!(resume.stdin, None);

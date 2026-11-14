@@ -253,7 +253,8 @@ impl RunNotification {
         let host = host::name();
         let command_log = logs::command_log_path();
         // Detection happens during sessions, after the choice was configured.
-        let configured = self.configured.as_ref().map(|choice| {
+        let configured = self.configured.as_ref().map(|configured| {
+            let choice = &logs::implemented_on(configured);
             if account.pre_audit_failure.is_some() {
                 return format!("{choice} (configured)");
             }
@@ -301,9 +302,11 @@ impl RunNotification {
                 ));
             }
         }
+        // A Paused Command a later Pickup run retakes needs no one, so it
+        // is saved but not emailed when only unmerged runs are.
+        let retaken = account.outcome == "paused" && crate::logs::recorded_handed_back_for_pickup();
         if let Some(resend) = self.resend
-            && account.outcome != "paused"
-            && !(self.unless_merged && account.merged_with_nothing_waiting())
+            && !(self.unless_merged && (account.merged_with_nothing_waiting() || retaken))
             && let Err(error) = resend.send(&subject, &text)
         {
             progress::step(format_args!(
@@ -603,8 +606,9 @@ fn body(
 }
 
 /// Promote usage exhaustion out of a Spec's Ticket details without replacing
-/// its other failure causes. Read only failed Harness diagnostics, never log
-/// paths or successful sessions that may have recovered from a limit.
+/// its other failure causes. Read only failed Harness diagnostics and paused
+/// Tickets, never log paths or successful sessions that may have recovered
+/// from a limit.
 fn usage_limit(account: &Account) -> Option<String> {
     let cause = account.ended.as_ref().err()?;
     if account.interrupted {
@@ -619,12 +623,18 @@ fn usage_limit(account: &Account) -> Option<String> {
                 && ErrorKind::from_text(diagnostic) == ErrorKind::UsageLimit
         })
     };
+    // A Ticket whose child Run paused, by its exit code, had no route with
+    // Plan usage.
+    let paused = format!(" paused: {}", crate::session::limits::NO_ROUTE);
     let tickets: Vec<_> = account
         .ticket_lines
         .iter()
-        .filter_map(|line| line.split_once(" failed: "))
-        .filter(|(_, cause)| limited(cause))
-        .map(|(ticket, _)| ticket)
+        .filter_map(|line| {
+            line.split_once(" failed: ")
+                .filter(|(_, cause)| limited(cause))
+                .map(|(ticket, _)| ticket)
+                .or_else(|| line.strip_suffix(paused.as_str()))
+        })
         .collect();
     let affected = if tickets.is_empty() {
         if !limited(cause.full()) {

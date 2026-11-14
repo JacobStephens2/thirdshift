@@ -24,6 +24,7 @@ mod live;
 mod logs;
 mod look;
 mod metrics;
+mod plan_usage;
 pub use look::{export_theme, import_theme, sections, theme};
 mod openapi;
 pub use openapi::print as openapi;
@@ -79,6 +80,8 @@ struct PageContext {
     consoles: Vec<crate::config::console::fleet::Entry>,
     theme: String,
     resources: resources::Status,
+    /// Any configured route on this machine used up or at its ceiling.
+    plan_usage: Option<plan_usage::Warning>,
 }
 
 impl PageContext {
@@ -89,6 +92,7 @@ impl PageContext {
             consoles: config.console.fleet.clone(),
             theme: config.console.theme.clone(),
             resources: resources::Status::new(config),
+            plan_usage: plan_usage::Warning::new(config),
         }
     }
 
@@ -126,8 +130,8 @@ pub(crate) enum Scope {
     Act,
     Run,
     Admin,
-    /// Upload only the token holder's own Run metrics summary; never a
-    /// person's scope (ADR 0026, #2036 Q4.2).
+    /// Upload only the token holder's own Run metrics summary and Plan
+    /// usage; never a person's scope (ADR 0026, #2036 Q4.2).
     Report,
 }
 
@@ -245,6 +249,9 @@ enum View {
     ResourceStatus,
     Metrics,
     ReportMetrics,
+    PlanUsage,
+    ClearPlanUsage,
+    ReportPlanUsage,
     Inbox,
     Inspect,
     Spans,
@@ -320,6 +327,9 @@ impl PageRoute {
                 | View::ResourceStatus
                 | View::Metrics
                 | View::ReportMetrics
+                | View::PlanUsage
+                | View::ClearPlanUsage
+                | View::ReportPlanUsage
                 | View::Inbox
                 | View::Inspect
                 | View::Spans
@@ -609,6 +619,40 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift metrics --push"],
         method: Method::POST,
         view: View::ReportMetrics,
+    },
+    PageRoute {
+        path: "/plan-usage",
+        api: "/api/v1/plan-usage",
+        scope: Some(Scope::Read),
+        cli: &[
+            "thirdshift plan-usage --json",
+            "thirdshift plan-usage --fleet --json",
+            "thirdshift plan-usage --machine other --json",
+            "thirdshift plan-usage --local --json",
+        ],
+        method: Method::GET,
+        view: View::PlanUsage,
+    },
+    PageRoute {
+        path: "/plan-usage/clear",
+        api: "/api/v1/plan-usage/clear",
+        scope: Some(Scope::Act),
+        cli: &[
+            "thirdshift plan-usage --clear --json",
+            "thirdshift plan-usage --clear agy --json",
+        ],
+        method: Method::POST,
+        view: View::ClearPlanUsage,
+    },
+    // The receiving end of `plan-usage --push` and the push after each
+    // Command: a `report` token uploads its holder's own Plan usage view.
+    PageRoute {
+        path: "/api/v1/plan-usage/report",
+        api: "/api/v1/plan-usage/report",
+        scope: Some(Scope::Report),
+        cli: &["thirdshift plan-usage --push"],
+        method: Method::POST,
+        view: View::ReportPlanUsage,
     },
     PageRoute {
         path: "/bug-origins",
@@ -1145,6 +1189,11 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::ReportMetrics, Method::POST) => {
                 post(metrics::receive).layer(DefaultBodyLimit::max(metrics::REPORT_LIMIT))
             }
+            (View::PlanUsage, Method::GET) => get(plan_usage::show),
+            (View::ClearPlanUsage, Method::POST) => post(plan_usage::clear),
+            (View::ReportPlanUsage, Method::POST) => {
+                post(plan_usage::receive).layer(DefaultBodyLimit::max(plan_usage::REPORT_LIMIT))
+            }
             (View::Inbox, Method::GET) => {
                 get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
             }
@@ -1377,6 +1426,18 @@ impl RowTemplate<'_> {
 /// A section's name as config and URLs spell it: `needs you` is `needs-you`.
 fn slug(group: &str) -> String {
     group.replace(' ', "-")
+}
+
+/// How long ago `at` was, roughly, as of now.
+fn age(at: &chrono::DateTime<chrono::Utc>) -> String {
+    let seconds = (chrono::Utc::now() - *at).num_seconds().max(0);
+    let (count, unit) = match seconds {
+        0..60 => return "just now".into(),
+        60..3_600 => (seconds / 60, "minute"),
+        3_600..86_400 => (seconds / 3_600, "hour"),
+        _ => (seconds / 86_400, "day"),
+    };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
 }
 
 fn query_value(query: &Option<String>, key: &str) -> String {

@@ -84,12 +84,18 @@ pub(super) fn last_of(tail: &str, kind: Kind) -> Option<(&str, &str)> {
     })
 }
 
-/// Compare the complete Process name: names can contain spaces and colons.
-pub(super) fn last_process_skip<'a>(tail: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+/// The time and unstamped text of the last line about Process `name` in
+/// the tail: a skip, or a start, Stop or end, so a run clears the last skip
+/// reason. Compare the complete Process name: names can contain spaces and
+/// colons.
+pub(super) fn last_of_process<'a>(tail: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+    let subject = format!("Process {name} ");
     lines(tail).rev().find(|(_, text)| {
-        text.rsplit_once(" skipped: ")
-            .and_then(|(subject, _)| subject.strip_prefix("Process "))
-            == Some(name)
+        text.strip_prefix(&subject).is_some_and(|rest| {
+            ["skipped: ", "started: ", "ended: ", "stopped "]
+                .iter()
+                .any(|word| rest.starts_with(word))
+        })
     })
 }
 

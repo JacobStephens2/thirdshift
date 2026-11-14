@@ -284,6 +284,7 @@ fn pass_choices<'a>(
             | args::Command::CronJobs { .. }
             | args::Command::LaunchDirectories { .. }
             | args::Command::Resources { .. }
+            | args::Command::PlanUsage(_)
             | args::Command::Console { .. }
             | args::Command::ConsoleInstall { .. }
             | args::Command::ConsolePassword(_)

@@ -129,6 +129,10 @@ pub(super) struct CommandRecord {
     pub limit: Option<crate::session::limits::Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
+    /// A Paused Command's Claim put `ready-for-agent` back, so a later
+    /// Pickup run retakes its issue: it sits in Done, not Needs you.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_back_for_pickup: bool,
     pub issue_branch: Option<String>,
     /// The selected Base branch for a Fix Pass repairing its CI, not its repair branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,6 +227,14 @@ pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
     pub session_log: Option<PathBuf>,
+    /// The Harness, Model and Effort the stage's latest session ran on: a
+    /// Step Plan usage routed runs on another route than the Command's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub suspended_seconds: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -575,6 +587,7 @@ impl CommandRecord {
             waiting_for: Vec::new(),
             limit: None,
             resume_command: None,
+            handed_back_for_pickup: false,
             issue_branch: None,
             base_branch: None,
             pull_request: None,

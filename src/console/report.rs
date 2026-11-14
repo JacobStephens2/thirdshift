@@ -1,8 +1,9 @@
-//! Outbound metrics reporting (CLI-only): pairing the Consoles this machine
-//! pushes its own Run metrics summary to, and the push itself, by hand with
-//! `metrics --push` or after each Command. A sleeping or NATted machine
-//! reaches an always-on Console this way without being reached inbound
-//! (#2036 Q4.2). No token enters arguments, output or User config.
+//! Outbound reporting (CLI-only): pairing the Consoles this machine pushes
+//! its own Run metrics summary and Plan usage to, and the push itself, by
+//! hand with `metrics --push` or `plan-usage --push`, or after each Command.
+//! A sleeping or NATted machine reaches an always-on Console this way
+//! without being reached inbound (#2036 Q4.2). No token enters arguments,
+//! output or User config.
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -13,6 +14,7 @@ use super::fleet::WhoamiIdentity;
 use crate::args::{MetricsArgs, MetricsGrain};
 use crate::config::{UserConfig, console::report::Destination};
 use crate::logs::metrics::fleet::MetricsReport;
+use crate::plan_usage::fleet::Report as PlanUsageReport;
 use crate::resend_key::Credentials;
 
 /// How long a push after a Command may wait on each Console.
@@ -155,15 +157,36 @@ fn list(json: bool) -> Result<String> {
         .join("\n"))
 }
 
-/// Push this machine's summary of each view `views` names, in order, to each
-/// report destination, or to the one `only` names. Each destination's
-/// outcome: its first refusal, or success.
-fn push(
-    config: &UserConfig,
-    views: &[MetricsArgs],
-    only: Option<&str>,
-    timeout: Duration,
-) -> Result<Vec<(String, Result<()>)>> {
+/// One thing this machine reports: the route on a Console it goes to, and
+/// its body, whose `machine` names the holder per destination.
+struct Outgoing {
+    route: &'static str,
+    body: serde_json::Value,
+}
+
+impl Outgoing {
+    fn metrics(report: &MetricsReport) -> Result<Self> {
+        Ok(Self {
+            route: "/api/v1/metrics/report",
+            body: serde_json::to_value(report)?,
+        })
+    }
+
+    fn plan_usage(report: &PlanUsageReport) -> Result<Self> {
+        Ok(Self {
+            route: "/api/v1/plan-usage/report",
+            body: serde_json::to_value(report)?,
+        })
+    }
+
+    /// Name it for `holder`, the machine the destination issued its token to.
+    fn name(&mut self, holder: &str) {
+        self.body["machine"] = holder.into();
+    }
+}
+
+/// The report destinations, or the one `only` names.
+fn destinations<'a>(config: &'a UserConfig, only: Option<&str>) -> Result<Vec<&'a Destination>> {
     let destinations: Vec<_> = config
         .console
         .report
@@ -176,20 +199,26 @@ fn push(
             "unknown report destination: {name}"
         );
     }
+    Ok(destinations)
+}
+
+/// Push each of `reports`, in order, to each of `destinations`. Each
+/// destination's outcome: its first refusal, or success.
+fn push(
+    destinations: Vec<&Destination>,
+    mut reports: Vec<Outgoing>,
+    timeout: Duration,
+) -> Result<Vec<(String, Result<()>)>> {
     if destinations.is_empty() {
         return Ok(Vec::new());
     }
     let credentials = Credentials::read()?;
-    let mut reports = views
-        .iter()
-        .map(|asked| MetricsReport::local(config, asked))
-        .collect::<Result<Vec<_>>>()?;
     let client = client(timeout)?;
     Ok(destinations
         .into_iter()
         .map(|destination| {
             let sent = reports.iter_mut().try_for_each(|report| {
-                report.machine = destination.holder.clone();
+                report.name(&destination.holder);
                 send(&client, &credentials, destination, report)
             });
             (destination.name.clone(), sent)
@@ -201,7 +230,7 @@ fn send(
     client: &reqwest::blocking::Client,
     credentials: &Credentials,
     destination: &Destination,
-    report: &MetricsReport,
+    report: &Outgoing,
 ) -> Result<()> {
     // Revalidate a hand-edited address before transmitting the saved token.
     address(&destination.address)?;
@@ -210,11 +239,12 @@ fn send(
         .with_context(|| format!("no report token saved for {}", destination.name))?;
     let response = client
         .post(format!(
-            "{}/api/v1/metrics/report",
-            destination.address.trim_end_matches('/')
+            "{}{}",
+            destination.address.trim_end_matches('/'),
+            report.route
         ))
         .bearer_auth(token)
-        .json(report)
+        .json(&report.body)
         .send()
         .map_err(|error| {
             anyhow::anyhow!(
@@ -243,11 +273,9 @@ fn send(
     Ok(())
 }
 
-/// `metrics --push [<destination>]`: fails unless every push succeeds.
-pub(crate) fn push_by_hand(asked: &MetricsArgs) -> Result<String> {
-    let config = UserConfig::load()?;
-    let only = asked.push_to.as_deref();
-    let pushed = push(&config, std::slice::from_ref(asked), only, BY_HAND)?;
+/// Each destination's outcome as one line, failing unless every push
+/// succeeded.
+fn by_hand(pushed: Vec<(String, Result<()>)>) -> Result<String> {
     ensure!(
         !pushed.is_empty(),
         "no report destinations; pair one with thirdshift console report add <name> <address>"
@@ -268,10 +296,34 @@ pub(crate) fn push_by_hand(asked: &MetricsArgs) -> Result<String> {
     Ok(text)
 }
 
+/// `metrics --push [<destination>]`: fails unless every push succeeds.
+pub(crate) fn push_by_hand(asked: &MetricsArgs) -> Result<String> {
+    let config = UserConfig::load()?;
+    let destinations = destinations(&config, asked.push_to.as_deref())?;
+    if destinations.is_empty() {
+        return by_hand(Vec::new());
+    }
+    let report = Outgoing::metrics(&MetricsReport::local(&config, asked)?)?;
+    by_hand(push(destinations, vec![report], BY_HAND)?)
+}
+
+/// `plan-usage --push [<destination>]`: this machine's saved Plan usage,
+/// failing unless every push succeeds.
+pub(crate) fn push_plan_usage_by_hand(only: Option<&str>) -> Result<String> {
+    let config = UserConfig::load()?;
+    let destinations = destinations(&config, only)?;
+    if destinations.is_empty() {
+        return by_hand(Vec::new());
+    }
+    let report = Outgoing::plan_usage(&PlanUsageReport::local(&config)?)?;
+    by_hand(push(destinations, vec![report], BY_HAND)?)
+}
+
 /// After a Command: push every report destination the whole history by day,
-/// which stands in for each window's view, then the default view, each send
-/// bounded by a short timeout. Never fails the Command: an offline or
-/// refusing Console only earns a warning.
+/// which stands in for each window's view, then the default view, then this
+/// machine's saved Plan usage, each send bounded by a short timeout. Never
+/// fails the Command: an offline or refusing Console only earns a warning.
+/// Nothing is pushed between Commands.
 pub(crate) fn after_command() {
     let Ok(config) = UserConfig::load() else {
         return;
@@ -283,23 +335,25 @@ pub(crate) fn after_command() {
         grain: Some(MetricsGrain::Day),
         ..MetricsArgs::default()
     };
-    match push(
-        &config,
-        &[daily, MetricsArgs::default()],
-        None,
-        AFTER_COMMAND,
-    ) {
+    let reports = [daily, MetricsArgs::default()]
+        .iter()
+        .map(|asked| Outgoing::metrics(&MetricsReport::local(&config, asked)?))
+        .chain([PlanUsageReport::local(&config).and_then(|report| Outgoing::plan_usage(&report))])
+        .collect::<Result<Vec<_>>>();
+    let pushed =
+        reports.and_then(|reports| push(destinations(&config, None)?, reports, AFTER_COMMAND));
+    match pushed {
         Ok(pushed) => {
             for (name, sent) in pushed {
                 if let Err(error) = sent {
                     crate::progress::step(format_args!(
-                        "warning: metrics not reported to {name}: {error:#}"
+                        "warning: metrics and Plan usage not reported to {name}: {error:#}"
                     ));
                 }
             }
         }
-        Err(error) => {
-            crate::progress::step(format_args!("warning: metrics not reported: {error:#}"))
-        }
+        Err(error) => crate::progress::step(format_args!(
+            "warning: metrics and Plan usage not reported: {error:#}"
+        )),
     }
 }
