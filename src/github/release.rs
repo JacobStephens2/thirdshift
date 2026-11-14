@@ -13,14 +13,39 @@ pub(crate) struct ReleasePushRun {
     pub conclusion: Option<String>,
 }
 
+pub(crate) struct ReleasePr {
+    pub pr: PullRequest,
+    pub title: String,
+    pub merge_commit: Option<String>,
+}
+
+impl ReleasePr {
+    fn from_json(value: Value) -> Result<Self> {
+        let pr = PullRequest::from_json(&value)?;
+        let title = value["title"]
+            .as_str()
+            .context("release PR has no title")?
+            .to_owned();
+        let merge_commit = value["mergeCommit"]["oid"].as_str().map(str::to_owned);
+        Ok(Self {
+            pr,
+            title,
+            merge_commit,
+        })
+    }
+}
+
 impl GitHub {
     pub(crate) fn close_superseded_release(&self, version: &str) -> Result<()> {
         for pr in self.release_prs()? {
-            if pr["headRefName"] == format!("release-{version}") && pr["state"] == "OPEN" {
-                let url = pr["url"]
-                    .as_str()
-                    .context("superseded release PR has no URL")?;
-                self.gh_stdout(&["pr", "close", url, "--repo", crate::release::REPOSITORY])?;
+            if pr.pr.head == format!("release-{version}") && pr.pr.state == PrState::Open {
+                self.gh_stdout(&[
+                    "pr",
+                    "close",
+                    &pr.pr.url,
+                    "--repo",
+                    crate::release::REPOSITORY,
+                ])?;
             }
         }
         Ok(())
@@ -60,12 +85,13 @@ impl GitHub {
         Ok(!draft)
     }
 
-    pub(crate) fn release_prs(&self) -> Result<Vec<Value>> {
-        serde_json::from_value(self.gh_json(&[
+    pub(crate) fn release_prs(&self) -> Result<Vec<ReleasePr>> {
+        let values: Vec<Value> = serde_json::from_value(self.gh_json(&[
             "pr", "list", "--repo", crate::release::REPOSITORY,
             "--state", "all", "--search", "head:release-", "--limit", "1000", "--json",
-            "url,title,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeCommit",
-        ])?).map_err(Into::into)
+            "number,url,title,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeCommit",
+        ])?)?;
+        values.into_iter().map(ReleasePr::from_json).collect()
     }
 
     pub(crate) fn release_push_run(

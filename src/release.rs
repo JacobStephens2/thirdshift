@@ -173,7 +173,7 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                     if pass {
                         logs::started(logs::Work::ReleaseRun(&repo), choice);
                     }
-                    cut
+                    *cut
                 }
                 recovery::Discovery::Fresh { previous } => {
                     if let Some(wanted) = &explicit {
@@ -248,12 +248,14 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
         workflow::finish(
             git,
             &github,
-            &repo,
             &mut cut,
             &request,
-            choice,
+            &mut workflow::Notes {
+                repo: &repo,
+                choice,
+                trace: &mut trace,
+            },
             automatic_summary,
-            &mut trace,
             &mut pr_url,
         )?;
         Ok(Some(Ended {
@@ -323,6 +325,22 @@ fn main_version(git: &Git) -> Result<Version> {
     Version::parse(current)
 }
 
+fn bump_identity(snapshot: &crate::github::PrSnapshot, branch: &str) -> Result<()> {
+    ensure!(
+        !snapshot.from_fork && snapshot.pr.head == branch && snapshot.pr.base == "main",
+        "{} changed release PR identity; inspect it before retrying",
+        snapshot.pr.url
+    );
+    ensure!(
+        !snapshot.pr.is_draft,
+        "{} is a draft; review it and run gh pr ready {}, then retry thirdshift release {}",
+        snapshot.pr.url,
+        snapshot.pr.url,
+        branch.trim_start_matches("release-")
+    );
+    Ok(())
+}
+
 fn check_bump(
     github: &GitHub,
     pr: &crate::review::PullRequestUrl,
@@ -332,13 +350,9 @@ fn check_bump(
     let snapshot = github
         .pr_snapshot(&pr.issue, &pr.url)?
         .context("release bump pull request disappeared")?;
+    bump_identity(&snapshot, branch)?;
     ensure!(
-        snapshot.pr.state == PrState::Open
-            && !snapshot.pr.is_draft
-            && !snapshot.from_fork
-            && snapshot.pr.head == branch
-            && snapshot.pr.base == "main"
-            && snapshot.head_commit == head,
+        snapshot.pr.state == PrState::Open && snapshot.head_commit == head,
         "release bump pull request is no longer open and ready at the validated head; the Day shift must review it"
     );
     ensure!(
@@ -435,7 +449,9 @@ impl Isolated {
         let template = tempfile::Builder::new()
             .prefix("thirdshift-release-template-")
             .tempdir()?;
-        let git = Git::new(directory.path());
+        let repository = directory.path().join("repository");
+        fs::create_dir(&repository)?;
+        let git = Git::new(repository);
         git_run(
             &git,
             &[

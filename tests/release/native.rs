@@ -1,4 +1,55 @@
 //! The installed binary's Release run, using the same real origin as the legacy flow.
+#[test]
+fn native_pass_quietly_skips_human_blocked_superseded_cuts() {
+    for blocker in ["draft", "foreign"] {
+        let release = Release::new();
+        release.push_bump("0.2.0");
+        release.open_bump_pr("0.2.0");
+        release.push_bump("1.0.0");
+        let contributor = release.contributor();
+        git(&contributor, &["checkout", "-q", "release-1.0.0"]);
+        git(
+            &contributor,
+            &[
+                "commit",
+                "--amend",
+                "-q",
+                "-m",
+                "Release 1.0.0\n\nThirdshift-Supersedes: 0.2.0",
+            ],
+        );
+        git(
+            &contributor,
+            &["push", "-q", "--force", "origin", "release-1.0.0"],
+        );
+        if blocker == "draft" {
+            release.gh(&["fake", "pr", "release-0.2.0", "isDraft", "true"]);
+        } else {
+            release.push_change_to_bump("0.2.0", BumpChange::AddedFile);
+        }
+        let before = release.origin_refs();
+        for _ in 0..2 {
+            let output = command(&release, "").output().unwrap();
+            assert!(output.status.success(), "{blocker}: {}", stderr(&output));
+            assert!(output.stdout.is_empty(), "{blocker}: {}", stdout(&output));
+            assert!(output.stderr.is_empty(), "{blocker}: {}", stderr(&output));
+        }
+        assert_eq!(release.origin_refs(), before);
+        let activity = fs::read_to_string(
+            release
+                .root()
+                .join("home/.thirdshift/logs/JacobStephens2/thirdshift/activity.log"),
+        )
+        .unwrap();
+        assert_eq!(
+            activity.matches("Release run skipped:").count(),
+            1,
+            "{activity}"
+        );
+        assert!(activity.contains("0.2.0"), "{activity}");
+    }
+}
+
 use super::*;
 
 fn command(release: &Release, version: &str) -> Command {

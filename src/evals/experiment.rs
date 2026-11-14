@@ -361,7 +361,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
             let tasks = tasks(&suites_root, &description.suites)?;
             deciders::check(&description.bar, &tasks)?;
             if options.release
-                && !release::supports_trials(&repository, &root, &description.baseline.commit)?
+                && !release::supports_trials(repository, &root, &description.baseline.commit)?
             {
                 return Ok(None);
             }
@@ -476,7 +476,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
                     Some(serde_json::from_slice(&std::fs::read(record)?)?);
             } else {
                 experiment.description.prepared =
-                    Some(arms::prepare(&repository, requested, &record)?);
+                    Some(arms::prepare(repository, requested, &record)?);
             }
             let prepared = experiment
                 .description

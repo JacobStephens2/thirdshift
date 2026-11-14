@@ -2,8 +2,8 @@
 //! must be reproducible from main with only the exact manifest/lockfile bump.
 use std::collections::BTreeMap;
 
+use crate::github::release::ReleasePr;
 use anyhow::{Context, Result, ensure};
-use serde_json::Value;
 
 use super::*;
 
@@ -62,19 +62,10 @@ impl Cut {
             let snapshot = github
                 .pr_snapshot(&pr.issue, &pr.url)?
                 .context("release PR disappeared")?;
+            bump_identity(&snapshot, &self.branch())?;
             ensure!(
-                !snapshot.from_fork
-                    && snapshot.pr.head == self.branch()
-                    && snapshot.pr.base == "main"
-                    && snapshot.pr.state != PrState::Closed,
+                snapshot.pr.state != PrState::Closed,
                 "{} identity/state changed; inspect it before retrying thirdshift release {}",
-                pr.url,
-                self.version
-            );
-            ensure!(
-                !snapshot.pr.is_draft,
-                "{} is a draft; review it and run gh pr ready {}, then thirdshift release {}",
-                pr.url,
                 pr.url,
                 self.version
             );
@@ -87,10 +78,11 @@ impl Cut {
                 let input = github
                     .release_prs()?
                     .into_iter()
-                    .find(|row| row["url"] == pr.url)
+                    .find(|row| row.pr.url == pr.url)
                     .context("merged release PR disappeared")?;
-                let merge = input["mergeCommit"]["oid"]
-                    .as_str()
+                let merge = input
+                    .merge_commit
+                    .as_deref()
                     .context("merged release PR has no merge commit")?;
                 git_run(git, &["fetch", "--quiet", "origin", merge])?;
                 format!("{merge}^1")
@@ -170,10 +162,10 @@ impl Cut {
                 self.expected_tag = None;
             }
         }
-        if let Some(pr) = &self.pr {
-            if github.pr_state(&pr.issue, &pr.url)? == PrState::Merged {
-                self.pr = None;
-            }
+        if let Some(pr) = &self.pr
+            && github.pr_state(&pr.issue, &pr.url)? == PrState::Merged
+        {
+            self.pr = None;
         }
         self.commit(git)?;
         self.recut = true;
@@ -183,13 +175,47 @@ impl Cut {
 
 pub(super) enum Discovery {
     Fresh { previous: Option<String> },
-    Resume(Cut),
+    Resume(Box<Cut>),
     Blocked(String),
+}
+
+struct Unfinished {
+    version: String,
+    branch_head: Option<String>,
+    tag_head: Option<String>,
+    pr: Option<ReleasePr>,
+}
+
+impl Unfinished {
+    fn new(version: &str) -> Self {
+        Self {
+            version: version.into(),
+            branch_head: None,
+            tag_head: None,
+            pr: None,
+        }
+    }
 }
 
 /// Tags are inspected newest first, stopping at the newest published Release.
 /// Failed publication lookups are human blockers, including during Passes.
 pub(super) fn discover(
+    git: &Git,
+    launch: &Git,
+    github: &GitHub,
+    wanted: Option<&str>,
+    pinned: Option<Bump>,
+) -> Result<Discovery> {
+    match inspect(git, launch, github, wanted, pinned) {
+        Ok(discovery) => Ok(discovery),
+        Err(error) if !interrupt::requested() => Ok(Discovery::Blocked(format!(
+            "unfinished release discovery: {error:#}"
+        ))),
+        Err(error) => Err(error),
+    }
+}
+
+fn inspect(
     git: &Git,
     launch: &Git,
     github: &GitHub,
@@ -207,8 +233,7 @@ pub(super) fn discover(
             "refs/tags/v*",
         ],
     )?;
-    let mut live: BTreeMap<Version, (String, Option<String>, Option<String>, Option<Value>)> =
-        BTreeMap::new();
+    let mut live: BTreeMap<Version, Unfinished> = BTreeMap::new();
     let mut tags = Vec::new();
     for row in refs.lines() {
         let Some((sha, reference)) = row.split_once('\t') else {
@@ -216,12 +241,14 @@ pub(super) fn discover(
         };
         if let Some(version) = reference.strip_prefix("refs/heads/release-") {
             if let Ok(parsed) = Version::parse(version) {
-                live.insert(parsed, (version.into(), Some(sha.into()), None, None));
+                let mut unfinished = Unfinished::new(version);
+                unfinished.branch_head = Some(sha.into());
+                live.insert(parsed, unfinished);
             }
-        } else if let Some(version) = reference.strip_prefix("refs/tags/v") {
-            if let Ok(parsed) = Version::parse(version) {
-                tags.push((parsed, version.to_owned()));
-            }
+        } else if let Some(version) = reference.strip_prefix("refs/tags/v")
+            && let Ok(parsed) = Version::parse(version)
+        {
+            tags.push((parsed, version.to_owned()));
         }
     }
     tags.sort_by(|a, b| b.0.cmp(&a.0));
@@ -237,7 +264,9 @@ pub(super) fn discover(
             }
             Ok(false) => {
                 let head = git_run(git, &["rev-parse", &format!("{tag}^{{commit}}")])?;
-                live.entry(parsed).or_insert((version, None, None, None)).2 = Some(head);
+                live.entry(parsed)
+                    .or_insert_with(|| Unfinished::new(&version))
+                    .tag_head = Some(head);
             }
             Err(error) => {
                 return Ok(Discovery::Blocked(format!(
@@ -247,86 +276,97 @@ pub(super) fn discover(
         }
     }
     for pr in prs {
-        let Some(version) = pr["headRefName"]
-            .as_str()
-            .and_then(|s| s.strip_prefix("release-"))
-        else {
+        let Some(version) = pr.pr.head.strip_prefix("release-") else {
             continue;
         };
         let Ok(parsed) = Version::parse(version) else {
             continue;
         };
-        if pr["state"] == "OPEN" || wanted == Some(version) || live.contains_key(&parsed) {
+        if pr.pr.state == PrState::Open || wanted == Some(version) || live.contains_key(&parsed) {
             let entry = live
                 .entry(parsed)
-                .or_insert((version.into(), None, None, None));
+                .or_insert_with(|| Unfinished::new(version));
             // GitHub lists newest first. Never substitute an older closed PR.
-            if entry.3.is_none() {
-                entry.3 = Some(pr);
+            if entry.pr.is_none() {
+                entry.pr = Some(pr);
             }
         }
     }
     live.retain(|version, entry| {
         boundary.as_ref().is_none_or(|latest| version > latest)
-            || entry.3.as_ref().is_some_and(|pr| pr["state"] == "OPEN")
-            || wanted == Some(&entry.0)
+            || entry
+                .pr
+                .as_ref()
+                .is_some_and(|pr| pr.pr.state == PrState::Open)
+            || wanted == Some(&entry.version)
     });
     if live.len() > 1 {
         let mut superseded = Vec::new();
         for entry in live.values() {
-            let Some(head) = &entry.1 else { continue };
+            let Some(head) = &entry.branch_head else {
+                continue;
+            };
             git_run(git, &["fetch", "--quiet", "origin", head])?;
-            if let Some(old) = supersedes(git, head)? {
-                if let Some(prior) = live.get(&Version::parse(&old)?) {
-                    let old_head = prior
-                        .1
+            if let Some(old) = supersedes(git, head)?
+                && let Some(prior) = live.get(&Version::parse(&old)?)
+            {
+                let old_head = prior
+                    .branch_head
+                    .as_ref()
+                    .or(prior.tag_head.as_ref())
+                    .context("superseded release has no head")?;
+                git_run(git, &["fetch", "--quiet", "origin", old_head])?;
+                let base = git_run(git, &["merge-base", head, "origin/main"])?;
+                let old_base = git_run(git, &["merge-base", old_head, "origin/main"])?;
+                ensure!(
+                    prior
+                        .pr
                         .as_ref()
-                        .or(prior.2.as_ref())
-                        .context("superseded release has no head")?;
-                    git_run(git, &["fetch", "--quiet", "origin", old_head])?;
-                    let base = git_run(git, &["merge-base", head, "origin/main"])?;
-                    let old_base = git_run(git, &["merge-base", old_head, "origin/main"])?;
-                    ensure!(
-                        prior
-                            .3
-                            .as_ref()
-                            .is_none_or(|pr| pr["isDraft"] != true && pr["state"] != "CLOSED"),
-                        "superseded release {old} requires human review"
-                    );
-                    ensure!(
-                        !github.release_published(&format!("v{old}"))?,
-                        "superseded release {old} was published; inspect both cuts"
-                    );
-                    exact_bump(git, &base, head, &entry.0)?;
-                    exact_bump(git, &old_base, old_head, &old)?;
-                    superseded.push(Version::parse(&old)?);
-                }
+                        .is_none_or(|pr| !pr.pr.is_draft && pr.pr.state != PrState::Closed),
+                    "superseded release {old} requires human review"
+                );
+                ensure!(
+                    !github.release_published(&format!("v{old}"))?,
+                    "superseded release {old} was published; inspect both cuts"
+                );
+                exact_bump(git, &base, head, &entry.version)?;
+                exact_bump(git, &old_base, old_head, &old)?;
+                superseded.push(Version::parse(&old)?);
             }
         }
         for old in superseded {
             live.remove(&old);
         }
     }
-    if let Some(wanted) = wanted {
-        if let Some(other) = live.values().find(|entry| entry.0 != wanted) {
-            return Ok(Discovery::Blocked(format!(
-                "unfinished release {} is live; finish it with thirdshift release {} before releasing {wanted}",
-                other.0, other.0
-            )));
-        }
+    if let Some(wanted) = wanted
+        && let Some(other) = live.values().find(|entry| entry.version != wanted)
+    {
+        return Ok(Discovery::Blocked(format!(
+            "unfinished release {} is live; finish it with thirdshift release {} before releasing {wanted}",
+            other.version, other.version
+        )));
     }
     if live.len() > 1 {
         return Ok(Discovery::Blocked(format!(
             "multiple unfinished releases: {}; finish or remove the obsolete cuts before retrying",
             live.values()
-                .map(|e| e.0.as_str())
+                .map(|entry| entry.version.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         )));
     }
-    let Some((_, (version, branch_head, tagged, pr))) = live.into_iter().next() else {
+    let Some((
+        _,
+        Unfinished {
+            version,
+            branch_head,
+            tag_head: tagged,
+            pr,
+        },
+    )) = live.into_iter().next()
+    else {
         return Ok(match pinned_cut(launch, git, wanted, previous.clone()) {
-            Ok(Some(cut)) => Discovery::Resume(cut),
+            Ok(Some(cut)) => Discovery::Resume(Box::new(cut)),
             Ok(None) => Discovery::Fresh { previous },
             Err(error) => Discovery::Blocked(format!("unfinished local release: {error:#}")),
         });
@@ -334,19 +374,27 @@ pub(super) fn discover(
     let result = (|| -> Result<Cut> {
         let tag = format!("v{version}");
         let published = github.release_published(&tag)?;
+        let expected_tag =
+            git_optional(git, &["rev-parse", "--verify", &format!("refs/tags/{tag}")])?;
+        let tagged = if expected_tag.is_some() {
+            Some(git_run(
+                git,
+                &["rev-parse", &format!("refs/tags/{tag}^{{commit}}")],
+            )?)
+        } else {
+            tagged
+        };
         let pr = pr
             .map(|pr| -> Result<_> {
                 ensure!(
-                    pr["title"] == format!("Release {version}"),
+                    pr.title == format!("Release {version}"),
                     "release PR has an unexpected title"
                 );
                 ensure!(
-                    pr["state"] != "CLOSED",
+                    pr.pr.state != PrState::Closed,
                     "release {version} was closed; reopen its PR before retrying"
                 );
-                crate::review::PullRequestUrl::parse(
-                    pr["url"].as_str().context("release PR has no URL")?,
-                )
+                crate::review::PullRequestUrl::parse(&pr.pr.url)
             })
             .transpose()?;
         let head = if let Some(pr) = &pr {
@@ -371,21 +419,17 @@ pub(super) fn discover(
             recut: false,
             supersedes: None,
             expected_branch: branch_head,
-            expected_tag: git_optional(
-                git,
-                &["rev-parse", "--verify", &format!("refs/tags/{tag}")],
-            )?,
+            expected_tag,
         };
         cut.validate(git, github)?;
         cut.supersedes = supersedes(git, &cut.head)?;
-        if cut.tagged.is_none() {
-            if let Some(previous) = &cut.previous {
-                if git_run(git, &["merge-base", previous, &cut.base])?
-                    != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
-                {
-                    cut.recut(git, github, pinned)?;
-                }
-            }
+        if cut.tagged.is_none()
+            && !cut.published
+            && let Some(previous) = &cut.previous
+            && git_run(git, &["merge-base", previous, &cut.base])?
+                != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
+        {
+            cut.recut(git, github, pinned)?;
         }
         if let Some(tagged) = cut.tagged.clone() {
             ensure!(
@@ -428,7 +472,7 @@ pub(super) fn discover(
         Ok(cut)
     })();
     match result {
-        Ok(cut) => Ok(Discovery::Resume(cut)),
+        Ok(cut) => Ok(Discovery::Resume(Box::new(cut))),
         Err(error) => Ok(Discovery::Blocked(format!("unfinished release: {error:#}"))),
     }
 }
@@ -499,12 +543,11 @@ fn pinned_cut(
             git_run(git, &["merge-base", base, "origin/main"])? == base,
             "candidate for {version} is not content from origin/main; inspect refs/thirdshift/release-candidates/{version}"
         );
-        if let Some(tag) = &previous {
-            if git_run(git, &["merge-base", tag, base])?
+        if let Some(tag) = &previous
+            && git_run(git, &["merge-base", tag, base])?
                 != git_run(git, &["rev-parse", &format!("{tag}^{{commit}}")])?
-            {
-                continue;
-            }
+        {
+            continue;
         }
         if parsed <= main_version(git)? {
             ensure!(

@@ -1,15 +1,19 @@
 //! Publication ordering and one targeted Fix attempt for a captured bump PR.
 use super::*;
 
+pub(super) struct Notes<'a> {
+    pub repo: &'a Repo,
+    pub choice: &'a mut Choice,
+    pub trace: &'a mut Option<std::path::PathBuf>,
+}
+
 pub(super) fn finish(
     git: &Git,
     github: &GitHub,
-    repo: &Repo,
     cut: &mut recovery::Cut,
     request: &Request<'_>,
-    choice: &mut Choice,
+    notes: &mut Notes<'_>,
     automatic: Option<Option<String>>,
-    trace: &mut Option<std::path::PathBuf>,
     pr_url: &mut Option<String>,
 ) -> Result<()> {
     let mut label = None;
@@ -17,16 +21,7 @@ pub(super) fn finish(
         let same_tag = cut.tagged.as_deref() == Some(&cut.head);
         if cut.tagged.is_none() || cut.recut || !same_tag {
             controls::experiment(git, cut, request.with_experiment)?;
-            let body = body(
-                git,
-                github,
-                repo,
-                cut,
-                request.review,
-                choice,
-                automatic,
-                trace,
-            )?;
+            let body = notes.body(git, github, cut, request.review, automatic)?;
             fetch(git)?;
             recovery::ensure_previous(git, github, cut.previous.as_deref())?;
             if !(cut.recut
@@ -54,7 +49,7 @@ pub(super) fn finish(
         if !same_tag || cut.tagged.is_none() {
             if !merged {
                 label = Some(LiveLabel::take(github, pr)?);
-                ready(git, github, repo, cut, request, choice, trace, &mut label)?;
+                ready(git, github, cut, request, notes, &mut label)?;
             }
             ensure!(
                 !github.release_published(&cut.tag())?,
@@ -76,25 +71,26 @@ pub(super) fn finish(
                     &format!("{}:{tag_ref}", cut.head),
                 ],
             )?;
-        } else if let Some(run) = github.release_push_run("release.yml", "", &cut.head)? {
-            if run.status == "completed" && run.conclusion.as_deref() != Some("success") {
-                github.rerun_failed_jobs(&pr.issue, run.id)?;
-                let mut line = poll::WaitingLine::new();
-                loop {
-                    let next = github
-                        .release_push_run("release.yml", "", &cut.head)?
-                        .context("release workflow disappeared after rerun")?;
-                    if next.attempt != run.attempt
-                        || next.status != run.status
-                        || next.conclusion != run.conclusion
-                    {
-                        break;
-                    }
-                    if line.should_report(()) {
-                        progress::step("waiting for failed release workflow rerun to start");
-                    }
-                    poll::pause()?;
+        } else if let Some(run) = github.release_push_run("release.yml", "", &cut.head)?
+            && run.status == "completed"
+            && run.conclusion.as_deref() != Some("success")
+        {
+            github.rerun_failed_jobs(&pr.issue, run.id)?;
+            let mut line = poll::WaitingLine::new();
+            loop {
+                let next = github
+                    .release_push_run("release.yml", "", &cut.head)?
+                    .context("release workflow disappeared after rerun")?;
+                if next.attempt != run.attempt
+                    || next.status != run.status
+                    || next.conclusion != run.conclusion
+                {
+                    break;
                 }
+                if line.should_report(()) {
+                    progress::step("waiting for failed release workflow rerun to start");
+                }
+                poll::pause()?;
             }
         }
         wait_for_release(github, &cut.head)?;
@@ -134,75 +130,76 @@ pub(super) fn finish(
     Ok(())
 }
 
-fn body(
-    git: &Git,
-    github: &GitHub,
-    repo: &Repo,
-    cut: &recovery::Cut,
-    review: bool,
-    choice: &mut Choice,
-    automatic: Option<Option<String>>,
-    trace: &mut Option<std::path::PathBuf>,
-) -> Result<String> {
-    let diff = git_run(
-        git,
-        &[
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            &cut.base,
-            &cut.head,
-            "--",
-            "Cargo.toml",
-            "Cargo.lock",
-        ],
-    )?;
-    let summary = if let Some(summary) = automatic {
-        summary
-    } else {
-        let input = summary::input(
+impl Notes<'_> {
+    fn body(
+        &mut self,
+        git: &Git,
+        github: &GitHub,
+        cut: &recovery::Cut,
+        review: bool,
+        automatic: Option<Option<String>>,
+    ) -> Result<String> {
+        let repo = self.repo;
+        let choice = &mut *self.choice;
+        let trace = &mut *self.trace;
+        let diff = git_run(
             git,
-            github,
-            &cut.base,
-            cut.previous.as_deref(),
-            &cut.version,
-            &diff,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                &cut.base,
+                &cut.head,
+                "--",
+                "Cargo.toml",
+                "Cargo.lock",
+            ],
         )?;
-        match summary::write(choice, repo, &input, trace) {
-            Ok(summary) => Some(summary),
-            Err(error) => {
-                interrupt::check()?;
-                progress::warn(
-                    &error,
-                    format_args!("release summary unavailable; using GitHub generated notes"),
-                );
-                None
+        let summary = if let Some(summary) = automatic {
+            summary
+        } else {
+            let input = summary::input(
+                git,
+                github,
+                &cut.base,
+                cut.previous.as_deref(),
+                &cut.version,
+                &diff,
+            )?;
+            match summary::write(choice, repo, &input, trace) {
+                Ok(summary) => Some(summary),
+                Err(error) => {
+                    interrupt::check()?;
+                    progress::warn(
+                        &error,
+                        format_args!("release summary unavailable; using GitHub generated notes"),
+                    );
+                    None
+                }
             }
-        }
-    };
-    let notes = if summary.is_none() {
-        github.release_notes(&cut.tag(), &cut.base, cut.previous.as_deref())?
-    } else {
-        String::new()
-    };
-    let summary = controls::review(
-        summary.unwrap_or_else(|| "_The agent summary was unavailable._".into()),
-        review,
-    )?;
-    Ok(format!(
-        "## Summary\n\n<!-- release-summary:start -->\n{summary}\n<!-- release-summary:end -->\n\n{notes}\n\n## Version diff\n\n```diff\n{diff}\n```\n\n<!-- release-content-base: {} -->\n",
-        cut.base
-    ))
+        };
+        let notes = if summary.is_none() {
+            github.release_notes(&cut.tag(), &cut.base, cut.previous.as_deref())?
+        } else {
+            String::new()
+        };
+        let summary = controls::review(
+            summary.unwrap_or_else(|| "_The agent summary was unavailable._".into()),
+            review,
+        )?;
+        Ok(format!(
+            "## Summary\n\n<!-- release-summary:start -->\n{summary}\n<!-- release-summary:end -->\n\n{notes}\n\n## Version diff\n\n```diff\n{diff}\n```\n\n<!-- release-content-base: {} -->\n",
+            cut.base
+        ))
+    }
 }
 
 fn ready(
     git: &Git,
     github: &GitHub,
-    repo: &Repo,
     cut: &mut recovery::Cut,
     request: &Request<'_>,
-    choice: &mut Choice,
-    trace: &mut Option<std::path::PathBuf>,
+    notes: &mut Notes<'_>,
     label: &mut Option<LiveLabel>,
 ) -> Result<()> {
     logs::stage(logs::Stage::CiWatch);
@@ -217,12 +214,9 @@ fn ready(
         let snapshot = github
             .pr_snapshot(&pr.issue, &pr.url)?
             .context("release PR disappeared")?;
+        bump_identity(&snapshot, &cut.branch())?;
         ensure!(
-            snapshot.pr.state == PrState::Open
-                && !snapshot.pr.is_draft
-                && !snapshot.from_fork
-                && snapshot.pr.head == cut.branch()
-                && snapshot.pr.base == "main",
+            snapshot.pr.state == PrState::Open,
             "{} is closed, draft, or changed identity; review it (gh pr ready {} for a draft), then thirdshift release {}",
             pr.url,
             pr.url,
@@ -243,12 +237,12 @@ fn ready(
         if cut.base != measured_base {
             let refreshed_base = cut.base.clone();
             controls::experiment(git, cut, request.with_experiment)?;
-            let notes = body(git, github, repo, cut, request.review, choice, None, trace)?;
+            let body = notes.body(git, github, cut, request.review, None)?;
             cut.validate(git, github)?;
             if cut.base != refreshed_base {
                 continue;
             }
-            github.set_pr_body(&pr.issue, pr.issue.number, &notes)?;
+            github.set_pr_body(&pr.issue, pr.issue.number, &body)?;
             measured_base = refreshed_base;
             continue;
         }
@@ -277,7 +271,7 @@ fn ready(
                 "starting one targeted Fix run: thirdshift fix {} --no-merge --no-base-fix",
                 pr.url
             ));
-            crate::fix::for_release(git, &pr, choice)?;
+            crate::fix::for_release(git, &pr, notes.choice)?;
             *label = Some(LiveLabel::take(github, &pr)?);
             continue;
         }
