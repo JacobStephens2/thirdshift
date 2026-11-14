@@ -1,4 +1,75 @@
 use super::*;
+#[test]
+fn custom_runner_reports_ignored_uncommitted_scratch_in_trial_diagnostics() {
+    let fixture = process::fixture();
+    runner(
+        &fixture,
+        &DELIVER.replace(
+            "pathlib.Path('feature.txt').write_text('uncommitted regression\\n')",
+            "",
+        ),
+    );
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+        let diagnostic = result["attempts"][0]["cause"].as_str().unwrap_or("");
+        assert!(diagnostic.contains(".scratch/private.txt"), "{result}");
+    }
+}
+
+#[test]
+fn custom_runner_can_use_the_host_prepared_rust_toolchain() {
+    let fixture = process::fixture();
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
+    fs::write(
+        task.parent().unwrap().join("rust-pin"),
+        "[toolchain]\nchannel = \"1.99.0\"\n",
+    )
+    .unwrap();
+    let text = fs::read_to_string(&task).unwrap();
+    fs::write(
+        &task,
+        text.replace(
+            "[inputs]\n",
+            "[inputs]\n\"rust-toolchain.toml\" = \"rust-pin\"\n",
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(fixture.scenario.path("home/.rustup")).unwrap();
+    let rustup = r#"#!/usr/bin/env python3
+import os, pathlib, sys
+home = pathlib.Path(os.environ.get('RUSTUP_HOME', str(pathlib.Path(os.environ['HOME']) / '.rustup')))
+if sys.argv[1:3] == ['toolchain', 'install']:
+    (home / 'installed').write_text('1.99.0')
+elif (home / 'installed').is_file():
+    print('cargo 1.99.0 (fixture)')
+else:
+    print('prepared Rust toolchain is not available in this HOME', file=sys.stderr)
+    sys.exit(1)
+"#;
+    for name in ["rustup", "cargo"] {
+        let path = fixture.scenario.path(&format!("bin/{name}"));
+        fs::write(&path, rustup).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    runner(
+        &fixture,
+        &(String::from("subprocess.run(['cargo', '--version'], check=True)\n") + DELIVER),
+    );
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert!(fixture.scenario.path("home/.rustup/installed").is_file());
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+}
 
 #[test]
 fn a_self_reported_void_cannot_hide_committed_excluded_paths() {

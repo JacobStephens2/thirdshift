@@ -467,7 +467,20 @@ impl<'a> Execution<'a> {
         caps: &crate::scope::Caps,
         toolchains: Option<&Path>,
     ) -> Result<crate::scope::Launch> {
-        if let Some(runner) = &arm.runner {
+        let directory = self
+            .directory
+            .join("harnesses")
+            .join(request.identity.arm.name());
+        let path_env = std::env::join_paths(
+            std::iter::once(directory)
+                .chain(toolchains.map(|root| root.join("session/bin")))
+                .chain(std::env::split_paths(
+                    &std::env::var_os("PATH").unwrap_or_default(),
+                )),
+        )?
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("PATH is not valid Unicode"))?;
+        let mut launched = if let Some(runner) = &arm.runner {
             let attempt = path.parent().context("Trial request has no directory")?;
             let argv = custom::command(runner, attempt)?;
             let args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
@@ -484,39 +497,25 @@ impl<'a> Execution<'a> {
                 .env("HOME", attempt.join("home"))
                 .env_remove("CODEX_HOME")
                 .env_remove("CLAUDE_CONFIG_DIR")
-                .env_remove(crate::skills::TRIAL_HOME)
                 .stdin(std::process::Stdio::null());
             for (name, relative) in crate::harness::PRIVATE_HOME_XDG {
                 launched
                     .command()
                     .env(name, attempt.join("home").join(relative));
             }
-            return Ok(launched);
-        }
-        let directory = self
-            .directory
-            .join("harnesses")
-            .join(request.identity.arm.name());
-        let path_env = std::env::join_paths(
-            std::iter::once(directory)
-                .chain(toolchains.map(|root| root.join("session/bin")))
-                .chain(std::env::split_paths(
-                    &std::env::var_os("PATH").unwrap_or_default(),
-                )),
-        )?;
-        let path_env = path_env
-            .into_string()
-            .map_err(|_| anyhow::anyhow!("PATH is not valid Unicode"))?;
-        let path = path
-            .to_str()
-            .context("Trial request path is not valid Unicode")?;
-        let mut launched = crate::scope::trial_command(
-            &arm.binary,
-            &["--trial", path],
-            &request.identity.key(),
-            request.attempt,
-            caps,
-        )?;
+            launched
+        } else {
+            let path = path
+                .to_str()
+                .context("Trial request path is not valid Unicode")?;
+            crate::scope::trial_command(
+                &arm.binary,
+                &["--trial", path],
+                &request.identity.key(),
+                request.attempt,
+                caps,
+            )?
+        };
         launched
             .command()
             .env(limits::SIGNAL_ENV, self.signal)
@@ -527,8 +526,7 @@ impl<'a> Execution<'a> {
         {
             launched.command().env(
                 crate::skills::TRIAL_HOME,
-                Path::new(path)
-                    .parent()
+                path.parent()
                     .context("Trial request has no directory")?
                     .join("home"),
             );

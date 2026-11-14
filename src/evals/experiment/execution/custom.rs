@@ -198,7 +198,12 @@ pub(super) fn inspect(
     );
     let status = crate::evals::repository::bytes_until(
         repository,
-        &["status", "--porcelain", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignored=traditional",
+        ],
         deadline,
     )?;
     if status.is_empty() {
