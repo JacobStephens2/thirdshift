@@ -1397,6 +1397,13 @@ One provider-only HTTPS proxy and PATH wrappers disable Harness web search.
 Declared provider families also count in Grader panel voting and stand-in
 checks. See the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation">Custom runner contract</a>.
 Session recording follows in #2191.</p>
+<p>Console clients can start the same Experiment with <code>POST /api/v1/start</code> (also
+served at <code>/api/v1/runs</code>), putting <code>baseline_runner</code>, <code>candidate_runner</code> and
+<code>suite</code> in the request&#39;s <code>experiment</code> object. The CLI&#39;s per-Arm conflicts and
+process-suite requirements apply. Experiment pages and Trial Peek show each
+Custom runner&#39;s name, digest, recorded Git HEAD and dirty state, and declared
+roles. Blind pairwise pages keep that identity hidden until the preference is
+submitted; <code>revealed</code> then includes the Custom runner&#39;s details.</p>
 <p>From a local thirdshift clone, <code>thirdshift experiment &lt;candidate&gt;</code> compares a
 branch or commit with its merge-base with <code>main</code>. Use <code>--baseline &lt;ref&gt;</code> to name
 another Baseline. Suites default to those touched by the change, using their

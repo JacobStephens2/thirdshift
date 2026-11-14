@@ -153,7 +153,9 @@ input can't be read; `checklist` holds the items under its "Acceptance
 criteria" heading. `next` is the reader's next call. `mine` lists the reader's
 records and `revealed` stays null until the reader has given a preference;
 it then names the Arm on each side with its `Setup`, the panel's calls, and
-every reader's records. Each record is kept as
+every reader's records. Custom-runner sides also include `a_runner` or
+`b_runner`, the prepared `FrozenRunner` with its declared roles and recorded
+Git provenance; these fields exist only inside `revealed`. Each record is kept as
 `reviews/<pair-id>/<n>.json` with the `PairRecord` shape; records are only
 ever added, numbered from `000000`, beside a `lock` file.
 People's calls are reported beside the Verdict and change no Score, unless
@@ -611,6 +613,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "PairReveal": {
     "a": "baseline|candidate", "b": "baseline|candidate", "a_setup": "Setup", "b_setup": "Setup",
+    "a_runner?": "FrozenRunner", "b_runner?": "FrozenRunner",
     "panel": "PanelCalls?", "records": ["PairRecord"]
   },
   "PairRecord": {

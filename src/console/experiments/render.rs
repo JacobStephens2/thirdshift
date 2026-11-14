@@ -177,6 +177,13 @@ fn command_links(view: &View) -> String {
 }
 
 fn builds(view: &View) -> String {
+    if view.description.baseline.runner.is_some() || view.description.candidate.runner.is_some() {
+        return format!(
+            "Baseline {} → Candidate {}",
+            esc(&arm_identity(&view.description.baseline)),
+            esc(&arm_identity(&view.description.candidate))
+        );
+    }
     format!(
         "Baseline {} <code>{}</code> → Candidate {} <code>{}</code>",
         esc(view
@@ -191,6 +198,13 @@ fn builds(view: &View) -> String {
             .as_deref()
             .unwrap_or("ref unknown")),
         esc(&short(view.description.candidate.reference()))
+    )
+}
+
+fn arm_identity(setup: &crate::evals::experiment::Setup) -> String {
+    setup.runner.as_ref().map_or_else(
+        || format!("thirdshift {}", short(setup.reference())),
+        |name| format!("Custom runner {name}"),
     )
 }
 
@@ -239,7 +253,10 @@ fn question(view: &View) -> String {
         _ => short(commit),
     };
     let mut changes = Vec::new();
-    if d.baseline.commit != d.candidate.commit {
+    if d.baseline.commit != d.candidate.commit
+        && d.baseline.runner.is_none()
+        && d.candidate.runner.is_none()
+    {
         let mut build = format!(
             "Build: {} → {}",
             reference(&view.details.baseline_ref, d.baseline.reference()),
@@ -324,7 +341,11 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
         html.push_str(&format!("<p>{}</p>", esc(&timing_note)));
     }
     html.push_str(&people(view));
-    if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
+    if view.description.baseline.process.is_some()
+        || view.description.candidate.process.is_some()
+        || view.description.baseline.runner.is_some()
+        || view.description.candidate.runner.is_some()
+    {
         html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
         for (label, counts) in [
             ("Baseline", &view.outcomes.baseline),
@@ -1206,7 +1227,26 @@ impl<'a> Cell<'a> {
         } else {
             &self.view.description.candidate
         };
-        html.push_str(&format!("<dl><dt>Arm</dt><dd>{} · {} · Model {} · Effort {} · <code>{}</code></dd><dt>Trial ID</dt><dd><code>{}</code></dd></dl></section>", arm_title(self.arm), esc(setup.executor()), esc(setup.model.as_deref().unwrap_or("default")), esc(setup.effort.as_deref().unwrap_or("default")), esc(setup.reference()), self.key));
+        if setup.runner.is_some() {
+            html.push_str(&format!(
+                "<p>{} arm</p>{}",
+                arm_title(self.arm),
+                super::setup::runner_details(setup, self.view.description.runner(self.arm))
+            ));
+        } else {
+            html.push_str(&format!(
+                "<dl><dt>Arm</dt><dd>{} · {} · Model {} · Effort {} · <code>{}</code></dd></dl>",
+                arm_title(self.arm),
+                esc(setup.executor()),
+                esc(setup.model.as_deref().unwrap_or("default")),
+                esc(setup.effort.as_deref().unwrap_or("default")),
+                esc(setup.reference())
+            ));
+        }
+        html.push_str(&format!(
+            "<dl><dt>Trial ID</dt><dd><code>{}</code></dd></dl></section>",
+            self.key
+        ));
         html
     }
 }
@@ -1252,63 +1292,31 @@ fn arms(view: &View) -> String {
     let mut html = String::from(
         "<section id=\"experiment-arms\"><details><summary><h2>What was compared</h2></summary><table class=\"experiment-arms\"><thead><tr><td></td><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th></tr></thead><tbody>",
     );
-    for (label, b, c) in [
-        (
-            "Build",
-            format!(
-                "{} · {}",
-                view.details
-                    .baseline_ref
-                    .as_deref()
-                    .unwrap_or("ref unknown"),
-                short(d.baseline.reference())
-            ),
-            format!(
-                "{} · {}",
-                view.details
-                    .candidate_ref
-                    .as_deref()
-                    .unwrap_or("ref unknown"),
-                short(d.candidate.reference())
-            ),
-        ),
-        (
-            "Harness",
-            d.baseline.executor().into(),
-            d.candidate.executor().into(),
-        ),
-        (
-            "Model",
-            d.baseline.model.clone().unwrap_or_else(|| "default".into()),
-            d.candidate
-                .model
-                .clone()
-                .unwrap_or_else(|| "default".into()),
-        ),
-        (
-            "Effort",
-            d.baseline
-                .effort
-                .clone()
-                .unwrap_or_else(|| "default".into()),
-            d.candidate
-                .effort
-                .clone()
-                .unwrap_or_else(|| "default".into()),
-        ),
-        (
-            "Harness version",
-            d.prepared
-                .as_ref()
-                .and_then(|p| p.baseline.harness.as_ref().map(|h| h.version.clone()))
-                .unwrap_or_else(|| "unknown".into()),
-            d.prepared
-                .as_ref()
-                .and_then(|p| p.candidate.harness.as_ref().map(|h| h.version.clone()))
-                .unwrap_or_else(|| "unknown".into()),
-        ),
-    ] {
-        html.push_str(&table_row(label, &b, &c));
+    let baseline = super::setup::fields(
+        &d.baseline,
+        d.prepared.as_ref().map(|p| &p.baseline),
+        view.details.baseline_ref.as_deref(),
+    );
+    let candidate = super::setup::fields(
+        &d.candidate,
+        d.prepared.as_ref().map(|p| &p.candidate),
+        view.details.candidate_ref.as_deref(),
+    );
+    let mut labels = Vec::new();
+    for (label, _) in baseline.iter().chain(&candidate) {
+        if !labels.contains(label) {
+            labels.push(*label);
+        }
+    }
+    for label in labels {
+        let value = |fields: &Vec<(&str, String)>| {
+            fields
+                .iter()
+                .find(|(key, _)| *key == label)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| "—".into())
+        };
+        html.push_str(&table_row(label, &value(&baseline), &value(&candidate)));
     }
     for suite in &d.suites {
         let n = d.bar.trials_per_task[suite];
