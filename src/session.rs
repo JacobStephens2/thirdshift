@@ -1455,7 +1455,9 @@ mod tests {
                 vec![limit(false), ended(None, &[], "done")],
             );
             assert_eq!(taken.unwrap().as_deref(), Some("done"));
-            assert_eq!(moves, ["on claude", "reset", "on codex"]);
+            // The next route is taken before the reset: with none left,
+            // the worktree stays as it was for Failed run preservation.
+            assert_eq!(moves, ["on claude", "on codex", "reset"]);
             assert_eq!(
                 sessions_run(&calls),
                 [
