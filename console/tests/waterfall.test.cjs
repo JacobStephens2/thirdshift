@@ -89,6 +89,80 @@ before(async () => {
   browser = await chromium.launch({ headless: true });
 });
 
+test('running Waterfall stripes animate in the tree and Peek with motion controls', { skip: process.platform !== 'linux' }, async t => {
+  const context = await browser.newContext({ reducedMotion: 'no-preference' });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${origin}/waterfall?command=widgets%239`);
+    await page.getByRole('button', { name: 'Every call', exact: true }).click();
+    await page.locator('.span-item[data-kind="tool"] > .span-row').click();
+    const bars = page.locator('#span-tree .span-running, #peek .span-position .span-running');
+    assert.ok(await page.locator('#peek .span-position .span-running').count() > 0);
+    const moving = () => bars.evaluateAll(bars => bars.every(bar => bar.getAnimations().some(animation => animation.playState === 'running')));
+    assert.equal(await moving(), true, 'every running tree and Peek bar animates');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    await page.locator('.span-item[data-kind="tool"] > .span-row').click();
+    assert.equal(await page.locator('html').getAttribute('data-paused'), 'true');
+    assert.equal(await bars.evaluateAll(bars => bars.every(bar => bar.getAnimations().length === 0)), true);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    await page.locator('.span-item[data-kind="tool"] > .span-row').click();
+    assert.equal(await moving(), true, 'motion resumes');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await bars.evaluateAll(bars => bars.every(bar => bar.getAnimations().length === 0)), true);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    assert.equal(await moving(), true, 'system motion preference resumes');
+  }
+});
+
+test('running Waterfall bars keep their animation through ticks and SSE until completion', { skip: process.platform !== 'linux' }, async t => {
+  const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/9-fixture.command.json');
+  const original = await readFile(recordPath, 'utf8');
+  t.after(() => replaceRecord(recordPath, original));
+  const context = await browser.newContext({ reducedMotion: 'no-preference' });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await replaceRecord(recordPath, original);
+    await page.setViewportSize(viewport);
+    await page.goto(`${origin}/waterfall?command=widgets%239`);
+    await page.getByRole('button', { name: 'Every call', exact: true }).click();
+    const tool = page.locator('.span-item[data-kind="tool"]');
+    await tool.locator(':scope > .span-row').click();
+    await page.waitForFunction(() => [...document.querySelectorAll('#span-tree .span-running, #peek .span-position .span-running')]
+      .every(bar => bar.getAnimations()[0]?.startTime != null));
+    const held = await page.evaluateHandle(() => [...document.querySelectorAll('#span-tree .span-running, #peek .span-position .span-running')].map(bar => ({
+      bar, animation: bar.getAnimations()[0], startTime: bar.getAnimations()[0].startTime, currentTime: bar.getAnimations()[0].currentTime
+    })));
+    const continuous = () => page.evaluate(held => held.every(({ bar, animation, startTime, currentTime }) =>
+      bar.isConnected && bar.getAnimations()[0] === animation && animation.startTime === startTime && animation.currentTime > currentTime), held);
+    for (let tick = 0; tick < 2; tick++) {
+      const initial = await tool.locator('.span-duration').textContent();
+      await page.waitForFunction(initial => document.querySelector('.span-item[data-kind="tool"] .span-duration').textContent !== initial, initial);
+      assert.equal(await continuous(), true, 'elapsed ticks preserve tree and Peek bars and animation start times');
+    }
+    const record = JSON.parse(original);
+    record.issue.title = `Continuous motion at ${viewport.width}`;
+    await replaceRecord(recordPath, JSON.stringify(record));
+    await page.waitForFunction(title => document.getElementById('span-tree').textContent.includes(title), record.issue.title);
+    assert.equal(await continuous(), true, 'changed-data SSE refresh preserves the same bars and animations');
+    assert.equal(await tool.evaluate(node => node === document.activeElement), true, 'refresh preserves keyboard focus');
+    assert.equal(await page.locator('#peek').isVisible(), true);
+    record.ended_at = new Date().toISOString(); record.outcome = 'merged';
+    await replaceRecord(recordPath, JSON.stringify(record));
+    await page.waitForFunction(() => document.getElementById('span-tree').dataset.live === 'false');
+    assert.equal(await page.locator('.span-bar.span-running').count(), 0);
+    assert.equal(await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running').length), 0);
+    await held.dispose();
+  }
+  assert.deepEqual(errors, []);
+});
+
 test('Waterfall draws overlapping Session-trace spans and running start records', async t => {
   const context = await browser.newContext();
   t.after(() => context.close());
