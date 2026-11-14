@@ -204,7 +204,7 @@ impl Store {
         fs::create_dir_all(dir)?;
         let _lock = crate::github::quota::lock_exclusive(&self.path.with_extension("lock"))?;
         let mut record = self.record()?;
-        let previous = serde_json::to_vec(&record)?;
+        let previous = serde_json::to_vec_pretty(&record)?;
         change(&mut record.harnesses);
         let bytes = serde_json::to_vec_pretty(&record)?;
         if bytes == previous {
@@ -298,5 +298,19 @@ mod tests {
         assert!(saved["grok"].cooldown.is_some());
         store.clear(None).unwrap();
         assert_eq!(store.read().unwrap()["grok"].cooldown, None);
+    }
+
+    #[test]
+    fn an_unchanged_snapshot_is_not_rewritten() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan-usage.json");
+        let store = Store::new(path.clone());
+        store
+            .update(Harness::Agy, |state| state.read_at = Some(Utc::now()))
+            .unwrap();
+        let before = std::fs::metadata(&path).unwrap().ino();
+        store.clear(None).unwrap(); // nothing to clear
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), before);
     }
 }

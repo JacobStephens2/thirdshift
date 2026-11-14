@@ -89,7 +89,7 @@ pub struct ConfiguredRoute {
 
 #[derive(Debug, Serialize)]
 pub struct Row {
-    #[serde(serialize_with = "harness_name")]
+    #[serde(serialize_with = "super::route::harness_name")]
     pub harness: Harness,
     pub installed: bool,
     pub active: bool,
@@ -98,14 +98,13 @@ pub struct Row {
     pub state: State,
 }
 
-fn harness_name<S: serde::Serializer>(harness: &Harness, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(harness.name())
-}
-
 #[derive(Debug, Serialize)]
 pub struct View {
     pub version: u8,
     pub harnesses: Vec<Row>,
+    /// When availability was judged, so the text agrees with it.
+    #[serde(skip)]
+    pub now: DateTime<Utc>,
 }
 
 /// Each place the User config names a route, in route order: the default
@@ -135,44 +134,47 @@ fn configured(config: &UserConfig) -> Vec<(Setting, Option<usize>, Route)> {
     all
 }
 
-/// Whether `route` could take a session now, given its Harness's state.
-fn availability(
-    route: &Route,
-    routing: &Routing,
-    installed: bool,
-    state: &State,
-    now: DateTime<Utc>,
-) -> Availability {
-    if !installed {
-        return Availability::NotInstalled;
-    }
-    if state.account.as_ref().and_then(|account| account.signed_in) == Some(false) {
-        return Availability::SignedOut;
-    }
-    let credits = route.allow_credits
-        && state.spend_control_reached != Some(true)
-        && state
-            .credits
-            .as_ref()
-            .and_then(|credits| credits.has_credits)
-            == Some(true);
-    if let Some(cooldown) = &state.cooldown {
-        if cooldown.until > now {
-            if !credits {
-                return Availability::Cooldown;
-            }
-        } else {
-            return Availability::Revalidating;
+impl State {
+    /// Whether `route` could take a session on this Harness now.
+    fn availability(
+        &self,
+        route: &Route,
+        routing: &Routing,
+        installed: bool,
+        now: DateTime<Utc>,
+    ) -> Availability {
+        let state = self;
+        if !installed {
+            return Availability::NotInstalled;
         }
+        if state.account.as_ref().and_then(|account| account.signed_in) == Some(false) {
+            return Availability::SignedOut;
+        }
+        let credits = route.allow_credits
+            && state.spend_control_reached != Some(true)
+            && state
+                .credits
+                .as_ref()
+                .and_then(|credits| credits.has_credits)
+                == Some(true);
+        if let Some(cooldown) = &state.cooldown {
+            if cooldown.until > now {
+                if !credits {
+                    return Availability::Cooldown;
+                }
+            } else {
+                return Availability::Revalidating;
+            }
+        }
+        let ceiling = f64::from(routing.ceiling(route));
+        let full = state.windows.iter().any(|window| {
+            !window.reset_by(now) && window.used_percent.is_some_and(|used| used >= ceiling)
+        });
+        if full && !(credits && ceiling >= 100.0) {
+            return Availability::AtCeiling;
+        }
+        Availability::Available
     }
-    let ceiling = f64::from(routing.ceiling(route));
-    let full = state.windows.iter().any(|window| {
-        !window.reset_by(now) && window.used_percent.is_some_and(|used| used >= ceiling)
-    });
-    if full && !(credits && ceiling >= 100.0) {
-        return Availability::AtCeiling;
-    }
-    Availability::Available
 }
 
 impl View {
@@ -209,7 +211,9 @@ impl View {
                 effort: route.effort.clone().or(set.effort.clone()),
                 max_utilization: config.routing.ceiling(&route),
                 allow_credits: route.allow_credits,
-                availability: availability(&route, &config.routing, row.installed, &row.state, now),
+                availability: row
+                    .state
+                    .availability(&route, &config.routing, row.installed, now),
                 active: false,
             });
         }
@@ -219,16 +223,33 @@ impl View {
         } else {
             Setting::Routes
         };
-        let active = rows.iter().enumerate().flat_map(|(index, row)| {
-            row.routes
+        // Walk it in order, API-key routes included: the first usable route
+        // is active, even when it is one Plan usage does not watch.
+        let walk: Vec<(Option<usize>, Harness)> = configured(config)
+            .into_iter()
+            .filter(|(setting, ..)| *setting == primary)
+            .map(|(_, position, route)| (position, route.harness))
+            .collect();
+        for (position, harness) in walk {
+            let Some(index) = rows.iter().position(|row| row.harness == harness) else {
+                // Not watched: an installed API-key Harness takes the session.
+                if installed(harness) {
+                    break;
+                }
+                continue;
+            };
+            let Some(at) = rows[index]
+                .routes
                 .iter()
-                .enumerate()
-                .filter(|(_, route)| route.setting == primary && route.availability.usable())
-                .map(move |(at, route)| (route.position, index, at))
-        });
-        if let Some((_, index, at)) = active.min_by_key(|(position, ..)| *position) {
-            rows[index].active = true;
-            rows[index].routes[at].active = true;
+                .position(|route| route.setting == primary && route.position == position)
+            else {
+                continue;
+            };
+            if rows[index].routes[at].availability.usable() {
+                rows[index].active = true;
+                rows[index].routes[at].active = true;
+                break;
+            }
         }
         for harness in SUBSCRIPTION {
             if rows.iter().any(|row| row.harness == harness) {
@@ -252,6 +273,7 @@ impl View {
         View {
             version: 1,
             harnesses: rows,
+            now,
         }
     }
 }
@@ -269,7 +291,7 @@ impl fmt::Display for View {
                 "No Plan usage to show: no configured subscription Harness, no saved observation and no signed-in CLI",
             );
         }
-        let now = Utc::now();
+        let now = self.now;
         for (index, row) in self.harnesses.iter().enumerate() {
             if index > 0 {
                 writeln!(f)?;
@@ -480,6 +502,17 @@ mod tests {
         assert_eq!(
             view.harnesses[1].routes[0].availability,
             Availability::Cooldown
+        );
+    }
+
+    #[test]
+    fn an_api_key_route_ahead_leaves_no_subscription_route_active() {
+        let config = config("[harness]\nroutes = [\"opencode\", \"claude\"]\n");
+        let view = View::of(&config, BTreeMap::new(), |_| true, Utc::now());
+        assert!(
+            view.harnesses
+                .iter()
+                .all(|row| !row.active && row.routes.iter().all(|r| !r.active))
         );
     }
 }

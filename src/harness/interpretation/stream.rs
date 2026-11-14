@@ -169,6 +169,28 @@ impl Dialect {
                 scope,
             });
         }
+        // A failed turn's own error result, never an interrupted turn's
+        // final message, may name a usage limit.
+        if event["type"] == "result" && event["is_error"] == true {
+            let harness = match self {
+                Self::Claude(_) => crate::harness::Harness::Claude,
+                Self::Grok(_) => crate::harness::Harness::Grok,
+            };
+            let reason = [&event["api_error"], &event["error"], &event["result"]]
+                .into_iter()
+                .filter_map(Value::as_str)
+                .chain(
+                    event["errors"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+                .collect::<Vec<_>>()
+                .join("\n");
+            evidence
+                .extend(plan_usage::terminal_failure(harness, &reason).map(Evidence::PlanUsage));
+        }
         if matches!(self, Self::Claude(_)) {
             if let Some(limit) = super::limits::claude(event) {
                 evidence.push(Evidence::PlanLimit(limit));

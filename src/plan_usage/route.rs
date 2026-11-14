@@ -26,7 +26,10 @@ pub struct Route {
     pub allow_credits: bool,
 }
 
-fn harness_name<S: serde::Serializer>(harness: &Harness, serializer: S) -> Result<S::Ok, S::Error> {
+pub(super) fn harness_name<S: serde::Serializer>(
+    harness: &Harness,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(harness.name())
 }
 

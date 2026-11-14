@@ -287,8 +287,26 @@ fn take_muse(state: &mut State, responses: &BTreeMap<i64, Value>, now: DateTime<
             saved.signed_in = account["credentialRequired"]
                 .as_bool()
                 .map(|required| !required)
+                .or_else(|| muse_state_signed_in(&account["state"]))
                 .or(saved.signed_in);
         }
+    }
+}
+
+/// What Muse's account `state` says about signing in, when it says
+/// anything: a signed-out or credential-wanting state is signed out.
+fn muse_state_signed_in(state: &Value) -> Option<bool> {
+    let state: String = token(state)?
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|character| character.to_ascii_lowercase())
+        .collect();
+    match state.as_str() {
+        "signedout" | "loggedout" | "unauthenticated" | "credentialrequired" | "none" => {
+            Some(false)
+        }
+        "signedin" | "loggedin" | "authenticated" | "ready" => Some(true),
+        _ => None,
     }
 }
 
@@ -480,6 +498,20 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("max"));
         assert_eq!(account.label.as_deref(), Some("me@example.com"));
         take_claude(&mut state, &json!({"loggedIn": false}));
+        assert_eq!(state.account.unwrap().signed_in, Some(false));
+    }
+
+    #[test]
+    fn muse_account_state_alone_says_signed_out() {
+        let mut state = State::default();
+        take_muse(
+            &mut state,
+            &BTreeMap::from([(
+                2,
+                json!({"id": 2, "result": {"state": "signed_out", "label": "me"}}),
+            )]),
+            Utc::now(),
+        );
         assert_eq!(state.account.unwrap().signed_in, Some(false));
     }
 }

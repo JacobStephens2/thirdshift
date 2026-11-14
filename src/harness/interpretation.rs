@@ -34,9 +34,6 @@ pub struct Interpretation {
     plan_limit: Option<limits::Limit>,
     /// Plan usage seen since the recorder last took it.
     plan_usage: Vec<crate::plan_usage::Observation>,
-    /// A limit was already reported from structured facts, so a later
-    /// terminal usage-limit error adds nothing.
-    limit_observed: bool,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -327,7 +324,6 @@ impl Interpretation {
             work_started: false,
             plan_limit: None,
             plan_usage: Vec::new(),
-            limit_observed: false,
         }
     }
 
@@ -400,7 +396,6 @@ impl Interpretation {
     }
 
     fn note_plan_usage(&mut self, observation: crate::plan_usage::Observation) {
-        self.limit_observed |= observation.exhausted.is_some();
         self.plan_usage.push(observation);
     }
 
@@ -454,21 +449,6 @@ impl Interpretation {
             {
                 progress.push(line);
             }
-        }
-        if !self.limit_observed
-            && events.iter().any(|event| {
-                matches!(
-                    event,
-                    event::Event::Error {
-                        kind: event::ErrorKind::UsageLimit,
-                        ..
-                    }
-                )
-            })
-            && let Some(observation) = super::Harness::named(self.cli)
-                .and_then(crate::plan_usage::observation::usage_limit)
-        {
-            self.note_plan_usage(observation);
         }
         Decoded { progress, events }
     }

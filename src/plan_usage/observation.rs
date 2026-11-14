@@ -159,15 +159,23 @@ pub(crate) fn claude_rate_limit(event: &Value) -> Option<Observation> {
     })
 }
 
-/// The rate-limit facts on a failed Claude API turn, from
-/// `api_error_params.rate_limit_info`.
+/// The rate-limit facts on a failed Claude API turn, from its `api_error`
+/// and `api_error_params.rate_limit_info`: a rejected status, or, with no
+/// status, a usage-limit `api_error` or a rejected overage (a spend cap).
 pub(crate) fn claude_api_error(event: &Value) -> Option<Observation> {
     let info = &event["api_error_params"]["rate_limit_info"];
-    if info["status"] != "rejected" {
+    let usage_limit = event["api_error"]
+        .as_str()
+        .is_some_and(|kind| kind.to_ascii_lowercase().contains("usage_limit"));
+    let refused = match info["status"].as_str() {
+        Some(status) => status == "rejected",
+        None => usage_limit || info["overageStatus"] == "rejected",
+    };
+    if !refused {
         return None;
     }
     let window = token(&info["rateLimitType"]);
-    let resets_at = seconds(&info["resetsAt"]);
+    let resets_at = seconds(&info["resetsAt"]).or_else(|| seconds(&info["overageResetsAt"]));
     let windows = window
         .as_deref()
         .and_then(Window::named)
@@ -234,6 +242,17 @@ pub(crate) fn codex_token_count(event: &Value, now: DateTime<Utc>) -> Option<Obs
         windows,
         exhausted,
     })
+}
+
+/// A Harness's own terminal failure, from a top-level failed-turn frame,
+/// when its reason names a usage limit. Callers pass only frames the agent
+/// cannot write: never a tool's or sub-agent's failure, nor an interrupted
+/// turn's final message.
+pub(crate) fn terminal_failure(harness: Harness, reason: &str) -> Option<Observation> {
+    (crate::harness::interpretation::event::ErrorKind::from_text(reason)
+        == crate::harness::interpretation::event::ErrorKind::UsageLimit)
+        .then(|| usage_limit(harness))
+        .flatten()
 }
 
 /// A terminal usage-limit error a Harness's stream decoder reported.

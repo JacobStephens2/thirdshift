@@ -21,6 +21,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("CronJobs", "cronjobs"),
     ("LaunchDirectories", "launch-directories"),
     ("Resources", "resources"),
+    ("PlanUsage", "plan-usage"),
     ("Console", "console"),
     ("ConsoleInstall", "console install"),
     ("ConsolePassword", "console password"),
@@ -111,6 +112,7 @@ const ACTIONS: &[&str] = &[
     "metrics --fleet",
     "metrics --machine other",
     "metrics --push",
+    "plan-usage --clear agy",
     "update --check",
     "config spec.parallel",
     "config spec.parallel 3",
@@ -132,6 +134,14 @@ const ACTIONS: &[&str] = &[
 // Keep these reasons and ADR 0026's CLI-only list together. A prefix is never
 // an exclusion: each entry is parsed and covers only its command/action.
 const EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "plan-usage",
+        "Until #583's Console Ticket serves `/api/v1/plan-usage`, the machine's Plan usage view and its non-billed reads stay in the shell.",
+    ),
+    (
+        "plan-usage --clear agy",
+        "Until #583's Console Ticket adds an authenticated Console action for it, clearing recorded Plan usage cooldowns stays in the shell.",
+    ),
     (
         "cronjobs --fleet",
         "Fleet schedule aggregation is an explicit client of owning-machine inventories; the API stays local and cannot lend saved Fleet credentials.",
@@ -252,6 +262,9 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
         Command::Update { check, .. } => check.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
         Command::CronJobs { fleet, .. } => fleet.to_string(),
+        Command::PlanUsage(action) => {
+            matches!(action, crate::plan_usage::Action::Clear { .. }).to_string()
+        }
         // `--machine` reads one Fleet machine through the same client;
         // `--push` sends this machine's own summary out.
         Command::Metrics(asked) => {

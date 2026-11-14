@@ -436,12 +436,12 @@ struct StreamPolicy {
     private: bool,
 }
 
-/// Record every line in the Session trace. Ordinary sessions also
-/// print progress; Eval sessions stop at plan limits while preserving evidence.
 /// How often an ordinary session looks for native quota reports, which
 /// only Codex writes beside its stream.
 const NATIVE_PLAN_USAGE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Record every line in the Session trace. Ordinary sessions also
+/// print progress; Eval sessions stop at plan limits while preserving evidence.
 fn follow(
     kind: &str,
     mut stream: ChildStdout,
