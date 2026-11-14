@@ -197,7 +197,8 @@ enum Failure {
         before_first_turn: bool,
         session_id: Option<String>,
         plan_usage_exhausted: bool,
-        plan_usage_limit: Option<limits::Limit>,
+        /// Boxed so the rarely-set limit doesn't bloat every `Result`.
+        plan_usage_limit: Option<Box<limits::Limit>>,
     },
 }
 
@@ -335,7 +336,7 @@ impl Failure {
                     session_id,
                     oom_killed: false,
                     plan_usage_exhausted,
-                    plan_usage_limit,
+                    plan_usage_limit: plan_usage_limit.map(|limit| *limit),
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -547,7 +548,7 @@ impl Interpretation {
                             && !facts.report.events.iter().any(work_started),
                         session_id: facts.ended.session_id,
                         plan_usage_exhausted: self.plan_usage_exhausted,
-                        plan_usage_limit: self.plan_usage_limit,
+                        plan_usage_limit: self.plan_usage_limit.map(Box::new),
                     })
                 } else {
                     Ok(facts.ended)
