@@ -211,18 +211,23 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
-show together, each under its heading and count, including empty groups.
-Every group starts open. Click its heading, or focus it and press Enter or Space,
-to fold its rows. The heading and count stay visible; counts and active runs
-still include folded rows. Each browser keeps its group choices through live
-updates, folder changes and reloads when storage is available. Without storage,
-folding still works through live updates. Keyboard row navigation skips folded
-rows, and the same controls work in every Theme and on phones. Without
-JavaScript, groups start open and their native disclosures still work.
+The Inbox opens on Overview: Needs you, Ready for review, Landing, Working,
+Done and Resolved show together, each under its heading and count, including
+empty groups. The first four start open; Done and Resolved start folded below
+Working, so opening either shows what finished without leaving the page.
+Click a heading, or focus it and press Enter or Space, to fold or open its rows.
+The heading and count stay visible; counts and active runs still include folded
+rows. Each browser keeps the groups it folded or opened through live updates,
+folder changes and reloads when storage is available; a group it never changed
+follows the folder's default. Opening or folding Done or Resolved in Overview
+leaves them as they were in their own folders. Without storage, folding still
+works through live updates. Keyboard row navigation skips folded rows, and the
+same controls work in every Theme and on phones. Without JavaScript, groups
+start as above and their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved,
-each of which says under its heading what it holds; Resolved adds when its
-retention starts and that its length is the owning machine's `inbox.days`.
+which open in their own folders. Done and Resolved each say under their heading
+what they hold; Resolved adds when its retention starts and that its length is
+the owning machine's `inbox.days`.
 Rows show state, subject, title, gist and age. Compact Done headers also identify
 their Command kind on desktop and phone, with or without JavaScript, in
 every Theme and across the Fleet. Stored `Run` kinds display as `Ticket run`;
