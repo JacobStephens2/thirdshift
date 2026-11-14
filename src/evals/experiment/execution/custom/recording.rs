@@ -278,7 +278,7 @@ impl Recorder {
 }
 
 #[cfg(test)]
-mod spec_2191_live_retained_repro {
+mod tests {
     use super::*;
     use serde_json::json;
     use std::io::{Cursor, Write};

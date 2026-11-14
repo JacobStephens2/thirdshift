@@ -290,7 +290,7 @@ fn sdk_entry(file: &str) -> serde_json::Value {
 }
 
 #[test]
-fn spec_2191_sdk_anthropic_server_web_search_is_detected() {
+fn sdk_anthropic_server_web_search_is_detected() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("output");
     let retained = root.path().join("session");

@@ -1809,8 +1809,9 @@ identical Arms a 70% interval&#39;s upper bound falls below zero about 15% of th
 time per noisy metric, capping the pass rate near 72%.</p>
 <p><code>--void-retries</code> accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work,
-provider capacity or overload errors, a plan-limit stop, or a host kill or
-Trial-only memory cap makes a Trial void.
+provider capacity or overload errors, a plan-limit stop, a host kill or
+Trial-only memory cap, or a web-search tool call in any session transcript
+(<code>web_search</code>) makes a Trial void.
 Timeouts, context-window overflow, refusals and agent failures count as failed
 Trials. Void Trials retry fresh up to the Bar&#39;s limit and remain void if
 exhausted. A task still void in either Arm drops out of both Arms.</p>

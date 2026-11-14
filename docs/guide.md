@@ -1720,8 +1720,9 @@ time per noisy metric, capping the pass rate near 72%.
 
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work,
-provider capacity or overload errors, a plan-limit stop, or a host kill or
-Trial-only memory cap makes a Trial void.
+provider capacity or overload errors, a plan-limit stop, a host kill or
+Trial-only memory cap, or a web-search tool call in any session transcript
+(`web_search`) makes a Trial void.
 Timeouts, context-window overflow, refusals and agent failures count as failed
 Trials. Void Trials retry fresh up to the Bar's limit and remain void if
 exhausted. A task still void in either Arm drops out of both Arms.

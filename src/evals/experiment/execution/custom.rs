@@ -16,6 +16,8 @@ use crate::trial::{Outcome, Output, VoidCause};
 
 mod recording;
 pub(crate) mod sessions;
+#[cfg(test)]
+mod tests;
 pub(super) use recording::Recorder;
 
 pub(super) fn collect(
