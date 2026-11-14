@@ -513,8 +513,14 @@ pub fn run(options: Options) -> Result<()> {
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
             Some(baseline_reference.unwrap_or_else(|| "main (merge base)".into()));
-        experiment.details.candidate_ref =
-            Some(experiment.description.candidate.reference().into());
+        experiment.details.candidate_ref = Some(
+            options
+                .candidate_setup
+                .runner
+                .as_deref()
+                .unwrap_or(&options.candidate)
+                .to_owned(),
+        );
         experiment.details.title = if let Some(commit) = &experiment.description.candidate.commit {
             Some(git.run(&["log", "-1", "--format=%s", commit])?)
         } else {
