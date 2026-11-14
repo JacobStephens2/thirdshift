@@ -118,8 +118,8 @@ pub(super) fn result(process: &ProcessOutput, attempt: &Path, elapsed: u128) -> 
             "Custom runner void requires void_cause"
         );
         ensure!(
-            process.status.success() || document.outcome == Outcome::Void,
-            "Custom runner exited nonzero without an allowed Void cause"
+            process.status.success(),
+            "Custom runner exited nonzero without outer Void evidence"
         );
         let mut output = Output::failed(elapsed, "Custom runner failed");
         output.outcome = document.outcome;

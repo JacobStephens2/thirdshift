@@ -260,6 +260,7 @@ impl<'a> Execution<'a> {
         // the Trial diagnosed them, so limit pauses keep pausing, and an
         // agent's own out-of-memory error leaves no kernel kill behind.
         let cap_killed = || launched.oom_killed();
+        let mut runner_result = false;
         let mut protocol = if let Some(error) = interruption {
             void_interrupted(started.elapsed().as_millis(), &error)
         } else {
@@ -274,9 +275,10 @@ impl<'a> Execution<'a> {
                     // code, so a scoped SIGKILL arrives as 137, not as a signal.
                     let sigkilled = output.status.signal() == Some(libc::SIGKILL)
                         || output.status.code() == Some(128 + libc::SIGKILL);
-                    if cap_killed() {
+                    if arm.runner.is_some() && cap_killed() {
                         void_memory_cap(started.elapsed().as_millis())
                     } else if arm.runner.is_some() {
+                        runner_result = true;
                         custom::result(&output, &attempt, started.elapsed().as_millis())
                     } else if sigkilled {
                         Output::failed(
@@ -340,7 +342,7 @@ impl<'a> Execution<'a> {
             }
         }
         if let Some(runner) = &arm.runner
-            && protocol.outcome != Outcome::Void
+            && (protocol.outcome != Outcome::Void || runner_result)
         {
             match custom::inspect(
                 runner,

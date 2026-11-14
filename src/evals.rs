@@ -37,7 +37,7 @@ pub enum Action {
     },
     PrepareArms {
         repository: PathBuf,
-        arms: [arms::Requested; 2],
+        arms: Box<[arms::Requested; 2]>,
         record: PathBuf,
     },
     PrepareSelectedArms {
@@ -128,7 +128,7 @@ pub fn parse(args: &[String]) -> Result<Action> {
             arms::Requested::options(&mut arms, options)?;
             Ok(Action::PrepareArms {
                 repository: repository.into(),
-                arms,
+                arms: Box::new(arms),
                 record: record.into(),
             })
         }
@@ -179,7 +179,7 @@ pub fn execute(action: Action) -> Result<String> {
             record,
         } => Ok(serde_json::to_string_pretty(&arms::prepare(
             &repository,
-            arms,
+            *arms,
             &record,
         )?)?),
         Action::PrepareSelectedArms {

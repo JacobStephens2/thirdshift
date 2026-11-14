@@ -1,5 +1,52 @@
 use super::*;
 
+#[test]
+fn a_self_reported_void_cannot_hide_committed_excluded_paths() {
+    let fixture = process::fixture();
+    let body = DELIVER.replace(
+        "subprocess.run(['git', 'commit'",
+        "subprocess.run(['git', 'add', '-f', '.scratch/private.txt'], check=True)\nsubprocess.run(['git', 'commit'",
+    ) + "\njson.dump({'version':1,'outcome':'void','void_cause':'session_unavailable'}, open(output / 'result.json','w'))\n";
+    runner(&fixture, &body);
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    let results = view["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{view}");
+    for result in results {
+        assert_eq!(result["outcome"], "failed", "{result}");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+        assert!(
+            result["attempts"][0]["cause"]
+                .as_str()
+                .unwrap()
+                .contains("git_exclude path on HEAD"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn nonzero_exit_without_outer_void_evidence_fails_despite_a_runner_void_claim() {
+    let fixture = process::fixture();
+    runner(
+        &fixture,
+        "json.dump({'version':1,'outcome':'void','void_cause':'session_unavailable'}, open(output / 'result.json','w'))\nprint('runner exited seven', file=sys.stderr)\nsys.exit(7)",
+    );
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    let results = view["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{view}");
+    for result in results {
+        assert_eq!(result["outcome"], "failed", "{result}");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+        let cause = result["attempts"][0]["cause"].as_str().unwrap();
+        assert!(cause.contains("exit status: 7"), "{cause}");
+        assert!(cause.contains("runner exited seven"), "{cause}");
+    }
+}
+
 fn runner(fixture: &Fixture, body: &str) -> String {
     let directory = fixture.scenario.path("home/.thirdshift/runners");
     fs::create_dir_all(&directory).unwrap();

@@ -265,56 +265,26 @@ fn validate_runner_suites(options: &Options, root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn prepare_arms(
-    repository: &Path,
-    options: Options,
-    record: &Path,
-) -> Result<arms::Prepared> {
-    let root = crate::config::home()?.join(".thirdshift/evals/suites");
-    validate_runner_suites(&options, &root)?;
-    let git = Git::new(repository);
-    let config = UserConfig::load()?;
-    let baseline_commit = if options.baseline_setup.runner.is_some() {
-        String::new()
-    } else {
-        resolve(&git, options.baseline.as_deref().unwrap_or("HEAD"))?
-    };
-    let candidate_commit = if options.candidate_setup.runner.is_some() {
-        String::new()
-    } else {
-        resolve(&git, &options.candidate)?
-    };
-    let mut baseline = options.baseline_setup.resolve(baseline_commit, &config);
-    let mut candidate = options.candidate_setup.resolve(candidate_commit, &config);
-    if baseline.process.is_some()
-        || candidate.process.is_some()
-        || options.baseline_setup.runner.is_some()
-        || options.candidate_setup.runner.is_some()
-    {
-        for setup in [&mut baseline, &mut candidate] {
-            if setup.runner.is_none() {
-                setup.process.get_or_insert_with(|| "ticket-run".into());
-            }
+fn process_setups(setups: [&mut Setup; 2]) {
+    for setup in setups {
+        if setup.runner.is_none() {
+            setup.process.get_or_insert_with(|| "ticket-run".into());
         }
     }
-    arms::prepare(
-        repository,
-        [baseline.requested()?, candidate.requested()?],
-        record,
-    )
 }
 
-pub fn run(options: Options) -> Result<()> {
-    interrupt::install()?;
-    let repository = std::env::current_dir()?;
-    let git = Git::new(&repository);
-    let root = crate::config::home()?.join(".thirdshift/evals");
-    let suites_root = root.join("suites");
-    validate_runner_suites(&options, &suites_root)?;
+struct SelectedArms {
+    baseline: Setup,
+    candidate: Setup,
+    baseline_reference: Option<String>,
+}
+
+/// Both CLI paths resolve native builds and Custom runners under one policy.
+fn select_arms(options: &Options, git: &Git, config: &UserConfig) -> Result<SelectedArms> {
     let candidate = if options.candidate_setup.runner.is_some() {
         String::new()
     } else {
-        resolve(&git, &options.candidate)?
+        resolve(git, &options.candidate)?
     };
     let baseline_reference = if options.release && options.baseline.is_none() {
         Some(git.run(&[
@@ -336,18 +306,70 @@ pub fn run(options: Options) -> Result<()> {
         String::new()
     } else {
         match &baseline_reference {
-            Some(reference) => resolve(&git, reference)?,
+            Some(reference) => resolve(git, reference)?,
             None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
         }
     };
+    Ok(SelectedArms {
+        baseline: options.baseline_setup.resolve(baseline, config),
+        candidate: options.candidate_setup.resolve(candidate, config),
+        baseline_reference,
+    })
+}
+
+pub(super) fn prepare_arms(
+    repository: &Path,
+    options: Options,
+    record: &Path,
+) -> Result<arms::Prepared> {
+    let root = crate::config::home()?.join(".thirdshift/evals/suites");
+    validate_runner_suites(&options, &root)?;
+    let SelectedArms {
+        mut baseline,
+        mut candidate,
+        ..
+    } = select_arms(&options, &Git::new(repository), &UserConfig::load()?)?;
+    if baseline.process.is_some()
+        || candidate.process.is_some()
+        || baseline.runner.is_some()
+        || candidate.runner.is_some()
+    {
+        process_setups([&mut baseline, &mut candidate]);
+    }
+    arms::prepare(
+        repository,
+        [baseline.requested()?, candidate.requested()?],
+        record,
+    )
+}
+
+pub fn run(options: Options) -> Result<()> {
+    interrupt::install()?;
+    let repository = std::env::current_dir()?;
+    let git = Git::new(&repository);
+    let root = crate::config::home()?.join(".thirdshift/evals");
+    let suites_root = root.join("suites");
+    validate_runner_suites(&options, &suites_root)?;
+    let config = UserConfig::load()?;
+    let SelectedArms {
+        mut baseline,
+        mut candidate,
+        baseline_reference,
+    } = select_arms(&options, &git, &config)?;
     let suites = if options.suites.is_empty() {
         let paths = git.run(&[
             "--no-replace-objects",
             "diff",
             "--name-only",
             "--no-renames",
-            &baseline,
-            &candidate,
+            baseline
+                .commit
+                .as_deref()
+                .context("missing Baseline commit for suite selection")?,
+            candidate
+                .commit
+                .as_deref()
+                .context("missing Candidate commit for suite selection")?,
             "--",
         ])?;
         suite::touched(
@@ -368,9 +390,6 @@ pub fn run(options: Options) -> Result<()> {
         !suites.is_empty(),
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
-    let config = UserConfig::load()?;
-    let mut baseline = options.baseline_setup.resolve(baseline, &config);
-    let mut candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
     // Keep the judged list and the retained manifest snapshots on one reading
     // of Difficulty, fenced against approval and Difficulty publication.
@@ -391,11 +410,7 @@ pub fn run(options: Options) -> Result<()> {
         for (name, directory) in suite::directories(&suites_root.join(name).join("tasks"))? {
             let task = format::Task::load(&directory)?;
             if task.state == format::State::Approved && task.session == format::Session::Process {
-                for setup in [&mut baseline, &mut candidate] {
-                    if setup.runner.is_none() {
-                        setup.process.get_or_insert_with(|| "ticket-run".into());
-                    }
-                }
+                process_setups([&mut baseline, &mut candidate]);
             }
             if task.state == format::State::Approved
                 && task
