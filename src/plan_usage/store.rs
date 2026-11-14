@@ -89,6 +89,16 @@ pub struct State {
 }
 
 impl State {
+    /// The utilization of its Plan window `name`, unless that window has
+    /// reset by `now`.
+    pub fn used_percent_in(&self, name: &str, now: DateTime<Utc>) -> Option<f64> {
+        self.windows
+            .iter()
+            .filter(|window| !window.reset_by(now))
+            .find(|window| window.name == name)
+            .and_then(|window| window.used_percent)
+    }
+
     /// Whether anything was ever observed here, beyond the reads' attempts.
     pub fn observed(&self) -> bool {
         self.observed_at.is_some() || self.cooldown.is_some()

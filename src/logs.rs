@@ -480,6 +480,25 @@ pub fn session_choice(choice: &crate::harness::Choice) {
     record().session_choice(choice);
 }
 
+/// `configured` as the Command's implement session ran it: the Harness,
+/// Model and Effort its record keeps for that session, which Plan usage may
+/// have routed to another route, else `configured` itself. `Built with`
+/// names this one tuple.
+pub(crate) fn implemented_on(configured: &crate::harness::Choice) -> crate::harness::Choice {
+    let recorded = record().implemented_on();
+    match recorded.and_then(|(name, model, effort)| {
+        Some((crate::harness::Harness::named(&name)?, model, effort))
+    }) {
+        Some((harness, model, effort)) => crate::harness::Choice {
+            harness,
+            model,
+            effort,
+            ..configured.clone()
+        },
+        None => configured.clone(),
+    }
+}
+
 /// The selected Issue branch, retained unless completion says it was removed.
 pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
@@ -515,14 +534,14 @@ pub(crate) fn resumable(command: &str) {
 
 /// A Paused Command's Claim put `ready-for-agent` back: a later Pickup run
 /// retakes its issue once Plan usage allows.
-pub(crate) fn retaken_by_pickup() {
-    record().retaken_by_pickup();
+pub(crate) fn handed_back_for_pickup() {
+    record().handed_back_for_pickup();
 }
 
 /// Whether this Command's record says a later Pickup run retakes it: its
 /// Claim put `ready-for-agent` back when it paused.
-pub(crate) fn recorded_retaken_by_pickup() -> bool {
-    record().recorded_retaken_by_pickup()
+pub(crate) fn recorded_handed_back_for_pickup() -> bool {
+    record().recorded_handed_back_for_pickup()
 }
 
 pub(crate) fn paused(limit: &crate::session::limits::Limit) {

@@ -613,9 +613,7 @@ impl<'a> Sessions<'a> {
             return Ok(());
         };
         self.step(format!("{label}: not started: {exhaustion}"));
-        let paused = limits::PlanUsagePaused::new(exhaustion.limit());
-        logs::paused(&paused.limit);
-        Err(paused.into())
+        Err(limits::PlanUsagePaused::recorded(exhaustion.limit(), None))
     }
 
     /// A factory Command's Step whose session stopped at a Plan usage limit

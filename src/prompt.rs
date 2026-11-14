@@ -1084,6 +1084,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn with_open_pr_gives_the_continuation_for_that_pull_request() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let pr = "https://github.com/acme/widgets/pull/8";
+        for base in ["main", "issue-3"] {
+            let written = continuation(&issue, base, "issue-7", None);
+            assert_eq!(
+                with_open_pr(&written, base, pr),
+                continuation(&issue, base, "issue-7", Some(pr))
+            );
+        }
+    }
+
+    #[test]
     fn review_reports_count_only_actionable_findings() {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let pr =

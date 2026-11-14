@@ -496,9 +496,13 @@ fn follow(
             pending.drain(..complete);
         }
         if policy.stop_at_limit {
+            crate::plan_usage::record(progress.take_plan_usage());
             for raw in progress.limit_records() {
                 record_line(kind, raw.as_bytes(), log, progress, trace, policy.private)?;
             }
+            // A sandboxed Trial can write these records: they stop it at its
+            // limit, never move the machine's Plan usage.
+            drop(progress.take_plan_usage());
         } else if eof || native_read.elapsed() >= NATIVE_PLAN_USAGE_INTERVAL {
             // Ordinary sessions read native quota reports for Plan usage
             // alone, keeping their Session trace as it was.

@@ -122,6 +122,25 @@ pub(crate) fn credits_allowed(choice: &Choice) -> bool {
     UserConfig::load().is_ok_and(|config| config.routing.allows_credits(choice, &config.harness))
 }
 
+/// The route sessions that can't move between routes keep to, as a Triage
+/// run's machine-reading sandbox binds one Harness's files: the first of
+/// the User config's routes that could take a session now by this
+/// machine's Plan usage, else `harness`. A choice the routes did not make
+/// stays as it is.
+pub fn settled_route(harness: &Choice) -> Choice {
+    if harness.chosen_by != crate::harness::ChosenBy::Routes {
+        return harness.clone();
+    }
+    let Ok(config) = UserConfig::load() else {
+        return harness.clone();
+    };
+    let router = Router::of(&config.harness, &config.routing, harness, None, None);
+    router
+        .pick(false, &[])
+        .and_then(|picked| router.candidates(false).get(picked.index))
+        .map_or_else(|| harness.clone(), |candidate| candidate.choice.clone())
+}
+
 /// `harness` as a subscription Harness for `--clear`.
 pub fn subscription_named(name: &str) -> Result<Harness> {
     match Harness::named(name) {
@@ -340,13 +359,10 @@ pub(crate) fn latest_limit() -> Option<crate::session::limits::Limit> {
         .max_by_key(|(_, _, cooldown)| cooldown.since);
     match cooled {
         Some((harness, state, cooldown)) => {
-            let used = cooldown.window.as_deref().and_then(|window| {
-                state
-                    .windows
-                    .iter()
-                    .find(|kept| kept.name == window)
-                    .and_then(|kept| kept.used_percent)
-            });
+            let used = cooldown
+                .window
+                .as_deref()
+                .and_then(|window| state.used_percent_in(window, now));
             Some(crate::session::limits::Limit::of(
                 harness,
                 cooldown.window.clone(),
@@ -403,37 +419,5 @@ pub fn execute(action: Action) -> Result<String> {
                 Ok(shown.to_string())
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn machine_exhaustion_reads_nothing_in_unit_tests() {
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap();
-        let path = home.join(".thirdshift/plan-usage.json");
-        // Leave a machine's real snapshot alone; with none, write a held
-        // default Harness that a read would find.
-        let written = !path.exists();
-        if written {
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(
-                &path,
-                r#"{"harnesses":{"claude":{"cooldown":{"since":"2026-01-01T00:00:00Z","until":"2096-10-02T07:06:40Z","window":"five_hour"}}}}"#,
-            )
-            .unwrap();
-        }
-        let config =
-            crate::config::UserConfig::parse("", &home.join(".thirdshift/config.toml"), &home)
-                .unwrap();
-        let found = machine_exhaustion(&config);
-        if written {
-            std::fs::remove_file(&path).unwrap();
-        }
-        assert!(found.is_none(), "{found:?}");
     }
 }

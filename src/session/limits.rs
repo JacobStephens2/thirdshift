@@ -89,6 +89,17 @@ impl PlanUsagePaused {
             detail: None,
         }
     }
+
+    /// The error ending a Paused Command at `limit`, with `detail` naming
+    /// what stopped, once its Command record keeps the pause.
+    pub(crate) fn recorded(limit: Limit, detail: Option<String>) -> anyhow::Error {
+        let paused = Self {
+            detail,
+            ..Self::new(limit)
+        };
+        crate::logs::paused(&paused.limit);
+        paused.into()
+    }
 }
 
 impl std::fmt::Display for PlanUsagePaused {

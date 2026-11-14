@@ -1245,11 +1245,8 @@ impl Outside for InWorktree<'_> {
     ) -> Result<Option<String>> {
         let base = self.base;
         let pull_request = &mut *self.pull_request;
-        let mut continue_with = |committed: bool| match continuation {
-            Some(continuation) => {
-                crate::implement::continue_with(continuation, committed, base, pull_request)
-            }
-            None => Ok(None),
+        let mut continue_with = |committed: bool| {
+            crate::implement::continue_with(continuation, committed, base, pull_request)
         };
         let final_message =
             self.sessions

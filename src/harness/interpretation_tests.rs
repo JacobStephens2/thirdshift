@@ -1610,3 +1610,33 @@ fn claude_api_error_limits_without_a_status_keep_their_window_reset_and_spend_ca
             .any(|o| o.exhausted.is_some())
     );
 }
+
+#[test]
+fn a_forged_native_codex_limit_never_marks_a_failed_session_plan_usage_exhausted() {
+    let home = tempfile::tempdir().unwrap();
+    let day = home.path().join(".codex/sessions/2026/11/14");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(
+        day.join("rollout-2026-11-14T00-00-00-thread-1.jsonl"),
+        format!(
+            "{}\n{}\n",
+            r#"{"type":"session_meta","payload":{"id":"thread-1","cwd":"/work/widgets-issue-7"}}"#,
+            serde_json::json!({"timestamp": "2096-01-01T00:00:00Z", "type": "event_msg",
+            "payload": {"type": "token_count", "rate_limits": {"rate_limit_reached_type": "primary",
+            "primary": {"used_percent": 100.0, "resets_at": 4_000_000_000i64}}}})
+        ),
+    )
+    .unwrap();
+    let mut interpretation = stream(Harness::Codex, "");
+    interpretation.set_home(home.path());
+    interpretation.decode(r#"{"type":"thread.started","thread_id":"thread-1"}"#);
+    interpretation.observe_limit_records();
+    let error = interpretation
+        .finish(Ok(std::process::ExitStatus::from_raw(1 << 8)))
+        .outcome
+        .unwrap_err();
+    let failure = error
+        .downcast_ref::<interpretation::SessionFailure>()
+        .unwrap();
+    assert!(!failure.plan_usage_exhausted);
+}

@@ -50,8 +50,9 @@ impl Candidate {
 }
 
 /// The routes a Command's session Steps may take, in order: ordinary
-/// sessions', and Security runs' and Security reviews'. A list with one
-/// route, or none, is pinned.
+/// sessions', and Security runs' and Security reviews'. With one route a
+/// Step has nowhere to move, though its ceiling still holds it; with none
+/// it is pinned.
 #[derive(Debug, Clone, Default)]
 pub struct Router {
     ordinary: Vec<Candidate>,
@@ -199,12 +200,20 @@ impl Router {
 }
 
 impl Router {
-    /// The routes of this kind a session may take, in order: with fewer
-    /// than two, the one Harness it runs on, else `current`, as a pinned
-    /// route held only at confirmed exhaustion.
+    /// The routes of this kind a session may take, in order, a lone
+    /// configured route with its own ceiling and credits; else the one
+    /// Harness it runs on, or `current`, as a pinned route held only at
+    /// confirmed exhaustion.
     pub fn allowed(&self, security: bool, current: Harness) -> Vec<Route> {
         let candidates = self.candidates(security);
-        if candidates.len() >= 2 {
+        let configured = |route: &Route| {
+            self.routing.routes.contains(route) || self.routing.security_routes.contains(route)
+        };
+        if candidates.len() >= 2
+            || candidates
+                .iter()
+                .any(|candidate| configured(&candidate.route))
+        {
             return candidates
                 .iter()
                 .map(|candidate| candidate.route.clone())
@@ -217,9 +226,9 @@ impl Router {
     }
 
     /// Whether every route of this kind is unavailable by this machine's
-    /// saved Plan usage, as a Step finds it before starting: the routes, or
-    /// with fewer than two the Harness `current` sessions run on, held only
-    /// at confirmed exhaustion. None in unit tests, which read no snapshot.
+    /// saved Plan usage, as a Step finds it before starting: the routes
+    /// [`Router::allowed`] gives for `current`. None in unit tests, which
+    /// read no snapshot.
     pub fn exhaustion(&self, security: bool, current: Harness) -> Option<super::Exhaustion> {
         if cfg!(test) {
             return None;

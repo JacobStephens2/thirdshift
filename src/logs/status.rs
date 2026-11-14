@@ -30,6 +30,9 @@ struct Status<'a> {
     idle_passes: &'a [IdlePass],
     pass_starts: &'a [PassStart],
     github_quota_wait: Option<String>,
+    /// Every route a Command with no Harness flags would take on this
+    /// machine is unavailable by Plan usage, so scheduled Passes skip.
+    plan_usage_banner: Option<String>,
     /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
     /// no answer is kept: with no ready pull requests to read, or before
     /// the first read.
@@ -73,6 +76,7 @@ impl Read {
             idle_passes: &self.snapshot.idle_passes,
             pass_starts: &self.snapshot.pass_starts,
             github_quota_wait: self.kept.quota_wait(),
+            plan_usage_banner: crate::plan_usage::banner(config),
             github_answer_age_seconds: self.kept.age.map(|age| age.as_secs()),
             github_last_answered_at: self.kept.last_answered_at(),
             github_failure: self.kept.failure.as_deref(),
@@ -277,7 +281,7 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         if include_local && let Some(wait) = status.github_quota_wait {
             println!("{wait}");
         }
-        if include_local && let Some(banner) = crate::plan_usage::banner(&config) {
+        if include_local && let Some(banner) = status.plan_usage_banner {
             println!("{banner}");
         }
     }

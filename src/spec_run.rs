@@ -465,12 +465,10 @@ fn land_tickets(
             && board.only_paused()
             && untrusted_ticket(outside, &board).is_none()
         {
-            let paused = crate::session::limits::PlanUsagePaused {
-                limit: crate::plan_usage::latest_limit().unwrap_or_default(),
-                detail: Some(format!("Ticket #{number} paused")),
-            };
-            crate::logs::paused(&paused.limit);
-            return Err(paused.into());
+            return Err(crate::session::limits::PlanUsagePaused::recorded(
+                crate::plan_usage::latest_limit().unwrap_or_default(),
+                Some(format!("Ticket #{number} paused")),
+            ));
         }
         let untrusted = if board.only_waiting() {
             untrusted_ticket(outside, &board)

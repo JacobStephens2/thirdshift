@@ -413,7 +413,9 @@ impl Interpretation {
     }
 
     /// Read supplied raw records for Plan usage alone, leaving the Session
-    /// trace as ordinary sessions keep it.
+    /// trace as ordinary sessions keep it. The agent can write these files,
+    /// so they report Plan windows only, never the exhaustion that routes a
+    /// Step, pauses a Command or releases its Claim.
     pub fn observe_limit_records(&mut self) {
         let now = chrono::Utc::now();
         for raw in self.decoder.limit_records() {
@@ -421,7 +423,10 @@ impl Interpretation {
                 && let Some(observation) =
                     crate::plan_usage::observation::codex_token_count(&record, now)
             {
-                self.note_plan_usage(observation);
+                self.note_plan_usage(crate::plan_usage::Observation {
+                    exhausted: None,
+                    ..observation
+                });
             }
         }
     }

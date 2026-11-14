@@ -40,13 +40,16 @@ fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) ->
 /// What an implement session starts again with once Plan usage moved it
 /// to another route: `continuation`, naming the branch's open pull request
 /// if it has one by now, once the session `committed` or opened one; none
-/// to keep its own prompt.
+/// to keep its own prompt, always when the session has no `continuation`.
 pub(crate) fn continue_with<A: crate::pull_request::Adapter>(
-    continuation: &str,
+    continuation: Option<&str>,
     committed: bool,
     base: &str,
     pull_request: &mut crate::pull_request::PullRequest<A>,
 ) -> Result<Option<String>> {
+    let Some(continuation) = continuation else {
+        return Ok(None);
+    };
     pull_request.ensure_actionable(false)?;
     Ok(match pull_request.info() {
         Some(pr) => Some(prompt::with_open_pr(continuation, base, &pr.url)),

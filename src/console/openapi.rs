@@ -221,7 +221,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 "commands": array(record.clone()), "idle_passes": array(record.clone()),
                 "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
                 "github_last_answered_at": {"type": ["string", "null"]},
-                "github_failure": {"type": ["string", "null"]}
+                "github_failure": {"type": ["string", "null"]},
+                "plan_usage_banner": {"type": ["string", "null"]}
             }))
         }
         View::Inspect => {

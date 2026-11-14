@@ -283,14 +283,27 @@ pub(crate) fn codex_token_count(event: &Value, now: DateTime<Utc>) -> Option<Obs
 }
 
 /// A Harness's own terminal failure, from a top-level failed-turn frame,
-/// when its reason names a usage limit. Callers pass only frames the agent
-/// cannot write: never a tool's or sub-agent's failure, nor an interrupted
-/// turn's final message.
+/// when its reason names a usage limit rather than a per-minute or
+/// per-second request rate, which is transient throttling. Callers pass
+/// only frames the agent cannot write: never a tool's or sub-agent's
+/// failure, nor an interrupted turn's final message.
 pub(crate) fn terminal_failure(harness: Harness, reason: &str) -> Option<Observation> {
-    (crate::harness::interpretation::event::ErrorKind::from_text(reason)
-        == crate::harness::interpretation::event::ErrorKind::UsageLimit)
+    let usage = crate::harness::interpretation::event::ErrorKind::from_text(reason)
+        == crate::harness::interpretation::event::ErrorKind::UsageLimit;
+    (usage && !throttling(reason))
         .then(|| usage_limit(harness))
         .flatten()
+}
+
+/// Whether `reason` names a short request-rate quota, such as Gemini's
+/// "requests per minute", whose 429 clears in moments.
+fn throttling(reason: &str) -> bool {
+    let squeezed: String = reason
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|character| character.to_ascii_lowercase())
+        .collect();
+    squeezed.contains("perminute") || squeezed.contains("persecond")
 }
 
 /// A terminal usage-limit error a Harness's stream decoder reported.
@@ -306,6 +319,20 @@ pub(crate) fn usage_limit(harness: Harness) -> Option<Observation> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_per_minute_quota_throttle_is_not_plan_usage() {
+        assert!(terminal_failure(Harness::Agy,
+            "429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Generate Content API requests per minute'").is_none());
+        assert!(
+            terminal_failure(
+                Harness::Agy,
+                "quota exceeded: GenerateRequestsPerMinutePerProject"
+            )
+            .is_none()
+        );
+        assert!(terminal_failure(Harness::Grok, "quota exceeded").is_some());
+    }
 
     #[test]
     fn claude_rate_limit_events_are_kept_at_every_status_and_utilization() {

@@ -294,8 +294,8 @@ struct CommandChoice {
 }
 
 impl CommandChoice {
-    fn of(asked: &Asked, settings: &harness::Settings) -> Self {
-        let choice = Choice::of(asked, settings);
+    fn of(asked: &Asked, config: &UserConfig) -> Self {
+        let choice = crate::asks::choice(asked, config);
         let sources = Sources {
             harness: source_from(choice.chosen_by),
             model: Source::word(&asked.model_and_effort.model, &choice.model),
@@ -662,12 +662,12 @@ fn run(command: &ProcessRun) -> Result<String> {
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
         let skip = |reason: &command_limit::NotAdmitted| {
-            let choice = Choice::of(&command.asked, &config.harness);
+            let choice = crate::asks::choice(&command.asked, &config);
             progress::step(reason);
             logs::skipped_process(&repo, name, &choice, reason);
             String::new()
         };
-        let harness = Choice::of(&command.asked, &config.harness);
+        let harness = crate::asks::choice(&command.asked, &config);
         if let Some(skipped) =
             command_limit::early_skip(&repo, config.command_limit, &harness, false)
         {
@@ -2056,7 +2056,7 @@ fn prepare_from(
         .collect();
     let skip = source.issue_checkout.and(issue_worktree.as_deref());
     let worktrees = create_worktrees(source.git, source.commit, &file, skip)?;
-    let mut command = CommandChoice::of(asked, &config.harness);
+    let mut command = CommandChoice::of(asked, config);
     let mut steps = Vec::new();
     for step in &file.steps {
         let checkout = resolve_dir(

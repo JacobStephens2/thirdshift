@@ -255,7 +255,7 @@ trait Outside {
     fn interrupted(&mut self) -> bool;
     /// Take note that a Paused Command's Claim put `ready-for-agent` back,
     /// so a later Pickup run retakes the issue once Plan usage allows.
-    fn retaken_by_pickup(&mut self);
+    fn handed_back_for_pickup(&mut self);
     /// The requested Stop ending, if this Command is handling a Stop.
     fn stop(&mut self) -> Option<crate::logs::stop::Ending>;
     /// Hand on the progress line `line`.
@@ -322,8 +322,8 @@ impl Outside for OnGitHub<'_> {
         interrupt::requested()
     }
 
-    fn retaken_by_pickup(&mut self) {
-        crate::logs::retaken_by_pickup();
+    fn handed_back_for_pickup(&mut self) {
+        crate::logs::handed_back_for_pickup();
     }
 
     fn stop(&mut self) -> Option<crate::logs::stop::Ending> {
@@ -768,7 +768,7 @@ impl<'a> Claimed<'a> {
             self.put_labels_back(outside, &why).map(|()| true)
         });
         match restored {
-            Ok(true) => outside.retaken_by_pickup(),
+            Ok(true) => outside.handed_back_for_pickup(),
             Ok(false) => {}
             Err(error) => outside.warn(
                 &error,
@@ -983,7 +983,7 @@ mod in_memory {
         /// Every call made, in order.
         pub calls: Vec<Call>,
         /// Whether a Paused Command's Claim noted that Pickup retakes it.
-        pub retaken_by_pickup: bool,
+        pub handed_back_for_pickup: bool,
     }
 
     impl InMemory {
@@ -1086,8 +1086,8 @@ mod in_memory {
             self.stop
         }
 
-        fn retaken_by_pickup(&mut self) {
-            self.retaken_by_pickup = true;
+        fn handed_back_for_pickup(&mut self) {
+            self.handed_back_for_pickup = true;
         }
 
         fn step(&mut self, line: String) {
@@ -1543,7 +1543,7 @@ mod tests {
             ]
         );
         assert_eq!(labels(&issue), ["bug", "ready-for-agent"]);
-        assert!(issue.retaken_by_pickup);
+        assert!(issue.handed_back_for_pickup);
     }
 
     #[test]
@@ -1556,7 +1556,7 @@ mod tests {
         claimed.end(&mut issue, Ending::Paused);
 
         assert_eq!(labels(&issue), ["bug", "needs-triage"]);
-        assert!(!issue.retaken_by_pickup);
+        assert!(!issue.handed_back_for_pickup);
         assert!(
             !issue
                 .calls
@@ -1574,7 +1574,7 @@ mod tests {
         claimed.end(&mut issue, Ending::Paused);
 
         assert_eq!(labels(&issue), ["bug"]);
-        assert!(!issue.retaken_by_pickup);
+        assert!(!issue.handed_back_for_pickup);
     }
 
     #[test]
@@ -1586,7 +1586,7 @@ mod tests {
         claimed.end(&mut issue, Ending::Paused);
 
         assert_eq!(labels(&issue), ["security-fix", "agent-failed"]);
-        assert!(!issue.retaken_by_pickup);
+        assert!(!issue.handed_back_for_pickup);
     }
 
     #[test]

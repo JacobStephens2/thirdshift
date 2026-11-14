@@ -254,14 +254,7 @@ impl Flags {
     /// the default. It is a Run's, and a Pass's
     /// for its own sessions as for the run it dispatches.
     pub fn harness(&self, config: &UserConfig) -> Choice {
-        if self.harness == harness::Asked::default()
-            && let Some(first) = config.routing.first(&config.harness)
-        {
-            // Nothing asked: the first of `harness.routes`, which Plan usage
-            // may route each session Step away from.
-            return first;
-        }
-        Choice::of(&self.harness, &config.harness)
+        choice(&self.harness, config)
     }
 
     /// The Harness of a Security run: command, Security setting, default
@@ -280,6 +273,19 @@ impl Flags {
         }
         choice
     }
+}
+
+/// What a factory Command that `asked` for its Harness, Model and Effort
+/// runs its sessions on: as asked, else `config`'s. A Command that asked
+/// for none of them takes the first of `harness.routes`, which Plan usage
+/// may route each session Step away from.
+pub fn choice(asked: &harness::Asked, config: &UserConfig) -> Choice {
+    if *asked == harness::Asked::default()
+        && let Some(first) = config.routing.first(&config.harness)
+    {
+        return first;
+    }
+    Choice::of(asked, &config.harness)
 }
 
 #[cfg(test)]

@@ -1462,7 +1462,7 @@ fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
     configure(home.path());
     let mut retaken = record(home.path(), 7, Some("paused"), 0);
     retaken["kind"] = json!("Run");
-    retaken["retaken_by_pickup"] = json!(true);
+    retaken["handed_back_for_pickup"] = json!(true);
     retaken["cause"] = json!("no allowed route has available Plan usage: claude five-hour window");
     super::write_record(home.path(), 7, &retaken);
     let mut waiting = record(home.path(), 8, Some("paused"), 0);

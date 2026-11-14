@@ -41,12 +41,6 @@ fn stops_at_the_limit() -> String {
 const ROUTES: &str = "[harness]\nroutes = [\"claude\", \"codex\"]\n";
 
 /// Save `harnesses` as the machine's Plan usage snapshot.
-fn plan_usage_is(scenario: &Scenario, harnesses: Value) {
-    let path = scenario.path("home/.thirdshift/plan-usage.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, json!({ "harnesses": harnesses }).to_string()).unwrap();
-}
-
 /// A Harness held until `RESET_AT` after a refusal in its five-hour window,
 /// freshly observed so routing reads nothing more.
 fn in_cooldown() -> Value {
@@ -57,10 +51,7 @@ fn in_cooldown() -> Value {
 
 /// Both routes held by Plan usage.
 fn every_route_in_cooldown(scenario: &Scenario) {
-    plan_usage_is(
-        scenario,
-        json!({"claude": in_cooldown(), "codex": in_cooldown()}),
-    );
+    scenario.plan_usage_is(json!({"claude": in_cooldown(), "codex": in_cooldown()}));
 }
 
 fn activity(scenario: &Scenario) -> String {
@@ -167,7 +158,7 @@ fn passes_skip_without_work_while_every_route_is_unavailable_and_log_each_reason
     );
 
     // Once a route frees up, the Pass runs and the banner goes.
-    plan_usage_is(&scenario, json!({"claude": in_cooldown()}));
+    scenario.plan_usage_is(json!({"claude": in_cooldown()}));
     scenario.agent_does(support::AGENT_COMMITS_AND_OPENS_PR);
     let ran = scenario.run(&["pickup"]);
     assert_eq!(ran.code, Some(0), "{}", ran.stderr);
@@ -193,7 +184,7 @@ fn passes_skip_without_work_while_every_route_is_unavailable_and_log_each_reason
 fn named_custom_processes_each_log_an_unchanged_plan_usage_skip_once() {
     let scenario = Scenario::new();
     scenario.user_config_is("[harness]\ndefault = \"claude\"\n");
-    plan_usage_is(&scenario, json!({"claude": in_cooldown()}));
+    scenario.plan_usage_is(json!({"claude": in_cooldown()}));
     for name in ["notes", "other-notes"] {
         process_named(&scenario, name);
     }
@@ -265,7 +256,7 @@ fn a_run_whose_only_route_stops_at_its_limit_pauses_and_hands_its_issue_back_for
             .is_some_and(|command| command.contains(&scenario.issue_url(7))),
         "{record:#}"
     );
-    assert_eq!(record["retaken_by_pickup"], true, "{record:#}");
+    assert_eq!(record["handed_back_for_pickup"], true, "{record:#}");
     assert!(record["failure_category"].is_null(), "{record:#}");
     assert!(
         activity(&scenario)
@@ -329,7 +320,7 @@ fn a_paused_run_on_an_issue_edited_by_an_untrusted_account_is_left_for_triage() 
         result.stderr
     );
     let record = issue_record(&scenario);
-    assert!(record["retaken_by_pickup"].is_null(), "{record:#}");
+    assert!(record["handed_back_for_pickup"].is_null(), "{record:#}");
     // No Pickup run retakes it, so it waits in Needs you.
     let (group, kind) = inbox_row(&scenario, 7);
     assert_eq!(group, "needs you");
@@ -492,12 +483,12 @@ fn a_named_custom_process_logs_its_plan_usage_skip_again_after_running_normally(
     let scenario = Scenario::new();
     scenario.user_config_is("[harness]\ndefault = \"claude\"\n");
     process_named(&scenario, "notes");
-    plan_usage_is(&scenario, json!({"claude": in_cooldown()}));
+    scenario.plan_usage_is(json!({"claude": in_cooldown()}));
     assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
-    plan_usage_is(&scenario, json!({}));
+    scenario.plan_usage_is(json!({}));
     scenario.run(&["process", "notes"]); // runs, not skipped
     assert!(claude_sessions(&scenario) > 0);
-    plan_usage_is(&scenario, json!({"claude": in_cooldown()}));
+    scenario.plan_usage_is(json!({"claude": in_cooldown()}));
     assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
     let line = format!(
         "Process notes skipped: no allowed route has available Plan usage: claude in cooldown (five_hour) until {RESET_AT}"
@@ -514,11 +505,8 @@ fn a_named_custom_process_logs_its_plan_usage_skip_again_after_running_normally(
 fn a_spec_run_whose_ticket_pauses_at_a_full_window_records_the_stopping_harness() {
     let scenario = Scenario::new();
     let now = chrono::Utc::now().to_rfc3339();
-    plan_usage_is(
-        &scenario,
-        json!({"claude": {"observed_at": now, "read_at": now,
-        "windows": [{"name": "five_hour", "used_percent": 100.0, "resets_at": RESET_AT}]}}),
-    );
+    scenario.plan_usage_is(json!({"claude": {"observed_at": now, "read_at": now,
+        "windows": [{"name": "five_hour", "used_percent": 100.0, "resets_at": RESET_AT}]}}));
     scenario.issue_labelled(20, &["ready-for-agent"]);
     scenario.spec_has_tickets(20, &[(21, &[])]);
     let result = scenario.run(&["parallel", "1", &scenario.issue_url(20)]);
@@ -546,5 +534,97 @@ fn a_paused_security_fix_still_waits_for_the_day_shift() {
     );
     let record = issue_record(&scenario);
     assert_eq!(record["outcome"], "paused", "{record:#}");
-    assert!(record["retaken_by_pickup"].is_null(), "{record:#}");
+    assert!(record["handed_back_for_pickup"].is_null(), "{record:#}");
+}
+
+#[test]
+fn a_custom_process_with_no_harness_flags_routes_its_steps() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(ROUTES);
+    process_named(&scenario, "notes");
+    scenario.plan_usage_is(json!({"claude": in_cooldown()}));
+    scenario.agent_does("printf Done > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(claude_sessions(&scenario), 0);
+    assert!(!scenario.codex_calls().is_empty(), "{}", result.stderr);
+}
+
+#[test]
+fn a_single_route_reserve_ceiling_skips_passes_as_the_banner_says() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\nroutes = [\"claude\"]\nmax_utilization = 85\n");
+    let now = chrono::Utc::now().to_rfc3339();
+    scenario.plan_usage_is(json!({"claude": {"observed_at": now, "read_at": now,
+        "windows": [{"name": "five_hour", "used_percent": 90.0, "resets_at": RESET_AT}]}}));
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let status = scenario.run(&["status", "--local"]);
+    assert!(
+        status.stdout.contains("so scheduled Passes skip"),
+        "{}",
+        status.stdout
+    );
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(claude_sessions(&scenario), 0, "{}", result.stderr);
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+}
+
+#[test]
+fn status_json_carries_the_plan_usage_banner() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(ROUTES);
+    every_route_in_cooldown(&scenario);
+    let output = scenario.run(&["status", "--json", "--local"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        status["plan_usage_banner"]
+            .as_str()
+            .is_some_and(|b| b.contains("earliest reset")),
+        "{status:#}"
+    );
+}
+
+#[test]
+fn a_machine_reading_triage_starts_on_the_route_plan_usage_allows() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(ROUTES);
+    scenario.plan_usage_is(json!({"claude": in_cooldown()}));
+    // Forwards the sandboxed command; confinement is not under test here.
+    support::write_executable(
+        &scenario.path("bin/bwrap"),
+        "#!/bin/bash\nset -eu\nwhile [ \"$1\" != -- ]; do\n    case \"$1\" in\n        --setenv) export \"$2=$3\"; shift 3 ;;\n        *) shift ;;\n    esac\ndone\nshift\nexec \"$@\"\n",
+    );
+    // The sandbox runs Codex by its resolved path, so a script stands in.
+    let codex = scenario.path("bin/codex");
+    std::fs::remove_file(&codex).unwrap();
+    support::write_executable(
+        &codex,
+        r#"#!/bin/bash
+set -eu
+if [ "${1:-}" = --version ]; then echo 'codex-cli 1.0.0'; exit; fi
+cat <<'JSON'
+{"type":"thread.started","thread_id":"triage-thread"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_final","type":"agent_message","text":"Triage recommendation: {\"category\":\"bug\",\"state\":\"needs-triage\",\"issues\":[],\"investigation\":\"looked on codex\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5}}
+JSON
+"#,
+    );
+    let report = scenario.path("report.txt");
+    std::fs::write(&report, "Investigate the machine alert.").unwrap();
+
+    let result = scenario.run(&[
+        "triage",
+        "--recommend-only",
+        "--read-machine",
+        "--file",
+        report.to_str().unwrap(),
+    ]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(claude_sessions(&scenario), 0, "{}", result.stderr);
+    let recommendation: Value = serde_json::from_str(result.stdout.trim()).unwrap();
+    assert_eq!(recommendation["investigation"], "looked on codex");
 }

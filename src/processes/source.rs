@@ -1228,11 +1228,8 @@ pub(super) fn run_implement(
     let mut pr = PullRequest::new(issue, checkout.branch(), run.base, GitHub::new());
     run_session_step(run, worktree, step, |sessions, index| {
         let completed = crate::implement::run(issue, &opening, |prompt, continuation| {
-            let mut continue_with = |committed: bool| match continuation {
-                Some(continuation) => {
-                    crate::implement::continue_with(continuation, committed, run.base, &mut pr)
-                }
-                None => Ok(None),
+            let mut continue_with = |committed: bool| {
+                crate::implement::continue_with(continuation, committed, run.base, &mut pr)
             };
             let message = sessions.run_implementation(
                 session::Kind::ProcessStep(index),

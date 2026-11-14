@@ -132,7 +132,7 @@ pub(super) struct CommandRecord {
     /// A Paused Command's Claim put `ready-for-agent` back, so a later
     /// Pickup run retakes its issue: it sits in Done, not Needs you.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub retaken_by_pickup: bool,
+    pub handed_back_for_pickup: bool,
     pub issue_branch: Option<String>,
     /// The selected Base branch for a Fix Pass repairing its CI, not its repair branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -587,7 +587,7 @@ impl CommandRecord {
             waiting_for: Vec::new(),
             limit: None,
             resume_command: None,
-            retaken_by_pickup: false,
+            handed_back_for_pickup: false,
             issue_branch: None,
             base_branch: None,
             pull_request: None,

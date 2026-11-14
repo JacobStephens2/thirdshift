@@ -146,11 +146,10 @@ impl Stop {
         match availability {
             Availability::Cooldown => {
                 let cooldown = state.cooldown.as_ref()?;
-                let used = cooldown.window.as_deref().and_then(|name| {
-                    live()
-                        .find(|window| window.name == name)
-                        .and_then(|window| window.used_percent)
-                });
+                let used = cooldown
+                    .window
+                    .as_deref()
+                    .and_then(|name| state.used_percent_in(name, now));
                 Some(Self {
                     harness,
                     availability,

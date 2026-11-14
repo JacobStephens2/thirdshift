@@ -70,13 +70,6 @@ fn window<'a>(row: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no {name} window: {row:#}"))
 }
 
-fn saved(scenario: &Scenario) -> Value {
-    serde_json::from_slice(
-        &std::fs::read(scenario.path("home/.thirdshift/plan-usage.json")).unwrap(),
-    )
-    .unwrap()
-}
-
 #[test]
 fn sessions_record_claude_windows_at_every_utilization_and_codex_token_counts() {
     for (harness, events) in [
@@ -146,7 +139,7 @@ fn terminal_usage_limits_record_a_cooldown_on_every_subscription_harness() {
         let result = scenario.run(&[&scenario.issue_url(7), "--harness", harness]);
         assert_ne!(result.code, Some(0), "{harness}: {}", result.stderr);
 
-        let saved = saved(&scenario);
+        let saved = scenario.saved_plan_usage();
         let cooldown = &saved["harnesses"][harness]["cooldown"];
         assert!(cooldown.is_object(), "{harness}: {saved:#}");
         if harness == "claude" {
@@ -278,7 +271,7 @@ fn plan_usage_reads_codex_muse_and_claude_on_demand_and_reuses_them_for_a_minute
 
     // Once the saved reads are a minute old they run again.
     let path = scenario.path("home/.thirdshift/plan-usage.json");
-    let mut saved = saved(&scenario);
+    let mut saved = scenario.saved_plan_usage();
     for cli in ["codex", "muse", "claude"] {
         saved["harnesses"][cli]["read_at"] = json!("2020-01-01T00:00:00Z");
     }
@@ -380,7 +373,7 @@ fn plan_usage_clear_forgets_cooldowns_for_one_harness_or_all() {
         result.stdout,
         "Cleared recorded Plan usage cooldowns and revalidation for agy\n"
     );
-    let kept = saved(&scenario);
+    let kept = scenario.saved_plan_usage();
     assert!(kept["harnesses"]["agy"]["cooldown"].is_null(), "{kept:#}");
     assert_eq!(
         kept["harnesses"]["agy"]["observed_at"],
@@ -396,7 +389,7 @@ fn plan_usage_clear_forgets_cooldowns_for_one_harness_or_all() {
         cleared,
         json!({"version": 1, "cleared": ["claude", "codex", "muse", "agy", "grok"]})
     );
-    assert!(saved(&scenario)["harnesses"]["grok"]["cooldown"].is_null());
+    assert!(scenario.saved_plan_usage()["harnesses"]["grok"]["cooldown"].is_null());
 
     for args in [
         &["plan-usage", "--clear", "opencode"][..],

@@ -321,12 +321,10 @@ impl BaseFix {
                 if let Some(log) = log {
                     outside.step(format!("Base fix #{number} session trace: {log}"));
                 }
-                let paused = crate::session::limits::PlanUsagePaused {
-                    limit: crate::plan_usage::latest_limit().unwrap_or_default(),
-                    detail: Some(format!("Base fix #{number} paused")),
-                };
-                crate::logs::paused(&paused.limit);
-                Err(paused.into())
+                Err(crate::session::limits::PlanUsagePaused::recorded(
+                    crate::plan_usage::latest_limit().unwrap_or_default(),
+                    Some(format!("Base fix #{number} paused")),
+                ))
             }
             Ended::Failed {
                 cause,

@@ -638,6 +638,21 @@ impl<O: Outside> Record<O> {
         self.write_record();
     }
 
+    /// The Harness, Model and Effort the active run's latest implement
+    /// session ran on, as its record keeps them.
+    pub(super) fn implemented_on(&self) -> Option<(String, Option<String>, Option<String>)> {
+        let (_, tree) = self.command_record.as_ref()?;
+        let stage =
+            tree.active_ref().stages.iter().rev().find(|stage| {
+                stage.name == StageName::Implement.name() && stage.harness.is_some()
+            })?;
+        Some((
+            stage.harness.clone()?,
+            stage.model.clone(),
+            stage.effort.clone(),
+        ))
+    }
+
     pub(super) fn quota_wait(&mut self, until: Option<&str>) {
         if until.is_some()
             && self.command_record.is_none()
@@ -713,20 +728,20 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn retaken_by_pickup(&mut self) {
+    pub(super) fn handed_back_for_pickup(&mut self) {
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.retaken_by_pickup = true;
+            tree.command.handed_back_for_pickup = true;
             if let Some(dispatched) = tree.active_dispatch() {
-                dispatched.retaken_by_pickup = true;
+                dispatched.handed_back_for_pickup = true;
             }
             self.write_record();
         }
     }
 
-    pub(super) fn recorded_retaken_by_pickup(&self) -> bool {
+    pub(super) fn recorded_handed_back_for_pickup(&self) -> bool {
         self.command_record
             .as_ref()
-            .is_some_and(|(_, tree)| tree.command.retaken_by_pickup)
+            .is_some_and(|(_, tree)| tree.command.handed_back_for_pickup)
     }
 
     /// Keep this process's own command line as a Paused Command's resume

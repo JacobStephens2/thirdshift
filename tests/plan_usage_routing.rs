@@ -33,19 +33,6 @@ fn claude_limit() -> String {
 }
 
 /// Save `harnesses` as the machine's Plan usage snapshot.
-fn plan_usage_is(scenario: &Scenario, harnesses: Value) {
-    let path = scenario.path("home/.thirdshift/plan-usage.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, json!({ "harnesses": harnesses }).to_string()).unwrap();
-}
-
-fn saved(scenario: &Scenario) -> Value {
-    serde_json::from_slice(
-        &std::fs::read(scenario.path("home/.thirdshift/plan-usage.json")).unwrap(),
-    )
-    .unwrap()
-}
-
 /// Claude Code's agent sessions, without its sign-in checks.
 fn claude_sessions(scenario: &Scenario) -> Vec<Value> {
     scenario
@@ -66,9 +53,7 @@ const ROUTES: &str = "[harness]\nroutes = [\"claude\", \"codex\"]\n";
 fn a_step_starts_on_its_first_route_below_its_reserve_ceiling() {
     let scenario = Scenario::new();
     scenario.user_config_is(&format!("{ROUTES}max_utilization = 85\n"));
-    plan_usage_is(
-        &scenario,
-        json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
+    scenario.plan_usage_is(json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
             "windows": [{"name": "five_hour", "used_percent": 90.0, "resets_at": "2096-10-02T07:06:40Z"}]}}),
     );
     scenario.agent_does(OPENS_PR);
@@ -162,7 +147,7 @@ exit 1
         assert!(!prompt.contains(said), "{said}: {prompt}");
     }
     // The limit is recorded for the next Step's proactive choice.
-    assert!(saved(&scenario)["harnesses"]["claude"]["cooldown"].is_object());
+    assert!(scenario.saved_plan_usage()["harnesses"]["claude"]["cooldown"].is_object());
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert!(
         logs.iter()
@@ -234,9 +219,7 @@ rm -rf "$other"
 fn an_explicit_harness_flag_stays_pinned_through_a_limit() {
     let scenario = Scenario::new();
     scenario.user_config_is(&format!("{ROUTES}max_utilization = 85\n"));
-    plan_usage_is(
-        &scenario,
-        json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
+    scenario.plan_usage_is(json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
             "windows": [{"name": "five_hour", "used_percent": 90.0, "resets_at": "2096-10-02T07:06:40Z"}]}}),
     );
     scenario.agent_does(&format!("{WORKING}\necho '{}'\nexit 1\n", claude_limit()));
@@ -301,8 +284,7 @@ fn a_security_review_routes_past_a_plan_limited_security_harness_through_harness
         "[harness]\nroutes = [\"claude\", \"muse\"]\n[security]\nharness = \"codex\"\n",
     );
     let cooldown = json!({"since": "2026-01-01T00:00:00Z", "until": "2096-10-02T07:06:40Z"});
-    plan_usage_is(
-        &scenario,
+    scenario.plan_usage_is(
         json!({"codex": {"observed_at": chrono::Utc::now().to_rfc3339(),
             "read_at": chrono::Utc::now().to_rfc3339(), "cooldown": cooldown}}),
     );
@@ -348,8 +330,7 @@ fn a_spend_cap_that_still_rejects_after_its_backoff_backs_off_twice_as_long() {
     scenario.user_config_is(ROUTES);
     // A backoff of an hour that lapsed a minute ago: Claude is revalidating.
     let lapsed = chrono::Utc::now() - chrono::TimeDelta::minutes(1);
-    plan_usage_is(
-        &scenario,
+    scenario.plan_usage_is(
         json!({"claude": {"observed_at": lapsed.to_rfc3339(), "cooldown": {
             "since": (lapsed - chrono::TimeDelta::hours(1)).to_rfc3339(),
             "until": lapsed.to_rfc3339(),
@@ -381,7 +362,7 @@ exit 1
         "{}",
         result.stderr
     );
-    let cooldown = &saved(&scenario)["harnesses"]["claude"]["cooldown"];
+    let cooldown = &scenario.saved_plan_usage()["harnesses"]["claude"]["cooldown"];
     assert_eq!(cooldown["backoff_minutes"], json!(120), "{cooldown:#}");
 }
 
@@ -452,13 +433,10 @@ fn a_security_review_walks_security_routes_after_its_security_harness() {
     );
     let now = chrono::Utc::now().to_rfc3339();
     let cooldown = json!({"since": "2026-01-01T00:00:00Z", "until": "2096-10-02T07:06:40Z"});
-    plan_usage_is(
-        &scenario,
-        json!({
-            "codex": {"observed_at": now, "read_at": now, "cooldown": cooldown},
-            "agy": {"observed_at": now, "cooldown": cooldown}
-        }),
-    );
+    scenario.plan_usage_is(json!({
+        "codex": {"observed_at": now, "read_at": now, "cooldown": cooldown},
+        "agy": {"observed_at": now, "cooldown": cooldown}
+    }));
     let reviewed = scenario.path("reviewed");
     scenario.agent_does(&format!(
         r#"
@@ -494,9 +472,7 @@ fi
 fn a_model_named_on_the_command_stays_pinned_past_a_reserve_ceiling() {
     let scenario = Scenario::new();
     scenario.user_config_is(&format!("{ROUTES}max_utilization = 85\n"));
-    plan_usage_is(
-        &scenario,
-        json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
+    scenario.plan_usage_is(json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
             "windows": [{"name": "five_hour", "used_percent": 90.0, "resets_at": "2096-10-02T07:06:40Z"}]}}),
     );
     scenario.agent_does_for(7, OPENS_PR);
@@ -511,4 +487,23 @@ fn a_model_named_on_the_command_stays_pinned_past_a_reserve_ceiling() {
         "{}",
         result.stderr
     );
+}
+
+#[test]
+fn built_with_names_the_route_the_implement_session_ran_on() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(&format!("{ROUTES}max_utilization = 85\n"));
+    scenario.plan_usage_is(json!({"claude": {"observed_at": chrono::Utc::now().to_rfc3339(),
+        "windows": [{"name": "five_hour", "used_percent": 90.0, "resets_at": "2096-10-02T07:06:40Z"}]}}));
+    scenario.agent_does(OPENS_PR);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(claude_sessions(&scenario).is_empty());
+    let state = scenario.gh_state();
+    let body = state["prs"][0]["body"].as_str().unwrap();
+    let line = body
+        .lines()
+        .find(|l| l.contains("<!-- thirdshift:built-with -->"))
+        .unwrap();
+    assert!(line.starts_with("Built with codex"), "{line}");
 }

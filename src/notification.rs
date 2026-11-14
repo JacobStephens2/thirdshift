@@ -253,7 +253,8 @@ impl RunNotification {
         let host = host::name();
         let command_log = logs::command_log_path();
         // Detection happens during sessions, after the choice was configured.
-        let configured = self.configured.as_ref().map(|choice| {
+        let configured = self.configured.as_ref().map(|configured| {
+            let choice = &logs::implemented_on(configured);
             if account.pre_audit_failure.is_some() {
                 return format!("{choice} (configured)");
             }
@@ -303,7 +304,7 @@ impl RunNotification {
         }
         // A Paused Command a later Pickup run retakes needs no one, so it
         // is saved but not emailed when only unmerged runs are.
-        let retaken = account.outcome == "paused" && crate::logs::recorded_retaken_by_pickup();
+        let retaken = account.outcome == "paused" && crate::logs::recorded_handed_back_for_pickup();
         if let Some(resend) = self.resend
             && !(self.unless_merged && (account.merged_with_nothing_waiting() || retaken))
             && let Err(error) = resend.send(&subject, &text)

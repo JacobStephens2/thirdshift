@@ -227,7 +227,7 @@ impl<'a> Observation<'a> {
         } else if facts.outcome == Some("paused") {
             // A later Pickup run retakes one whose Claim put
             // `ready-for-agent` back, so it waits on no one: Done.
-            (!matches!(self, Observation::Record(command) if command.record.retaken_by_pickup))
+            (!matches!(self, Observation::Record(command) if command.record.handed_back_for_pickup))
                 .then_some(NeedsYouKind::Paused)
         } else if matches!(self, Observation::Record(_) if facts.state == "ended" && !facts.ready && stop.is_some_and(|request| !request.requeue))
         {

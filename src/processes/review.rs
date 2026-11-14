@@ -163,7 +163,7 @@ impl ReviewProcess {
             pr.url
         );
         let repo = pr.issue.repo();
-        let mut command = CommandChoice::of(&flags.harness, &config.harness);
+        let mut command = CommandChoice::of(&flags.harness, &config);
         if checking {
             let snapshot = GitHub::new().review_pull_request(pr)?;
             launch.fetch(&[

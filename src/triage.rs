@@ -297,6 +297,11 @@ fn investigate(
         .map(|issue| existing::finding_notification(issue, &GitHub::new()))
         .transpose()?
         .flatten();
+    if options.read_machine {
+        // Its sandbox binds one Harness's files, so its sessions can't move
+        // route mid-Step: they start on the route Plan usage allows.
+        *harness = crate::plan_usage::settled_route(harness);
+    }
     harness.check_without_probe()?;
     let checkout = worktree::ReviewWorktree::for_triage(launch, &repo.name, base.origin_commit())?;
     let session_logs = session::Logs::of_triage_run(repo);
