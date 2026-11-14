@@ -49,7 +49,7 @@ export function initStarts(refresh) {
       result.textContent = 'Version and Bump are mutually exclusive.';
       return;
     }
-    for (const field of ['merge', 'base_fix', 'security_review', 'security_fix', 'security_close']) {
+    for (const field of ['merge', 'base_fix', 'security_review', 'security_fix', 'security_close', 'with_experiment']) {
       if (values.get(field)) request[field] = values.get(field) === 'true';
     }
     if (values.get('parallel')) request.parallel = Number(values.get('parallel'));

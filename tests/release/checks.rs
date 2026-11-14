@@ -26,7 +26,7 @@ fn run(release: &Release, args: &[&str], env: &[(&str, &str)]) -> Output {
 /// Prepare the exact reported pattern: a bump based on older main, followed
 /// by a competing version change. Keep a real conflict-resolution merge ready
 /// for the fake Fix command to push, with the requested version retained.
-fn conflicted_bump(release: &Release) -> (String, String) {
+pub(super) fn conflicted_bump(release: &Release) -> (String, String) {
     let old = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
     let contributor = release.contributor();

@@ -463,12 +463,8 @@ impl<O: Outside> Record<O> {
             .unwrap_or_default();
         facts.parent_record = self.parent_record.clone();
         facts.parent_dispatch = self.parent_dispatch.clone();
-        let path = if let Some(parent) = &self.parent_record {
-            owner::child_record(
-                parent,
-                self.parent_dispatch.as_deref(),
-                work.issue().unwrap(),
-            )
+        let path = if let (Some(parent), Some(issue)) = (&self.parent_record, work.issue()) {
+            owner::child_record(parent, self.parent_dispatch.as_deref(), issue)
         } else {
             let Some(owner) = &self.owner else {
                 return;

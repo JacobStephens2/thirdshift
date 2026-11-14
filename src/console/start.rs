@@ -79,6 +79,7 @@ pub(super) struct Request {
     command: Kind,
     version: Option<String>,
     bump: Option<crate::release::Bump>,
+    with_experiment: Option<bool>,
     issue: Option<Issue>,
     merge: Option<bool>,
     email: Option<Email>,
@@ -185,7 +186,7 @@ impl Kind {
             Self::Skill => &["name", "issue"],
             Self::Score => &[],
             Self::Experiment => &["experiment"],
-            Self::Release => &["version", "bump"],
+            Self::Release => &["version", "bump", "with_experiment"],
             Self::Triage => &[
                 "report",
                 "read_machine",
@@ -281,6 +282,9 @@ impl Request {
             if let Some(bump) = self.bump {
                 args.push(bump.flag().into());
             }
+            if self.with_experiment == Some(true) {
+                args.push("--with-experiment".into());
+            }
         }
         if let Some(url) = &self.pull_request {
             let pr = crate::review::PullRequestUrl::parse(url)?;
@@ -360,6 +364,7 @@ impl Request {
         for (present, field) in [
             (self.version.is_some(), "version"),
             (self.bump.is_some(), "bump"),
+            (self.with_experiment.is_some(), "with_experiment"),
             (self.issue.is_some(), "issue"),
             (self.name.is_some(), "name"),
             (self.pull_request.is_some(), "pull_request"),

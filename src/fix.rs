@@ -138,10 +138,72 @@ fn targeted(
     started_command: &mut crate::command::Started,
     reservation: Option<Reservation>,
 ) -> Ended {
+    let launch = std::env::current_dir()
+        .map(Git::new)
+        .map_err(anyhow::Error::from);
+    targeted_at(
+        command,
+        config,
+        harness,
+        started_command,
+        reservation,
+        launch,
+        true,
+    )
+}
+
+pub(crate) fn for_release(
+    git: &Git,
+    pr: &crate::review::PullRequestUrl,
+    harness: &mut Choice,
+) -> anyhow::Result<()> {
+    let _recording = logs::nested();
+    let (config, mut started) = crate::command::start(
+        logs::Begin::FixRun { pass: false },
+        |_| crate::notification::NotificationAsk::Skip,
+        crate::notification::About::ReleaseRun,
+    )
+    .map_err(|_| anyhow::anyhow!("could not start targeted Fix run"))?;
+    let command = FixArgs {
+        target: Target::PullRequest(crate::review::PullRequestInput::Url(pr.clone())),
+        flags: Flags {
+            goal: Some(Goal::ReadyForReview),
+            base_fix: Some(BaseFixAsk::Forbid),
+            ..Default::default()
+        },
+    };
+    let ended = targeted_at(
+        &command,
+        &config,
+        harness,
+        &mut started,
+        None,
+        Ok(Git::new(git.dir())),
+        false,
+    );
+    let success = ended.outcome.is_ok();
+    started.finish(crate::command::Ending::Run(ended));
+    anyhow::ensure!(
+        success,
+        "targeted Fix run failed; review {} before retrying",
+        pr.url
+    );
+    Ok(())
+}
+
+fn targeted_at(
+    command: &FixArgs,
+    config: &UserConfig,
+    harness: &mut Choice,
+    started_command: &mut crate::command::Started,
+    reservation: Option<Reservation>,
+    launch: anyhow::Result<Git>,
+    occupy_slot: bool,
+) -> Ended {
     let started = Utc::now() - crate::run::STARTED_MARGIN;
     let mut base_fix = None;
     let outcome = (|| -> Result<_, crate::failed_run::FailedRun> {
-        let launch = Git::new(std::env::current_dir().context("could not read Launch directory")?);
+        let launch = launch.context("could not read Launch directory")?;
         let origin = launch.run(&["config", "remote.origin.url"])?;
         let repo = Repo::of_origin(&origin).context("fix needs a GitHub origin")?;
         let Target::PullRequest(input) = &command.target else {
@@ -162,7 +224,7 @@ fn targeted(
         };
         let snapshot = github.fix_pull_request(&pr)?;
         started_command.pull_request(&pr, &snapshot.title);
-        if !pass {
+        if !pass && occupy_slot {
             crate::command_limit::hold_slot(&repo);
         }
         harness.check()?;

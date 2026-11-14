@@ -542,6 +542,7 @@ fn start_schema() -> Value {
         "pull_request": text, "author": text, "name": text,
         "version": {"type":"string", "pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
         "bump": {"enum":["major","minor","patch"]},
+        "with_experiment": boolean,
         "base": text, "focus": text, "report": {"type":"string","minLength":1},
         "order": {"enum":["lowest-first","highest-first"]},
         "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,

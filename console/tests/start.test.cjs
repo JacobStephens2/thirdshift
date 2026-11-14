@@ -20,6 +20,7 @@ test('Release start requires admin, confirms an explicit version and preserves r
     await page.getByText('Start Release run', { exact: true }).click();
     const form = page.locator('[data-start-form="release"]');
     await form.getByLabel('Version', { exact: true }).fill('1.2.3');
+    await form.getByLabel('Run release Experiment', { exact: true }).check();
     await form.getByLabel('Harness', { exact: true }).selectOption('codex');
     await form.getByLabel('Model', { exact: true }).fill('model-1');
     await form.getByLabel('Effort', { exact: true }).fill('high');
@@ -35,6 +36,7 @@ test('Release start requires admin, confirms an explicit version and preserves r
     await confirm.waitFor();
     const request = {
       command: 'release', repository: 'JacobStephens2/thirdshift', version: '1.2.3',
+      with_experiment: true,
       harness: 'codex', model: 'model-1', effort: 'high',
       email: { mode: 'unless_merged', address: 'owner@example.test' }
     };

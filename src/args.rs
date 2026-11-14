@@ -1554,6 +1554,8 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 pub struct ReleaseArgs {
     pub version: Option<String>,
     pub bump: Option<crate::release::Bump>,
+    pub with_experiment: bool,
+    pub review: bool,
     pub harness: harness::Asked,
     pub email: Option<NotificationAsk>,
 }
@@ -1561,6 +1563,8 @@ pub struct ReleaseArgs {
 fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
     let mut version = None;
     let mut bump = None;
+    let mut with_experiment = false;
+    let mut review = false;
     let mut harness = harness::Asked::default();
     let mut email = None;
     let mut rest = args.iter().peekable();
@@ -1569,6 +1573,17 @@ fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
             || take_harness_flag(&mut harness, arg, &mut rest)?
         {
             continue;
+        }
+        match arg.as_str() {
+            "--with-experiment" => {
+                with_experiment = true;
+                continue;
+            }
+            "--review" => {
+                review = true;
+                continue;
+            }
+            _ => {}
         }
         if let Some(level) = crate::release::Bump::from_flag(arg) {
             ensure!(
@@ -1591,6 +1606,8 @@ fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
     Ok(ReleaseArgs {
         version,
         bump,
+        with_experiment,
+        review,
         harness,
         email,
     })
