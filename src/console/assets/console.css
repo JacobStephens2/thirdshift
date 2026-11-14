@@ -270,6 +270,9 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 #inbox > .group > .empty, #inbox > .group > p { margin: 0; padding: 10px; }
 #inbox > .group > .section-help { color: var(--dim); font-size: 13px; border-bottom: 1px solid var(--rule); }
 .row-head > .gist { display: none; }
+.one-line [data-group="done"] .row-head > .gist { display: block; }
+.command-kind { display: none; color: var(--text); overflow-wrap: anywhere; }
+.one-line [data-group="done"] .command-kind { display: block; }
 .one-line .command { margin: 0; border-radius: 0; border-bottom: 1px solid var(--rule); }
 .one-line .command:last-child { border-bottom: 0; }
 @media (scripting: enabled) {
@@ -285,11 +288,16 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .row-head > .heartbeat { position: absolute; left: 2px; top: 50%; margin-top: -3px; }
   .one-line .row-head > .state { grid-column: 1; justify-self: start; max-width: 100%; }
   .one-line .row-head > .subject { grid-column: 2; }
+  .one-line .row-head > .subject > a { display: flex; min-width: 0; }
+  .one-line .subject-repository { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .one-line .subject-issue { flex: none; }
+  .one-line .row-head > .command-kind { grid-column: 2; grid-row: 2; white-space: normal; }
   .one-line .row-head > .issue-title { grid-column: 3; color: var(--text); }
   .one-line .row-head > .issue-title:empty { display: none; }
   .one-line .row-head > .gist { display: block; grid-column: 4; }
   .one-line .row-head:not(:has(> .ticket-progress)) > .issue-title:empty + .gist { grid-column: 3 / 5; }
   .one-line .row-head > .ticket-progress { grid-column: 2; grid-row: 2; color: var(--text); white-space: normal; }
+  .one-line [data-group="done"] .row-head > .ticket-progress { grid-row: 3; }
   .one-line .row-head:has(> .ticket-progress) > .gist { grid-column: 3 / -1; grid-row: 2; white-space: normal; }
   /* Keep the pull request indicators together as the row narrows. */
   .one-line .row-head > .pr-checks { grid-column: 5; grid-row: 1; align-self: center; overflow: visible; }
@@ -297,7 +305,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .row-head > .new::before { content: "New"; font-size: 12px; color: var(--head); font-weight: var(--head-weight); }
   .one-line .row-head > .age { grid-column: 7; margin: 0; font-size: 12px; }
   .one-line .row-head .finish { display: none; }
-  .one-line .row-head > .row-controls { grid-column: 8; white-space: normal; overflow: visible; }
+  .one-line .row-head > .row-controls { grid-column: 8; grid-row: 1; white-space: normal; overflow: visible; }
   .one-line .row-head > .row-controls button { padding: 0 8px; font-size: 12px; }
   .one-line .row-head [data-copy-status] { font-size: 12px; }
   .one-line .row-head [data-copy-status]:empty { display: none; }
@@ -317,9 +325,6 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 @media (scripting: enabled) and (min-width: 761px) {
   .one-line .row-head > .subject:has(> a) { display: flex; align-items: baseline; gap: .6em; }
   .one-line .subject > .account-tag { flex: none; }
-  .one-line .row-head > .subject > a { display: flex; min-width: 0; }
-  .one-line .subject-repository { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .one-line .subject-issue { flex: none; }
 }
 @media (scripting: enabled) and (min-width: 761px) and (max-width: 1100px) {
   .one-line .row-head > .pr-checks { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
@@ -337,11 +342,15 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
     .one-line .row-head > .age { grid-column: 3; grid-row: 1; }
     .one-line .row-head > .row-controls { grid-column: 3; grid-row: 2; justify-self: end; }
     .one-line .row-head > .issue-title { grid-column: 1 / 3; grid-row: 2; }
+    .one-line .row-head > .command-kind { grid-column: 1 / -1; grid-row: 3; }
     .one-line .row-head > .gist { display: none; }
     .one-line .row-head:not(:has(> .ticket-progress)) > .issue-title:empty + .gist { display: block; grid-column: 1 / 3; grid-row: 2; }
     .one-line .command[data-slow="true"] > .row-head:not(:has(> .ticket-progress)) > .gist { display: block; grid-column: 1 / -1; grid-row: 3; white-space: normal; }
+    .one-line [data-group="done"] .row-head > .gist { display: block; grid-column: 1 / -1; grid-row: 4; white-space: normal; }
     .one-line .row-head > .ticket-progress { grid-column: 1 / -1; grid-row: 3; }
+    .one-line [data-group="done"] .row-head > .ticket-progress { grid-row: 4; }
     .one-line .row-head:has(> .ticket-progress) > .gist { display: block; grid-column: 1 / -1; grid-row: 4; white-space: normal; }
+    .one-line [data-group="done"] .row-head:has(> .ticket-progress) > .gist { grid-row: 5; }
     .one-line .row-head:has(> .ticket-progress) > .pr-checks { grid-row: 5; }
   }
 }

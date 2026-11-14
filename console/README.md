@@ -223,7 +223,11 @@ JavaScript, groups start open and their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved,
 each of which says under its heading what it holds; Resolved adds when its
 retention starts and that its length is the owning machine's `inbox.days`.
-Rows show state, subject, title, gist and age. A Spec with recorded Tickets also
+Rows show state, subject, title, gist and age. Compact Done headers also identify
+their Command kind on desktop and phone, with or without JavaScript, in
+every Theme and across the Fleet. Stored `Run` kinds display as `Ticket run`;
+Custom processes show `Process` and their retained process name. Done outcomes
+remain visible on phones alongside the kind. A Spec with recorded Tickets also
 shows `2 / 5 Tickets complete`, including on phones and on the visible row of a
 Pass that dispatched it. This counts recorded merged Tickets, including Tickets
 closed before the run, and updates with the Command record. Fleet uses the owning
