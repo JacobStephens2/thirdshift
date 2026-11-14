@@ -214,7 +214,7 @@ const EXCLUSIONS: &[(&str, &str)] = &[
     ),
     (
         "evals prepare-arms repository record.json --baseline-runner old --candidate-runner new --suite process",
-        "Custom runner Arm preparation writes its record and frozen inputs to caller-selected local paths.",
+        "Arm preparation writes its record to a caller-selected local path.",
     ),
     (
         "console",
