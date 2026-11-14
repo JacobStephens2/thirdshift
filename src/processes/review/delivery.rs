@@ -12,6 +12,7 @@ pub(super) struct Delivery<'a> {
     pub pr: &'a PullRequestUrl,
     pub snapshot: &'a ReviewPullRequest,
     pub mode: Mode,
+    pub merge: bool,
     pub input: &'a ReviewInput,
 }
 
@@ -29,6 +30,7 @@ impl Delivery<'_> {
             snapshot,
             mode,
             input,
+            ..
         } = *self;
         let mut stack = String::new();
         if !git.succeeds(&["merge-base", "--is-ancestor", &snapshot.base_head, "HEAD"])? {
@@ -81,12 +83,11 @@ impl Delivery<'_> {
         // Retain the failing-check evidence in both the posted result and the
         // error used by the Command record and Run notification.
         let delivered_head = pushed.as_deref().unwrap_or(&snapshot.head);
-        let readiness = readiness.and_then(|()| {
-            if mode == Mode::Address {
-                self.unchanged_head(delivered_head)?;
-            }
-            Ok(())
-        });
+        let readiness = if mode == Mode::Address {
+            self.unchanged_head(delivered_head).and(readiness)
+        } else {
+            readiness
+        };
         let readiness = if ci_report.is_empty() {
             readiness
         } else {
@@ -215,6 +216,15 @@ impl Delivery<'_> {
     }
 
     fn unchanged_head(&self, head: &str) -> Result<()> {
+        if self.merge {
+            let current = compatible(self.github, self.pr, self.snapshot)?;
+            if current.head != head {
+                return Err(crate::failed_run::MergeHold {
+                    reason: format!("head moved after review; expected {head}, actual {}; the PR stays ready for review", current.head),
+                }.into());
+            }
+            return Ok(());
+        }
         let expected = ReviewPullRequest {
             head: head.into(),
             ..self.snapshot.clone()

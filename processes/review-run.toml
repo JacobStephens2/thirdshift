@@ -18,3 +18,8 @@ worktree = "review"
 name = "delivery"
 catalogue = "delivery"
 worktree = "review"
+
+[[steps]]
+name = "self-merge"
+catalogue = "self-merge"
+worktree = "review"

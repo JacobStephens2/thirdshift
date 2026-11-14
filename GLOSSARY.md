@@ -133,6 +133,7 @@ _Avoid_: batch run, spec implementation
 
 **Review run**:
 One invocation of the factory on an open pull request by a **Trusted account**, reviewing its change on the Standards and Spec axes against its own base in a **Worktree** on its head branch. With `--recommend-only`, it posts its findings without changing the branch, ends with a **Run notification** and waits in the **Inbox** under Ready for review until the pull request is merged or closed.
+After **Delivery**, it can **Self-merge** when its command says `merge` or its **User config** sets `[review] merge = true`, default false; `no-merge` overrides that setting. `merge.always` does not apply. A merge hold or policy refusal leaves the pull request ready for review; an author Pass logs the reason and exits successfully, while a targeted merge request fails.
 Started with `--author`, it is a **Pass** taking that author's lowest-numbered eligible waiting pull request, skipping release bump pull requests, reviewed or pushed heads, `in-progress` pull requests, those with a linked closing issue held by a **Claim** or a reservation, and those based on another open pull request whose current head is unreviewed; every Review run reserves its pull request with `in-progress` until it ends.
 _Avoid_: PR review (GitHub's feature), code review run
 

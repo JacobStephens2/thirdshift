@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, ensure};
 
 use super::GitHub;
+use crate::issue::IssueUrl;
 use crate::review::PullRequestUrl;
 use crate::trust::trusted_association;
 
@@ -213,6 +214,20 @@ impl GitHub {
             .review_markers(pr)?
             .iter()
             .any(|marker| marker.reviewed(head) || marker.authored_head.as_deref() == Some(head)))
+    }
+
+    /// A Review Self-merge cannot land one PR into another still-open PR.
+    pub(crate) fn review_base_is_open_pr(&self, issue: &IssueUrl, base: &str) -> Result<bool> {
+        let nodes = self.gh_api_items(
+            &format!("repos/{}/pulls?state=open&per_page=100", issue.repo_slug()),
+            "",
+        )?;
+        Ok(nodes.iter().any(|node| {
+            node["head"]["ref"].as_str() == Some(base)
+                && node["head"]["repo"]["full_name"]
+                    .as_str()
+                    .is_some_and(|repo| repo.eq_ignore_ascii_case(&issue.repo_slug()))
+        }))
     }
 
     /// Fix commits delivered to the open pull request that owns this base.

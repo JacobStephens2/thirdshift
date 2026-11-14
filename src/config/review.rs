@@ -10,6 +10,7 @@ use crate::issue::Repo;
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub merge: bool,
     commands_by_repo: BTreeMap<String, Vec<String>>,
 }
 

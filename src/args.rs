@@ -1316,6 +1316,7 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
         } else if take_harness_flag(&mut flags.harness, arg, &mut words)?
             || take_email_flag(&mut flags.email, arg, &mut words)?
             || take_security_review_flag(&mut flags, arg)?
+            || take_merge_flag(&mut flags.goal, arg)?
         {
         } else if pull_request.is_none() {
             pull_request = Some(crate::review::PullRequestUrl::parse(arg)?);
@@ -1328,6 +1329,10 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
         (None, Some(login)) => crate::review::Target::Author(login),
         _ => bail!("usage: thirdshift review <PR URL> | --author <login> [--recommend-only]"),
     };
+    ensure!(
+        !recommend_only || flags.goal != Some(Goal::Merged),
+        "--recommend-only cannot be combined with merge"
+    );
     Ok(ReviewArgs {
         target,
         flags,
@@ -1377,6 +1382,12 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
 
 pub(crate) fn fix_retry(pr_url: &str, flags: &Flags) -> String {
     let mut words = vec!["thirdshift".into(), "fix".into(), pr_url.into()];
+    public_flag_words(flags, &mut words);
+    shell_command(words)
+}
+
+pub(crate) fn review_retry(pr_url: &str, flags: &Flags) -> String {
+    let mut words = vec!["thirdshift".into(), "review".into(), pr_url.into()];
     public_flag_words(flags, &mut words);
     shell_command(words)
 }

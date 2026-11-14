@@ -66,7 +66,7 @@
 <li><strong><a href="#architect-runs">Architect run</a></strong>, <code>thirdshift architect</code>: reviews the codebase&#39;s architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an <strong>Architect idea</strong> for the <strong>Day shift</strong>.</li>
 <li><strong><a href="#pickup-runs">Pickup run</a></strong>, <code>thirdshift pickup</code>: takes the lowest-numbered <strong>Ready issue</strong> by default, the highest-numbered with <code>pickup.order = &quot;highest-first&quot;</code> or <code>highest-first</code> on the command, and runs it.</li>
 <li><strong><a href="#security-runs">Security run</a></strong>, <code>thirdshift secure</code>: audits the <strong>Base branch</strong> and records each <strong>Security finding</strong> privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.</li>
-<li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt;</code>: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add <code>--recommend-only</code> to get findings without fixes.</li>
+<li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt;</code>: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add <code>merge</code> for an opt-in Self-merge, or <code>--recommend-only</code> to get findings without fixes.</li>
 <li><strong><a href="#fix-runs">Fix run</a></strong>, <code>thirdshift fix [&lt;PR URL or number&gt;]</code>: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review. With no target, a Pass first checks Base branch CI unless scoped by author, then selects the lowest-numbered eligible non-draft PR with a Merge conflict or CI red.</li>
 <li><strong><a href="#triage-runs">Triage run</a></strong>, <code>thirdshift triage</code>: investigates a <strong>Report</strong> and files shaped issues, or recommends them with <code>--recommend-only</code>.</li>
 </ul>
@@ -2817,6 +2817,7 @@ from = &quot;onboarding@resend.dev&quot;  # the sender; default onboarding@resen
 to_by_repo = {}                 # Run notification recipients keyed by &quot;owner/repo&quot;; default empty, falling back to email.to
 
 [review]
+merge = false          # Review runs Self-merge only with this opt-in or a merge command word; default false
 commands_by_repo = {}   # extra validation commands for each &quot;owner/repo&quot; in every Review run; default empty
 
 [logs]
@@ -3419,11 +3420,29 @@ stops further publication; a PR made draft during Repair stays draft.</p>
 <div class="manual-content" id="review-runs">
 <p>From a clone of the pull request&#39;s repository:</p>
 <pre><code class="language-sh">thirdshift review https://github.com/you/widgets/pull/42
+thirdshift review https://github.com/you/widgets/pull/42 merge
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
 thirdshift review https://github.com/you/widgets/pull/42 harness codex
 thirdshift review https://github.com/you/widgets/pull/42 security-review
 thirdshift review --author colleague
+thirdshift review --author colleague merge
 </code></pre>
+<p><code>merge</code> (or <code>--merge</code>) asks the Review run to Self-merge after Delivery.
+<code>no-merge</code> (or <code>--no-merge</code>) turns it off. The command wins over <code>[review] merge</code>
+in the User config, which defaults to <code>false</code>. <code>merge.always</code> does not affect
+Review runs. Repeated or conflicting merge words are argument errors, as is
+<code>--recommend-only</code> with an effective merge request.</p>
+<p>Self-merge uses the Fix run&#39;s Repair loop and ADR 0004&#39;s reviewed-code gate:
+it merges only the head reviewed by an agent and watched green, with
+<code>gh pr merge --merge --match-head-commit</code>. Merge-time conflicts, CI failures and
+Foreign commits use the existing Repairs. A head pushed after review and before
+Delivery completes holds the merge; green CI on the older head cannot authorize it.
+A required review, a base that is another open PR, or an incomplete or unsuccessful
+configured Security review also holds Self-merge and leaves the PR ready for review.
+An author Pass logs a hold or policy refusal and exits <code>0</code>; a targeted Review run
+asked to merge exits non-zero. A completed Self-merge reports <strong>merged</strong> in the
+Run notification, Command log and Inbox, closes linked closing issues and deletes
+the branch, as any Self-merge does.</p>
 <p>For cron, <code>thirdshift review --author &lt;login&gt;</code> takes the lowest-numbered eligible
 open pull request by that author, one per invocation. The Pass form requires
 <code>--author</code>; it cannot be combined with a PR URL. It skips drafts, forks,
@@ -3531,8 +3550,8 @@ publishes it and watches its CI. One CI watch retains the usual Abandoned-job
 and Check re-run allowances across all heads. An unchanged Repair gets its one
 eligible Check re-run and then fails if still red, without another session on
 that head. Repair reports receive the same private Security-material filtering.</p>
-<p>Review runs never merge or rebase the author&#39;s branch or stack, force-update
-history, replace the pull request or Self-merge. A concurrent change to the
+<p>Without Self-merge, Review runs never merge or rebase the author&#39;s branch or stack,
+force-update history or replace the pull request. A concurrent change to the
 captured PR&#39;s identity, head, base or eligibility stops waiting or publication;
 green CI on an older head cannot authorize readiness. A final merge conflict
 ends failed and asks the author to update the branch. <code>--recommend-only</code>
@@ -3549,7 +3568,7 @@ own review still happens inside its implement session.</p>
 read-only.</p>
 <p>Command records, the Activity log, <code>status</code> and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
-The Inbox keeps a successful review under <strong>Ready for review</strong> until GitHub shows
+The Inbox keeps a successful unmerged review under <strong>Ready for review</strong> until GitHub shows
 the pull request merged or closed. Failed reviews appear under <strong>Needs you</strong>.</p>
 <p>Inspect the Built-in process with <code>thirdshift process show review-run</code>. Copy it
 to <code>~/.thirdshift/processes/my-review.toml</code> to start a Custom process with
@@ -3559,7 +3578,8 @@ an optional <code>security-review</code> Step follows the editing Steps before <
 pushes fixes and posts the comment. Custom pull-request Processes can
 also run skill and command Steps on that checkout. Command Steps receive <code>THIRDSHIFT_PULL_REQUEST_URL</code> and
 the filtered input is in <code>.thirdshift-review-input.md</code>. This version keeps these
-Steps sequential and requires <code>review-and-address</code> before a final <code>delivery</code>.</p>
+Steps sequential and requires <code>review-and-address</code> before <code>delivery</code>, optionally
+followed directly by <code>self-merge</code>. Copied Processes retain the opt-in merge choice.</p>
 </div></details>
 <details class="fold"><summary><h2>Architect runs</h2></summary>
 <div class="manual-content" id="architect-runs">

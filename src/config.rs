@@ -1168,6 +1168,7 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
 [review]
+merge = false          # Review runs Self-merge only with this opt-in or a merge command word; default false
 commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
 
 [logs]
@@ -1526,6 +1527,7 @@ mod tests {
                 "email.to",
                 "email.from",
                 "email.to_by_repo",
+                "review.merge",
                 "review.commands_by_repo",
                 "logs.dir",
                 "logs.waiting_line_minutes",
