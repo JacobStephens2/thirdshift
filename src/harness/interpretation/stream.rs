@@ -13,6 +13,7 @@ use super::{
     Decoder, Ended, Evidence, Facts, ModelScope, Report, SafeguardRefusal, StreamUpdate,
     TurnOutcome,
 };
+use crate::plan_usage::observation as plan_usage;
 use crate::progress::{bash, shorten};
 use crate::prompt;
 mod events;
@@ -172,6 +173,19 @@ impl Dialect {
             if let Some(limit) = super::limits::claude(event) {
                 evidence.push(Evidence::PlanLimit(limit));
             }
+            let api_error = match event["type"].as_str() {
+                Some("assistant") => {
+                    event["parent_tool_use_id"].is_null() && assistant_error(event)
+                }
+                Some("result") => result_failed(event),
+                _ => false,
+            };
+            let usage = plan_usage::claude_rate_limit(event).or_else(|| {
+                api_error
+                    .then(|| plan_usage::claude_api_error(event))
+                    .flatten()
+            });
+            evidence.extend(usage.map(Evidence::PlanUsage));
             if event["type"] == "result"
                 && let Some(usage) = event["modelUsage"].as_object()
             {

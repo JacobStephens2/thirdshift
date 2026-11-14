@@ -247,6 +247,10 @@ impl Decoder for CodexProgress {
         if let Some(limit) = crate::harness::interpretation::limits::codex(&event) {
             evidence.push(Evidence::PlanLimit(limit));
         }
+        evidence.extend(
+            crate::plan_usage::observation::codex_token_count(&event, chrono::Utc::now())
+                .map(Evidence::PlanUsage),
+        );
         if event["type"] == "thread.started" {
             evidence.push(Evidence::RequestedModelFallback);
         }

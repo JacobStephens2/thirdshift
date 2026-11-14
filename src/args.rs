@@ -92,6 +92,7 @@ pub enum Command {
     Resources {
         json: bool,
     },
+    PlanUsage(crate::plan_usage::Action),
     Console {
         no_sign_in: bool,
     },
@@ -938,6 +939,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 json,
             });
         }
+        Some("plan-usage") => return plan_usage(&args[1..]).map(Command::PlanUsage),
         Some("resources") => {
             return match &args[1..] {
                 [] => Ok(Command::Resources { json: false }),
@@ -1032,6 +1034,30 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     })))
+}
+
+/// `plan-usage [--json] [--clear [<harness>]]`, in any order.
+fn plan_usage(args: &[String]) -> Result<crate::plan_usage::Action> {
+    let usage = "usage: thirdshift plan-usage [--json] [--clear [<harness>]]";
+    let (mut json, mut clear, mut harness) = (false, false, None);
+    let mut words = args.iter().peekable();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--json" if !json => json = true,
+            "--clear" if !clear => {
+                clear = true;
+                if let Some(name) = words.next_if(|name| !name.starts_with('-')) {
+                    harness = Some(crate::plan_usage::subscription_named(name)?);
+                }
+            }
+            _ => bail!("{usage}"),
+        }
+    }
+    Ok(if clear {
+        crate::plan_usage::Action::Clear { harness, json }
+    } else {
+        crate::plan_usage::Action::Show { json }
+    })
 }
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {

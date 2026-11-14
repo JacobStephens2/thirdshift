@@ -84,6 +84,9 @@ pub struct UserConfig {
     /// `harness.default`, unless its command names one, and every Security
     /// review uses, whatever its command names.
     pub security_harness: Option<Harness>,
+    /// `harness.routes`, `harness.max_utilization` and `security.routes`:
+    /// the ordered routes Plan usage chooses among, and their ceilings.
+    pub routing: crate::plan_usage::Routing,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
     /// `security.close`: on by default; None leaves the decision unmade.
@@ -187,6 +190,7 @@ impl UserConfig {
             pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
+            routing: crate::plan_usage::Routing::default(),
             security_fix: None,
             security_close: None,
             security_review: false,
@@ -444,6 +448,22 @@ impl UserConfig {
                     },
                     ("harness", "default", _) => {
                         bail!("harness.default must be a quoted name in {file}")
+                    }
+                    ("harness", "routes", value) => {
+                        config.routing.routes =
+                            crate::plan_usage::route::parse_routes(value, "harness.routes", &file)?;
+                    }
+                    ("harness", "max_utilization", value) => {
+                        config.routing.max_utilization =
+                            crate::plan_usage::route::percentage(value, "harness.max_utilization")
+                                .with_context(|| format!("invalid [harness] in {file}"))?;
+                    }
+                    ("security", "routes", value) => {
+                        config.routing.security_routes = crate::plan_usage::route::parse_routes(
+                            value,
+                            "security.routes",
+                            &file,
+                        )?;
                     }
                     ("trial", "memory_high", Value::String(high)) => {
                         crate::scope::check_memory_value("trial.memory_high", high)
@@ -1193,6 +1213,8 @@ order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or
 
 [harness]
 default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse, opencode or kimi; default claude
+routes = []   # ordered routes Plan usage chooses among: Harness names, or { harness, model, effort, max_utilization, allow_credits } tables; default [], harness.default alone
+max_utilization = 100   # the Plan window utilization percentage, 1 to 100, at which a route gives way to the next; default 100, only when used up
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -1231,6 +1253,7 @@ fix = false   # Security runs may fix reproduced findings; default false
 close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
 review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
+routes = []   # ordered routes for Security runs and Security reviews after security.harness, as harness.routes takes them; default [], falling back through harness.routes
 
 [scoring]
 owners = []   # GitHub owners whose repositories Scoring runs search; default [] (configure before score)
