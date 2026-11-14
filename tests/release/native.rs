@@ -229,6 +229,53 @@ fn release_pass_selects_older_green_shipped_content_or_waits_for_pending_ci() {
 }
 
 #[test]
+fn release_pass_reports_pending_main_ci_before_it_finishes() {
+    use std::time::{Duration, Instant};
+    let release = Release::new();
+    shipped(&release);
+    release.main_ci_on(
+        &release.origin(&["rev-parse", "main"]),
+        "completed",
+        "success",
+        100000,
+    );
+    let mut run = command(&release, "");
+    run.arg("--patch");
+    let path = release.root().join("pending-main-output");
+    let output = fs::File::create(&path).unwrap();
+    run.stdout(output.try_clone().unwrap()).stderr(output);
+    let owned = support::child_lifetime::OwnedRuns::new();
+    let mut child = owned.spawn(&mut run);
+    // This covers binary startup, isolated Git preparation and the first CI read.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !fs::read_to_string(&path)
+        .unwrap()
+        .contains("waiting for main push CI")
+    {
+        assert!(
+            child.try_wait().is_none(),
+            "{}",
+            fs::read_to_string(&path).unwrap()
+        );
+        assert!(
+            Instant::now() < deadline,
+            "no progress was visible while main CI was pending"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    release.main_ci("completed", "success");
+    let deadline = Instant::now() + support::WAIT_BOUND;
+    loop {
+        if let Some(status) = child.try_wait() {
+            assert!(status.success(), "{}", fs::read_to_string(&path).unwrap());
+            break;
+        }
+        assert!(Instant::now() < deadline, "Release Pass did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
 fn release_pass_filters_shipped_sources_assets_skills_and_pipeline_paths() {
     for (path, eligible) in [
         ("src/main.rs", true),
@@ -437,6 +484,20 @@ fn release_pass_pinned_bumps_write_only_a_summary() {
         );
         assert!(release.origin_tag(&format!("v{version}")).is_some());
     }
+}
+
+#[test]
+fn review_blank_minor_summary_falls_back_to_patch() {
+    let release = Release::new();
+    shipped(&release);
+    sandbox_reply(&release, r#"{"bump":"minor","summary":" "}"#, true);
+    let output = command(&release, "").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        release.origin_tag("v0.1.1").is_some(),
+        "invalid summary must fall back to patch; minor tag = {:?}",
+        release.origin_tag("v0.2.0")
+    );
 }
 
 #[test]

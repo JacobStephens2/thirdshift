@@ -98,7 +98,7 @@ pub(super) fn select(
         .and_then(|text| Ok(serde_json::from_str::<Output>(&text)?));
     match result {
         Ok(output) => Ok(Selected {
-            bump: if output.bump == "minor" {
+            bump: if output.bump == "minor" && !output.summary.trim().is_empty() {
                 super::Bump::Minor
             } else {
                 super::Bump::Patch

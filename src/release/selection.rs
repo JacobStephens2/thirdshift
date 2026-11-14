@@ -85,6 +85,9 @@ pub(super) fn candidate(git: &Git, github: &GitHub, wanted: Option<&Version>) ->
             "no candidate main commit has successful push CI; all candidates completed non-green or have no CI"
         );
         if line.should_report(()) {
+            // Admission skips stay silent; once CI is pending, the wait must
+            // be visible before a candidate turns green.
+            crate::logs::show_held();
             progress::step("waiting for main push CI before releasing");
         }
         poll::pause()?;
