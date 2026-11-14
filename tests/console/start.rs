@@ -47,6 +47,7 @@ fn api_starts_custom_runner_experiments_and_shares_cli_refusals() {
     let suite = scenario.path("home/.thirdshift/evals/suites/process");
     let task = suite.join("tasks/fixture");
     fs::create_dir_all(&task).unwrap();
+    fs::write(task.join("issue.md"), "# Keep the fixture\n").unwrap();
     fs::write(suite.join("suite.toml"), "format = 1\ntrials_per_arm = 1\n[dependencies]\nfactory_skills = []\nsession_prompts = []\nharness_defaults = []\nmodel_defaults = []\neffort_defaults = []\n").unwrap();
     fs::write(
         task.join("task.toml"),
@@ -61,6 +62,7 @@ base = "{commit}"
 change = "{commit}"
 criteria = "Keep the fixture"
 [inputs]
+".thirdshift-issue.md" = "issue.md"
 [trial]
 issue_url = "https://github.com/acme/widgets/issues/7"
 base = "main"
