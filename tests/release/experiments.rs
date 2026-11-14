@@ -19,7 +19,7 @@ fn cache(release: &Release, commit: &str) {
 }
 
 fn guard_pushes(release: &Release, candidate: &str) {
-    fs::write(release.root().join("gate-candidate"), &candidate).unwrap();
+    fs::write(release.root().join("gate-candidate"), candidate).unwrap();
     let git_driver = release.bin().join("git-release");
     if git_driver.exists() {
         fs::remove_file(&git_driver).unwrap();

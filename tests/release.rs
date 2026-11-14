@@ -550,7 +550,7 @@ print(json.dumps({{'type':'result','subtype':'success','is_error':False,'result'
                         inputs(value, calls);
                     }
                 }
-                _ => {}
+                Value::Null | Value::Bool(_) | Value::Number(_) => {}
             }
         }
         let logs = self
