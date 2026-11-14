@@ -72,7 +72,7 @@
       <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
-      <ul class="commands">{% for item in section.rows %}{{ self.row(item, section.group == "needs you")|safe }}{% endfor %}</ul>
+      <ul class="commands">{% for item in section.rows %}{{ self.row(item, true)|safe }}{% endfor %}</ul>
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}

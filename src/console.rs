@@ -1380,7 +1380,7 @@ impl InboxPage {
             row,
             start: self.start.as_ref(),
             csrf: &self.csrf,
-            can_copy: can_copy && row.console.is_empty(),
+            can_copy,
             can_act: self.page.can_act(),
             can_security: self.page.can_security(),
         }

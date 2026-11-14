@@ -458,6 +458,7 @@ thirdshift plan-usage --push
 </code></pre>
 <p>Open the localhost address it prints. The Console shows the same Inbox as <code>thirdshift status</code>, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; <code>/?section=done</code> opens Done and <code>/?section=overview</code> returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row&#39;s Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine&#39;s time zone on hover, or in full without JavaScript, for example <strong>Ended 2026-10-23 19:03 EDT · 52 min ago</strong>. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command&#39;s own finish time; missing or invalid finish times say <strong>End time unknown</strong>. The finish information also works without JavaScript. With <code>run</code>, use <strong>Start work</strong> on Inbox or <strong>Run now</strong> on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system&#39;s scheduler remain available too.</p>
 <p>Click the serving machine&#39;s name in the Console header to return to Overview (<code>/?section=overview</code>) from another page or section, clearing any machine filter.</p>
+<p>Every top-level Inbox row offers <strong>Copy</strong> in Overview and individual folders, including Ready for review. Paste its rendered context into an agent chat: section, owning machine, Command selector, repository, displayed title, state, any CI and Merge conflict facts, causes and Tickets, with absolute issue, pull request, Details and log links. It includes <code>thirdshift show &#39;&lt;command&gt;&#39; --json</code>, qualified with <code>--machine &#39;&lt;name&gt;&#39;</code> for Fleet rows. Copy works by mouse or keyboard without changing Command details or fetching logs or additional GitHub data. If clipboard access is refused or unavailable, the <strong>Inbox information</strong> dialog selects a snapshot for copying by keyboard and keeps it through live updates.</p>
 <p>Live Fix runs and Review runs show a clickable <strong>PR #number</strong> beside their repository and run type in compact Working rows, including Overview, on desktop and phone. Explicit targets and Pass-selected targets use the same presentation for local and Fleet Commands. A Fix Pass repairing Base branch CI shows the exact selected <strong>Base branch</strong> before a PR exists, and keeps that branch visible alongside the PR link once published. Older records without a recorded target keep their repository and Command label.</p>
 <p>Specs with recorded Tickets show a count such as <strong>2 / 5 Tickets complete</strong> on their Inbox row, including on phones and when a Pass dispatched the Spec. It counts merged Tickets, including those closed before the run, from the owning machine&#39;s last recorded accounting. Record updates refresh the count, and ended runs retain it. Missing or empty accounting shows no counter. All Tickets complete can still leave Spec review or Delivery running; the row keeps its state, stage and health information.</p>
 <p>Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.</p>
@@ -3316,8 +3317,10 @@ branch does not choose the Base branch: the pull request does.</p>
 non-draft, same-repository pull requests targeting the Launch directory&#39;s
 checked-out branch, or <code>base &lt;branch&gt;</code> / <code>--base &lt;branch&gt;</code>, in ascending number
 order. Only Trusted accounts are eligible; <code>--author &lt;login&gt;</code> / <code>author &lt;login&gt;</code>
-restricts selection to that account, which must itself be trusted. Neither
-<code>base</code> nor <code>author</code> can be combined with a targeted PR.</p>
+restricts selection to that account, which must itself be trusted. It skips
+<code>release-*</code> pull requests targeting <code>main</code>, leaving those version bumps to
+<code>scripts/release.sh</code>; an explicit <code>thirdshift fix &lt;pr-url&gt;</code> still repairs them.
+Neither <code>base</code> nor <code>author</code> can be combined with a targeted PR.</p>
 <p>Without <code>--author</code>, the Pass first checks the selected Base branch&#39;s tip on
 <code>origin</code>. A failed first push-workflow attempt with failed jobs gets one
 failed-jobs re-run; the Pass logs it on stderr and continues to PR selection
@@ -3426,7 +3429,9 @@ open pull request by that author, one per invocation. The Pass form requires
 <code>--author</code>; it cannot be combined with a PR URL. It skips drafts, forks,
 authors who are not Trusted accounts, pull requests labelled <code>in-progress</code>,
 and heads already named as <code>reviewed_head</code> or <code>pushed_head</code> in a Review run&#39;s
-marker posted by the GitHub account thirdshift acts as. It also skips a pull
+marker posted by the GitHub account thirdshift acts as. It skips <code>release-*</code>
+pull requests targeting <code>main</code>, which <code>scripts/release.sh</code> delivers; explicit
+<code>review &lt;PR URL&gt;</code> still reviews them. It also skips a pull
 request based on another open pull request until that base&#39;s current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits <code>0</code>

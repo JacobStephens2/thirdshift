@@ -506,6 +506,8 @@ Open the localhost address it prints. The Console shows the same Inbox as `third
 
 Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing any machine filter.
 
+Every top-level Inbox row offers **Copy** in Overview and individual folders, including Ready for review. Paste its rendered context into an agent chat: section, owning machine, Command selector, repository, displayed title, state, any CI and Merge conflict facts, causes and Tickets, with absolute issue, pull request, Details and log links. It includes `thirdshift show '<command>' --json`, qualified with `--machine '<name>'` for Fleet rows. Copy works by mouse or keyboard without changing Command details or fetching logs or additional GitHub data. If clipboard access is refused or unavailable, the **Inbox information** dialog selects a snapshot for copying by keyboard and keeps it through live updates.
+
 Live Fix runs and Review runs show a clickable **PR #number** beside their repository and run type in compact Working rows, including Overview, on desktop and phone. Explicit targets and Pass-selected targets use the same presentation for local and Fleet Commands. A Fix Pass repairing Base branch CI shows the exact selected **Base branch** before a PR exists, and keeps that branch visible alongside the PR link once published. Older records without a recorded target keep their repository and Command label.
 
 Specs with recorded Tickets show a count such as **2 / 5 Tickets complete** on their Inbox row, including on phones and when a Pass dispatched the Spec. It counts merged Tickets, including those closed before the run, from the owning machine's last recorded accounting. Record updates refresh the count, and ended runs retain it. Missing or empty accounting shows no counter. All Tickets complete can still leave Spec review or Delivery running; the row keeps its state, stage and health information.
@@ -3464,8 +3466,10 @@ With no pull request target, `thirdshift fix` is a **Pass**. It searches open,
 non-draft, same-repository pull requests targeting the Launch directory's
 checked-out branch, or `base <branch>` / `--base <branch>`, in ascending number
 order. Only Trusted accounts are eligible; `--author <login>` / `author <login>`
-restricts selection to that account, which must itself be trusted. Neither
-`base` nor `author` can be combined with a targeted PR.
+restricts selection to that account, which must itself be trusted. It skips
+`release-*` pull requests targeting `main`, leaving those version bumps to
+`scripts/release.sh`; an explicit `thirdshift fix <pr-url>` still repairs them.
+Neither `base` nor `author` can be combined with a targeted PR.
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
 `origin`. A failed first push-workflow attempt with failed jobs gets one
@@ -3583,7 +3587,9 @@ open pull request by that author, one per invocation. The Pass form requires
 `--author`; it cannot be combined with a PR URL. It skips drafts, forks,
 authors who are not Trusted accounts, pull requests labelled `in-progress`,
 and heads already named as `reviewed_head` or `pushed_head` in a Review run's
-marker posted by the GitHub account thirdshift acts as. It also skips a pull
+marker posted by the GitHub account thirdshift acts as. It skips `release-*`
+pull requests targeting `main`, which `scripts/release.sh` delivers; explicit
+`review <PR URL>` still reviews them. It also skips a pull
 request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits `0`

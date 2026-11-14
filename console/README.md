@@ -274,11 +274,15 @@ Remote previews request that bounded tail from the owning machine through
 only the current request's answer. The full Command log is fetched only when
 its reader opens.
 
-Each Needs you row has a **Copy** button at the end of its line for sharing its
-problem with an agent. It copies the machine, Command selector, state, cause,
-issue title, Harness, Tickets and any findings, with absolute issue, pull
-request and Console log links, plus the `thirdshift show '<command>' --json`
-command, without opening Command details. If clipboard access is unavailable,
+Each top-level Inbox row has a **Copy** button at the end of its line for sharing
+context with an agent, in Overview and every section's folder, including Ready
+for review. It copies the section, owning machine, Command selector, repository,
+displayed title, state, CI and Merge conflict facts when available, cause,
+Harness, Tickets and any findings, with absolute issue, pull request, Details
+and Console log links, plus the `thirdshift show '<command>' --json` command.
+Fleet rows qualify that command with `--machine '<name>'`. Copy works by mouse
+or keyboard without opening or changing Command details, fetching logs or
+reading additional GitHub data. If clipboard access is unavailable,
 a dialog selects the same text for copying by keyboard. The dialog keeps that
 snapshot through live updates.
 
@@ -487,7 +491,10 @@ stay between the sticky axis and the Peek bottom sheet.
 
 Within the tree, arrows and `j` / `k` move focus, Right expands or enters a
 child, Left folds or returns to the parent, Home/End reach either end, and
-Enter/Space opens the Peek. Outside the tree, the Console's usual keys apply.
+Enter/Space opens the Peek. Escape closes the Peek first, then clears the row
+highlight. The cleared selection survives live updates and expansion controls.
+With no row selected, Tab enters the tree without selecting; navigation keys
+select a row again. Outside the tree, the Console's usual keys apply.
 
 Rust route/CLI parity and timing tests live in `tests/console/spans.rs` and
 `tests/console/waterfall.rs`. The Playwright span and Waterfall tests cover
