@@ -1576,16 +1576,6 @@ fn a_main_without_visible_ci_fails_without_publishing() {
     let release = Release::new();
     release.main_ci("completed", "failure");
     release.merge_pr("untested", "Not yet built", "");
-    let base = release.origin(&["rev-parse", "main"]);
-    release.gh(&[
-        "fake",
-        "run",
-        &json!({
-            "branch": "main", "workflow": "ci.yml", "event": "push",
-            "headSha": base, "status": "completed", "conclusion": "success", "hidden_polls": 3,
-        })
-        .to_string(),
-    ]);
     release.ci_reports(GREEN);
 
     let output = release.run("0.2.0");
