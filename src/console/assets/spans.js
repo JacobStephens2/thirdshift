@@ -72,7 +72,7 @@ export function initSpanTree({ openCommand, openDetails }) {
       } else roots.push(span);
     }
     for (const list of children.values()) list.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity));
-    if (!nodes.has(selected)) selected = roots[0]?.id;
+    if (selected !== null && !nodes.has(selected)) selected = roots[0]?.id;
     if (!nodes.has(detail)) detail = null;
     if (!nodes.has(zoom)) zoom = null;
   }
@@ -130,6 +130,7 @@ export function initSpanTree({ openCommand, openDetails }) {
   }
   function renderTree() {
     const focused = tree.contains(document.activeElement) ? document.activeElement.closest('[data-span-id]')?.dataset.spanId : null;
+    tree.tabIndex = selected === null ? 0 : -1;
     function item(span, depth, position, count, path) {
       if (path.has(span.id)) return document.createDocumentFragment();
       const nextPath = new Set(path).add(span.id), nested = children.get(span.id) ?? [], open = isOpen(span);
@@ -273,21 +274,24 @@ export function initSpanTree({ openCommand, openDetails }) {
     }
   });
   tree.addEventListener('keydown', event => {
-    const span = nodes.get(selected); if (!span || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const span = nodes.get(selected);
     const visible = [...tree.querySelectorAll('[role="treeitem"]')].map(node => node.dataset.spanId), index = visible.indexOf(selected);
     let target;
     switch (event.key) {
       case 'ArrowDown': case 'j': target = visible[Math.min(index + 1, visible.length - 1)]; break;
-      case 'ArrowUp': case 'k': target = visible[Math.max(0, index - 1)]; break;
+      case 'ArrowUp': case 'k': target = index < 0 ? visible.at(-1) : visible[Math.max(0, index - 1)]; break;
       case 'Home': target = visible[0]; break;
       case 'End': target = visible.at(-1); break;
       case 'ArrowRight':
-        if (children.has(selected)) { if (isOpen(span)) target = children.get(selected)[0].id; else { expanded.set(selected, true); renderTree(); } }
+        if (!span) target = visible[0];
+        else if (children.has(selected)) { if (isOpen(span)) target = children.get(selected)[0].id; else { expanded.set(selected, true); renderTree(); } }
         break;
       case 'ArrowLeft':
-        if (children.has(selected) && isOpen(span)) { expanded.set(selected, false); renderTree(); } else target = span.parent_id;
+        if (!span) target = visible[0];
+        else if (children.has(selected) && isOpen(span)) { expanded.set(selected, false); renderTree(); } else target = span.parent_id;
         break;
-      case 'Enter': case ' ': revealSpan(selected); break;
+      case 'Enter': case ' ': revealSpan(selected ?? visible[0]); break;
       default: return;
     }
     event.preventDefault(); event.stopPropagation();
@@ -296,7 +300,8 @@ export function initSpanTree({ openCommand, openDetails }) {
   for (const control of document.querySelectorAll('[data-expand]')) control.addEventListener('click', () => {
     const level = control.dataset.expand;
     for (const span of nodes.values()) expanded.set(span.id, level === 'all' || span.kind === 'cmd' || (['stage', 'sess'].includes(level) && span.kind === 'run') || (level === 'sess' && span.kind === 'stage'));
-    const folded = ancestors(nodes.get(selected)).find(parent => !isOpen(parent)); if (folded) selected = folded.id;
+    const span = nodes.get(selected);
+    const folded = span && ancestors(span).find(parent => !isOpen(parent)); if (folded) selected = folded.id;
     render();
   });
   index(); render();
@@ -304,6 +309,12 @@ export function initSpanTree({ openCommand, openDetails }) {
   window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
   return {
     closeDetails() { detail = null; delete content.dataset.detailSpanId; },
+    clearSelection() {
+      selected = null;
+      // Keep keyboard navigation in the tree without focusing a selected row.
+      if (tree.contains(document.activeElement)) { tree.tabIndex = 0; tree.focus({ preventScroll: true }); }
+      renderTree();
+    },
     update(document) {
       const next = JSON.parse(document.getElementById('span-data').textContent);
       // Keep the Runs fold as the reader left it; refresh its summary and chips.
