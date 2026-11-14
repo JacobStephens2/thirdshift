@@ -558,3 +558,64 @@ fn a_finished_command_without_report_destinations_builds_and_warns_nothing() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(!result.stderr.contains("not reported"), "{}", result.stderr);
 }
+
+/// A Fleet peer that refuses every read with `error` as its JSON reason.
+fn refusing_peer(error: &str) -> String {
+    use std::io::Write;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let body = json!({ "error": error }).to_string();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 0) && line != "\r\n" {
+                line.clear();
+            }
+            let _ = write!(
+                stream,
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    address
+}
+
+#[test]
+fn a_fleet_peers_refusal_reaches_the_terminal_without_control_characters() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".thirdshift");
+    fs::create_dir_all(&dir).unwrap();
+    // Sets the terminal title and clears the screen if printed raw.
+    let address = refusing_peer("\u{1b}]0;fixture-title\u{7}\u{1b}[2Jfixture refusal");
+    fs::write(
+        dir.join("config.toml"),
+        format!(
+            "[console]\nport = 0\nfleet = [{{ name = 'refusing-peer', address = '{address}' }}]\n"
+        ),
+    )
+    .unwrap();
+    let credentials = dir.join("credentials.toml");
+    fs::write(&credentials, "[fleet]\nrefusing-peer = 'fixture-token'\n").unwrap();
+    fs::set_permissions(&credentials, fs::Permissions::from_mode(0o600)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["plan-usage", "--fleet"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !text.contains(['\u{1b}', '\u{7}']),
+        "a peer's control characters reached the terminal: {text:?}"
+    );
+    assert!(
+        text.contains("refusing-peer · status: refused") && text.contains("fixture refusal"),
+        "the peer's refusal is not shown: {text:?}"
+    );
+}

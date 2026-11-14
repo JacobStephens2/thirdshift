@@ -630,8 +630,10 @@ impl fmt::Display for Machine {
         if let Some(address) = &self.address {
             write!(f, " · address: {address}")?;
         }
+        // A peer's refusal carries its own text, which must not start a
+        // terminal control sequence or another line; JSON keeps it as sent.
         if let Some(error) = &self.error {
-            write!(f, " · {error}")?;
+            write!(f, " · {}", crate::cronjobs::report_line(error))?;
         }
         Ok(())
     }
