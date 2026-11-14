@@ -575,8 +575,8 @@ Candidate: {}{}{}",
                 self.description.id,
                 view.name,
                 self.state,
-                self.description.baseline.commit,
-                self.description.candidate.commit,
+                self.description.baseline.reference(),
+                self.description.candidate.reference(),
                 view.results.len(),
                 self.verdict
                     .as_ref()

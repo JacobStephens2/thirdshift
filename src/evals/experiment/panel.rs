@@ -271,7 +271,7 @@ pub(super) fn arm_families(description: &Description) -> BTreeSet<String> {
     let mut families = BTreeSet::new();
     for arm in [Arm::Baseline, Arm::Candidate] {
         let setup = description.setup(arm);
-        if let Some(harness) = Harness::named(&setup.harness) {
+        if let Some(harness) = setup.harness.as_deref().and_then(Harness::named) {
             families.insert(family(harness, setup.model.as_deref()));
         }
     }
@@ -308,6 +308,7 @@ pub(super) fn prepare(experiment: &store::Stored) -> Result<()> {
     for seat in &panel.seats {
         let pinned = [&prepared.baseline.harness, &prepared.candidate.harness]
             .into_iter()
+            .filter_map(Option::as_ref)
             .chain(&fixed)
             .find(|harness| harness.name == seat.harness)
             .cloned();

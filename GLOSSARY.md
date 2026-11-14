@@ -296,7 +296,7 @@ A **Ticket run** that picks up an existing **Issue branch**, one with no pull re
 The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Ticket run** started on that machine, such as the **Run notification** address, whether a merged **Command** still emails its Run notification, whether every Ticket run is asked to **Self-merge**, whether a Ticket run may start a **Base fix**, whether a Ticket run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`, and the **Harness**, with a **Model** and **Effort** for each Harness. With no User config, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
 **Credentials**:
-The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key for **Run notifications** and **Console** sign-in emails, and a Claude setup token and OpenCode provider keys reserved for **Trials**: one key per provider, with a single key for any provider without its own. The Resend key in the environment wins over the saved key; the User config holds no secret.
+The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key for **Run notifications** and **Console** sign-in emails, and logins and provider API keys reserved for **Trials**, including **Custom runners**. The Resend key in the environment wins over the saved key; the User config holds no secret.
 _Avoid_: secrets file, key file
 
 **Setup**:
@@ -419,11 +419,15 @@ An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict**
 _Avoid_: non-gating suite, informational suite
 
 **Arm**:
-One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, the **Process** its **Trials** carry out where its **Eval suite** runs one, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+One setup that an **Experiment** compares: either a build of thirdshift, with its **Factory skills**, **Session prompts**, **Process**, **Harness**, **Model** and **Effort**, or a **Custom runner**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
 
+**Custom runner**:
+An outside agent workflow used as an **Arm** on a process **Eval suite**. It runs unattended for one **Trial**, with its declared scripts and skills fixed before the Experiment starts, and leaves committed work and Session evidence for the same **Graders** as a thirdshift Process Arm.
+_Avoid_: external Arm, custom agent, scaffold
+
 **Trial**:
-One attempt at an **Eval task** by one **Arm**, within an **Experiment**: an agent session of its own, or every session of the **Process** the Arm carries out, up to its first publishing **Step**. A Trial is not a **Ticket run**; it keeps its sessions, outcome, usage and times under the Experiment and writes no **Command record** of its own.
+One attempt at an **Eval task** by one **Arm**, within an **Experiment**: an agent session of its own, every session of the **Process** the Arm carries out up to its first publishing **Step**, or one unattended **Custom runner** execution. A Trial is not a **Ticket run**; it keeps its sessions, outcome, usage and times under the Experiment and writes no **Command record** of its own.
 _Avoid_: run, attempt, sample
 
 **Void Trial**:
@@ -451,7 +455,7 @@ What a **Grader** decides about one **Trial** against its **Eval task**'s succes
 _Avoid_: grade, rating, feedback
 
 **Experiment**:
-The **Command** that compares a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a **Bar** fixed before it starts, and ends in a **Verdict**. It waits for the same OS account's other live Commands on its machine before starting Trials, including on resume; the Day shift can bypass the wait, with the number of competing Commands recorded beside the Verdict.
+The **Command** that compares a **Baseline arm** with a **Candidate arm** on selected **Eval suites**, against a **Bar** fixed before it starts, and ends in a **Verdict**. Suites can follow a build's changes or be selected explicitly, as a **Custom runner** requires. It waits for the same OS account's other live Commands on its machine before starting Trials, including on resume; the Day shift can bypass the wait, with the number of competing Commands recorded beside the Verdict.
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:

@@ -60,6 +60,14 @@ fn check(contract: &Value, shape: &Value, value: &Value, path: &str) -> Result<(
                 return Ok(());
             }
             let kind = kind.trim_end_matches('?');
+            if kind.contains('|') && kind.split('|').any(|option| contract.get(option).is_some()) {
+                if kind.split('|').any(|option| {
+                    check(contract, &Value::String(option.into()), value, path).is_ok()
+                }) {
+                    return Ok(());
+                }
+                return Err(mismatch());
+            }
             if let Some(reference) = contract.get(kind) {
                 return check(contract, reference, value, path);
             }
@@ -91,8 +99,8 @@ fn documented_format_matches_real_experiment_results() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     assert_eq!(
-        experiment["format"], 12,
-        "format 12 marks suspended Trials and excludes their time, retaining format 11's host wait"
+        experiment["format"], 13,
+        "format 13 identifies Custom runner Arms with nullable commit and Harness"
     );
     let schema = fixture.scenario.run(&["console", "openapi"]);
     assert_eq!(schema.code, Some(0), "{}", schema.stderr);

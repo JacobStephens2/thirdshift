@@ -147,12 +147,14 @@ fn judged(bar: &Bar, results: &[TrialResult], reviews: &[Review]) -> Value {
     let tasks = tasks();
     let decided = decide(bar, &tasks, &panel_against_candidate(), reviews).unwrap();
     let setup = Setup {
-        commit: "a".repeat(40),
-        harness: "claude".into(),
+        commit: Some("a".repeat(40)),
+        harness: Some("claude".into()),
         model: None,
         effort: None,
         process: None,
         process_digest: None,
+        runner: None,
+        runner_digest: None,
     };
     serde_json::to_value(assess(&tasks, results, bar, &setup, &decided).unwrap().0).unwrap()
 }
@@ -441,12 +443,14 @@ fn a_sample_only_verdict_leaves_other_suites_statistics_alone() {
     )
     .unwrap();
     let setup = Setup {
-        commit: "a".repeat(40),
-        harness: "claude".into(),
+        commit: Some("a".repeat(40)),
+        harness: Some("claude".into()),
         model: None,
         effort: None,
         process: None,
         process_digest: None,
+        runner: None,
+        runner_digest: None,
     };
     let verdict =
         serde_json::to_value(assess(&tasks, &results, &bar, &setup, &decided).unwrap().0).unwrap();

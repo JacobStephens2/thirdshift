@@ -197,7 +197,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
-       thirdshift experiment [--release] <candidate> [--no-wait] [options]  Compare Arms after Commands end; --no-wait skips the wait and records competing Command count; --release uses the last tag
+       thirdshift experiment [<candidate> | --candidate-runner <name-or-file.toml>] [--baseline-runner <name-or-file.toml>] [options]  Compare Arms; Custom runners require --suite on process suites; --no-wait skips the host wait; --release uses the last tag
        thirdshift experiments [<id>] [--json]        List Experiments or show one; --name renames, --record-difficulty records A/A Difficulty, --leak decides Session evidence hits, --pair reads a pair blind and records your calls
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands and named Experiment waits, also shown in the Console

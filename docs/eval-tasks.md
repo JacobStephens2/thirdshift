@@ -444,6 +444,81 @@ belong in tests. Run the import itself only on the host that holds the material.
 
 ## Arm preparation
 
+Custom runners use the symmetric selection form (the legacy positional build
+form below remains available):
+
+```sh
+thirdshift evals prepare-arms <repository> <record.json> --baseline-runner old --candidate-runner new --suite process
+thirdshift evals prepare-arms <repository> <record.json> --candidate-runner new --baseline HEAD --suite process
+thirdshift evals prepare-arms <repository> <record.json> HEAD --baseline-runner old --suite process
+```
+
+Each runner is `~/.thirdshift/runners/<name>.toml` or an explicit `.toml` path.
+The repository need not be a thirdshift checkout when both Arms are Custom
+runners, and no Cargo build or Harness lookup runs for those Arms. A native
+Baseline defaults to HEAD when Candidate is a Custom runner. A runner conflicts
+with a commit or Process/Harness/Model/Effort selection on the same Arm. Custom
+runners require explicit process suites; review suites and `--release` are
+refused before preparation or dispatch.
+
+```toml
+command = ["python3", "{runner_dir}/runner.py"]
+git_exclude = [".scratch/"]
+[files]
+"runner.py" = "runner.py"
+"skills/example" = { home = ".agents/skills/example" }
+[roles.implement]
+model = "example-model"
+effort = "high"
+```
+
+`command` is an argv array, with no shell splitting. `{runner_dir}` expands in
+each argument, and the absolute request.json path is appended as the final
+argument. The working directory is the prepared repository. `files` maps source
+paths relative to the manifest (or absolute source paths) to bundle-relative
+string targets, or `{ home = "relative/path" }` targets inside fresh HOME.
+Absolute targets, `..`, overlaps and nonregular tree entries are refused.
+`roles` is descriptive metadata; it does not set prices.
+
+The Arm's `runner` records the parsed manifest, frozen `directory`, SHA-256
+`files`, and source `provenance` (enclosing Git repository path, optional origin,
+relative source path, HEAD and dirty boolean). Dirty local sources are allowed.
+Hashes cover the original manifest and every mapped file. Directory entries
+end in `/` and hash their ordered subtree, preserving empty folders. Each Trial
+verifies both frozen Arms and copies verified bytes into its private runner directory
+and HOME. A frozen-input mismatch stops the Experiment before launch.
+
+Each Trial starts the runner with an empty environment. thirdshift sets `PATH`,
+`HOME` to that Trial's fresh home, the home's XDG base directories,
+`THIRDSHIFT_EVAL_LIMIT_SIGNAL`, `CARGO_HOME` when a toolchain was prepared,
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, and `LANG`, `LC_ALL` or
+`LC_CTYPE` when the operator set one and it is a single locale token. The
+runner does not receive the rest of the operator's environment.
+
+Custom runners receive version-1 request.json with `repository`, `issue_file`,
+`issue_url`, `base`, `branch`, `runner_dir`, `output_dir` and `record_command`.
+The recorder field is null until #2191 adds the live recorder. The runner
+receives EOF on stdin and writes `output_dir/result.json`, for example:
+
+```json
+{"version":1,"outcome":"delivered"}
+```
+
+Other outcomes are `stopped_to_ask`, `failed` and `void`. Void requires
+`void_cause` equal to `session_unavailable`, `usage_limit` or `rate_limit`;
+optional `cause` explains the outcome. Outer supervision retains precedence.
+Missing or malformed results, unexplained nonzero exits and self-reported outer
+Void causes fail the Trial, with exit status and stderr retained. Frozen
+`git_exclude` patterns are appended to `.git/info/exclude` beside the issue
+file exclusion; matching committed HEAD paths also fail the Trial. Code Graders
+and Pair evidence grade committed HEAD, ignoring uncommitted files (listed in
+attempt diagnostics). No simulated user answers questions. `stopped_to_ask`
+fails its Score and appears in the outcomes tally.
+
+Multi-provider sandbox, login and network adapters are tracked by #2189;
+session recording and accounting by #2191. The contract here supplies their
+preparation and execution seam.
+
 Before its first Trial, an Experiment prepares both Arms together:
 
 ```sh

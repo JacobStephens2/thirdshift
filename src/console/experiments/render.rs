@@ -184,13 +184,13 @@ fn builds(view: &View) -> String {
             .baseline_ref
             .as_deref()
             .unwrap_or("ref unknown")),
-        esc(&short(&view.description.baseline.commit)),
+        esc(&short(view.description.baseline.reference())),
         esc(view
             .details
             .candidate_ref
             .as_deref()
             .unwrap_or("ref unknown")),
-        esc(&short(&view.description.candidate.commit))
+        esc(&short(view.description.candidate.reference()))
     )
 }
 
@@ -242,8 +242,8 @@ fn question(view: &View) -> String {
     if d.baseline.commit != d.candidate.commit {
         let mut build = format!(
             "Build: {} → {}",
-            reference(&view.details.baseline_ref, &d.baseline.commit),
-            reference(&view.details.candidate_ref, &d.candidate.commit)
+            reference(&view.details.baseline_ref, d.baseline.reference()),
+            reference(&view.details.candidate_ref, d.candidate.reference())
         );
         if let Some(title) = view.details.title.as_deref().filter(|t| !t.is_empty()) {
             build.push_str(&format!(", “{title}”"));
@@ -1206,7 +1206,7 @@ impl<'a> Cell<'a> {
         } else {
             &self.view.description.candidate
         };
-        html.push_str(&format!("<dl><dt>Arm</dt><dd>{} · {} · Model {} · Effort {} · <code>{}</code></dd><dt>Trial ID</dt><dd><code>{}</code></dd></dl></section>", arm_title(self.arm), esc(&setup.harness), esc(setup.model.as_deref().unwrap_or("default")), esc(setup.effort.as_deref().unwrap_or("default")), esc(&setup.commit), self.key));
+        html.push_str(&format!("<dl><dt>Arm</dt><dd>{} · {} · Model {} · Effort {} · <code>{}</code></dd><dt>Trial ID</dt><dd><code>{}</code></dd></dl></section>", arm_title(self.arm), esc(setup.executor()), esc(setup.model.as_deref().unwrap_or("default")), esc(setup.effort.as_deref().unwrap_or("default")), esc(setup.reference()), self.key));
         html
     }
 }
@@ -1261,7 +1261,7 @@ fn arms(view: &View) -> String {
                     .baseline_ref
                     .as_deref()
                     .unwrap_or("ref unknown"),
-                short(&d.baseline.commit)
+                short(d.baseline.reference())
             ),
             format!(
                 "{} · {}",
@@ -1269,13 +1269,13 @@ fn arms(view: &View) -> String {
                     .candidate_ref
                     .as_deref()
                     .unwrap_or("ref unknown"),
-                short(&d.candidate.commit)
+                short(d.candidate.reference())
             ),
         ),
         (
             "Harness",
-            d.baseline.harness.clone(),
-            d.candidate.harness.clone(),
+            d.baseline.executor().into(),
+            d.candidate.executor().into(),
         ),
         (
             "Model",
@@ -1300,11 +1300,11 @@ fn arms(view: &View) -> String {
             "Harness version",
             d.prepared
                 .as_ref()
-                .map(|p| p.baseline.harness.version.clone())
+                .and_then(|p| p.baseline.harness.as_ref().map(|h| h.version.clone()))
                 .unwrap_or_else(|| "unknown".into()),
             d.prepared
                 .as_ref()
-                .map(|p| p.candidate.harness.version.clone())
+                .and_then(|p| p.candidate.harness.as_ref().map(|h| h.version.clone()))
                 .unwrap_or_else(|| "unknown".into()),
         ),
     ] {

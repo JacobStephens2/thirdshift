@@ -433,10 +433,10 @@ pub(crate) fn revealed_side(arm: Arm, setup: &Setup) -> String {
     format!(
         "{} arm · {} · {} · {} · {}",
         capitalized(arm),
-        setup.harness,
+        setup.executor(),
         setup.model.as_deref().unwrap_or("default Model"),
         setup.effort.as_deref().unwrap_or("default Effort"),
-        setup.commit
+        setup.reference()
     )
 }
 

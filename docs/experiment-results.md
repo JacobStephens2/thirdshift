@@ -1,4 +1,4 @@
-# Experiment results (format 12)
+# Experiment results (format 13)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 12` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 12.
+`format: 13` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 13.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -22,6 +22,11 @@ to the machine retaining the Experiment.
 
 Format 11 adds `waiting_for`, `no_wait` and `commands_at_start`: the live host
 wait and the number of other live Commands at a start using `--no-wait`.
+
+Format 13 adds Custom runners: `Setup.commit` and `Setup.harness` are nullable,
+and `runner` plus `runner_digest` identify the manifest and frozen inputs.
+Prepared Custom-runner Arms have null `commit` and `harness`, an empty `binary`
+path, and `runner` holding the frozen manifest, hashes and Git provenance.
 
 The private `experiment.json` already has `format: 1`. The CLI view projects its
 metadata and retained evidence; it is not a copy of that internal storage file.
@@ -457,7 +462,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 12,
+    "format": 13,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -513,12 +518,19 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "suspended":"boolean", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
   "SessionAccounting": {"attempt?":"integer", "path":"string", "role":"string", "time_ms":"integer", "models":{"*":"Measurement"}, "cost_usd":"number?", "gap":"string?"},
   "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
-  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string"},
+  "Setup": {"commit": "string?", "harness": "string?", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string", "runner?": "string", "runner_digest?": "string"},
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
-    "commit": "string", "binary": "string",
-    "harness": "FixedHarness", "process?": "FrozenProcess"
+    "commit": "string?", "binary": "string",
+    "harness": "FixedHarness?", "process?": "FrozenProcess", "runner?": "FrozenRunner"
   },
+  "FrozenRunner": {
+    "name": "string", "directory": "string", "files": {"*": "string"},
+    "manifest": {"command": ["string"], "files": {"*": "RunnerTarget"}, "roles": {"*": {"model": "string", "effort": "string?"}}, "git_exclude": ["string"]},
+    "provenance": {"*": {"repository": "string", "origin": "string?", "path": "string", "commit": "string", "dirty": "boolean"}}
+  },
+  "RunnerTarget": "string|RunnerHomeTarget",
+  "RunnerHomeTarget": {"home": "string"},
   "FixedHarness": {"name": "string", "path": "string", "version": "string"},
   "FrozenProcess": {
     "name": "string", "directory": "string", "files": {"*": "string"},
