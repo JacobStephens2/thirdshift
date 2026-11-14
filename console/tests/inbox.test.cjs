@@ -66,6 +66,70 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Done headers keep Command kinds and outcomes readable on desktop and phones', async t => {
+  const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));
+  const originals = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const base = JSON.parse(originals[0]);
+  const process = 'nightly-maintenance-of-every-service-in-the-development-environment';
+  const cases = [
+    ['Run', null, 'Ticket run'],
+    ['Spec run', null, 'Spec run'],
+    ['Triage run', null, 'Triage run'],
+    ['Review run', null, 'Review run'],
+    ['Process', process, `Process ${process}`],
+  ];
+  const fixtures = cases.map(([kind, process_name], index) => ({ ...base, kind, process_name,
+    name: `done-kind-${index}`, tickets: [], cause: null, outcome: 'merged',
+    issue: { number: 42, url: 'https://github.com/acme/widgets/issues/42', title: 'Identify completed work' },
+  }));
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      for (const javaScriptEnabled of [true, false]) {
+        await Promise.all(paths.map((path, index) => replaceRecord(path, JSON.stringify(fixtures[index]))));
+        const page = await pageFor(t, { viewport, javaScriptEnabled });
+        await page.goto(`${origin}/?section=done`);
+        const heads = paths.map((_, index) => page.locator(`#inbox .command[data-command*="${index + 1}-fixture.command.json"] > .row-head`));
+        for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+          for (const mode of ['light', 'dark']) {
+            const theme = `${family}-${mode}`;
+            await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+            await page.evaluate(() => document.fonts.ready);
+            for (const [index, [, , label]] of cases.entries()) {
+              assert.equal(await heads[index].locator('.command-kind').textContent(), label);
+              assert.equal(await heads[index].locator('.subject a').getAttribute('href'), fixtures[index].issue.url);
+              for (const field of ['.command-kind', '.state', '.subject-issue', '.issue-title', '.gist', '.age']) {
+                const layout = await heads[index].locator(field).evaluate(node => {
+                  const box = node.getBoundingClientRect();
+                  const range = document.createRange();
+                  range.selectNodeContents(node);
+                  const rects = [...range.getClientRects()];
+                  return { box: box.toJSON(), rects: rects.map(rect => rect.toJSON()), visible: box.width > 0 && box.height > 0 && rects.length > 0 && rects.every(rect =>
+                    rect.left >= box.left - 1 && rect.right <= box.right + 1 &&
+                    rect.left >= 0 && rect.right <= innerWidth) };
+                });
+                assert.ok(layout.visible, `${field} must be readable for ${label}, ${theme}, ${viewport.width}px, JS=${javaScriptEnabled}: ${JSON.stringify(layout)}`);
+              }
+              assert.equal(await heads[index].locator('.gist').textContent(), 'merged');
+            }
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+          }
+        }
+        assert.equal(await page.locator('body').evaluate(node => node.classList.contains('peek-open')), false);
+        if (javaScriptEnabled) {
+          await replaceRecord(paths[0], JSON.stringify({ ...fixtures[0], kind: 'Fix run' }));
+          await heads[0].locator('.command-kind').getByText('Fix run', { exact: true }).waitFor();
+        }
+        await page.reload();
+        assert.equal(await heads[0].locator('.command-kind').textContent(), javaScriptEnabled ? 'Fix run' : 'Ticket run');
+        await page.close();
+      }
+    }
+  } finally {
+    await Promise.all(paths.map((path, index) => replaceRecord(path, originals[index])));
+  }
+});
+
 test('Needs you Review and Triage headers prefer PR links and keep issue and Command fallbacks', async t => {
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));
