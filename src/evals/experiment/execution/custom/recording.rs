@@ -1,6 +1,6 @@
 //! Host-owned live recording. The sandbox sends events, never owns trace files.
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,16 @@ use serde::Deserialize;
 use crate::harness::{Choice, Harness, interpretation::Interpretation};
 use crate::logs::trace::Context as TraceContext;
 use crate::session::{limits, trace::Trace};
+
+/// Bytes of unfinished frames the host buffers across every connection.
+const MAX_PENDING_BYTES: usize = 64 << 20;
+/// Concurrently open record connections, each a host descriptor.
+const MAX_OPEN_CONNECTIONS: usize = 64;
+/// Time one poll may spend reading, so supervision regains control to
+/// enforce the Trial timeout and quota pauses.
+const POLL_TIME: std::time::Duration = std::time::Duration::from_millis(50);
+/// Polls that drain the sockets once the Trial has ended.
+const FINISH_PASSES: usize = 256;
 
 pub(in crate::evals::experiment::execution) struct Recorder {
     listener: UnixListener,
@@ -152,9 +162,22 @@ impl Recorder {
     }
 
     pub fn poll(&mut self) -> Result<()> {
+        self.pump().map(drop)
+    }
+
+    /// Accept and read what is waiting, within the bounds below, returning
+    /// whether anything arrived. The sandbox writes this socket, but its
+    /// frames, connections and the host's time stay within the Trial's limits.
+    fn pump(&mut self) -> Result<bool> {
+        let mut progressed = false;
+        let deadline = std::time::Instant::now() + POLL_TIME;
         loop {
             match self.listener.accept() {
                 Ok((socket, _)) => {
+                    ensure!(
+                        self.connections.len() < MAX_OPEN_CONNECTIONS,
+                        "record_command opened more than {MAX_OPEN_CONNECTIONS} connections at once"
+                    );
                     socket.set_nonblocking(true)?;
                     self.connections.push(Connection {
                         reader: BufReader::new(socket),
@@ -162,14 +185,34 @@ impl Recorder {
                         session: None,
                         ended: false,
                     });
+                    progressed = true;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(error.into()),
             }
         }
+        let mut pending: usize = self
+            .connections
+            .iter()
+            .map(|connection| connection.partial.len())
+            .sum();
         for connection in &mut self.connections {
             while !connection.ended {
-                match connection.reader.read_until(b'\n', &mut connection.partial) {
+                ensure!(
+                    pending < MAX_PENDING_BYTES,
+                    "record_command frames exceed {MAX_PENDING_BYTES} bytes"
+                );
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                let before = connection.partial.len();
+                let read = (&mut connection.reader)
+                    .take(u64::try_from(MAX_PENDING_BYTES - pending)?)
+                    .read_until(b'\n', &mut connection.partial);
+                let arrived = connection.partial.len() - before;
+                pending += arrived;
+                progressed |= arrived > 0;
+                match read {
                     Ok(0) => {
                         if let Some(session) = &mut connection.session {
                             session.finish(Some("recording connection closed"))?;
@@ -182,6 +225,7 @@ impl Recorder {
                     Err(error) => return Err(error.into()),
                     Ok(_) => {}
                 }
+                pending -= connection.partial.len();
                 let line = std::mem::take(&mut connection.partial);
                 if let Some(session) = &mut connection.session {
                     match serde_json::from_slice::<Frame>(&line)? {
@@ -249,7 +293,8 @@ impl Recorder {
                 self.limit = self.limit.take().or_else(|| session.limit.clone());
             }
         }
-        Ok(())
+        self.connections.retain(|connection| !connection.ended);
+        Ok(progressed)
     }
 
     pub fn check(&mut self, signal: &Path) -> Result<()> {
@@ -262,7 +307,12 @@ impl Recorder {
     }
 
     pub fn finish(&mut self) -> Result<()> {
-        self.poll()?;
+        // Supervision has ended the sandbox: drain what its writers left.
+        for _ in 0..FINISH_PASSES {
+            if !self.pump()? {
+                break;
+            }
+        }
         for connection in &mut self.connections {
             if !connection.ended {
                 if let Some(session) = &mut connection.session {
@@ -346,5 +396,121 @@ mod tests {
         let tokens = kimi.unwrap().measurement;
         assert_eq!(tokens.input_tokens, Some(13_204));
         assert_eq!(tokens.output_tokens, Some(275));
+    }
+
+    fn recorder() -> (tempfile::TempDir, Recorder) {
+        let root = tempfile::tempdir().unwrap();
+        for directory in ["session", "repository", "home"] {
+            fs::create_dir_all(root.path().join(directory)).unwrap();
+        }
+        fs::write(
+            root.path().join("trace-context.json"),
+            serde_json::to_vec(&TraceContext::of_session(root.path())).unwrap(),
+        )
+        .unwrap();
+        let recorder = Recorder::start(root.path()).unwrap();
+        (root, recorder)
+    }
+
+    /// Sandboxed code reaches this socket; the host process sits outside the
+    /// Trial's memory cap, so one endless frame must not grow it unbounded.
+    #[test]
+    fn an_endless_record_frame_fails_the_recording_instead_of_buffering_on_the_host() {
+        let (_root, mut recorder) = recorder();
+        let mut socket = UnixStream::connect(recorder.socket()).unwrap();
+        let writer = std::thread::spawn(move || {
+            let chunk = vec![b'a'; 1 << 20];
+            for _ in 0..80 {
+                if socket.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut failed = false;
+        while !writer.is_finished() {
+            if recorder.poll().is_err() {
+                failed = true;
+                break;
+            }
+            let buffered: usize = recorder
+                .connections
+                .iter()
+                .map(|connection| connection.partial.len())
+                .sum();
+            assert!(buffered <= MAX_PENDING_BYTES, "{buffered} bytes buffered");
+        }
+        failed = failed || recorder.poll().is_err();
+        drop(recorder);
+        writer.join().unwrap();
+        assert!(failed, "an endless frame was buffered without a bound");
+    }
+
+    /// Every record connection holds a descriptor in the host process that
+    /// runs concurrent Trials; closed ones must release it.
+    #[test]
+    fn closed_record_connections_release_their_host_descriptors() {
+        let (_root, mut recorder) = recorder();
+        for _ in 0..MAX_OPEN_CONNECTIONS * 2 {
+            drop(UnixStream::connect(recorder.socket()).unwrap());
+            recorder.poll().unwrap();
+        }
+        assert_eq!(recorder.connections.len(), 0);
+    }
+
+    #[test]
+    fn too_many_open_record_connections_fail_the_recording() {
+        let (_root, mut recorder) = recorder();
+        let sockets: Vec<_> = (0..=MAX_OPEN_CONNECTIONS)
+            .map(|_| UnixStream::connect(recorder.socket()).unwrap())
+            .collect();
+        assert!(
+            recorder.poll().is_err(),
+            "unbounded open record connections"
+        );
+        assert!(recorder.connections.len() <= MAX_OPEN_CONNECTIONS);
+        drop(sockets);
+    }
+
+    /// Supervision enforces the Trial timeout and quota pauses between polls,
+    /// so a flood of valid frames must not keep one poll running.
+    #[test]
+    fn a_flood_of_record_frames_returns_control_to_supervision() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (_root, mut recorder) = recorder();
+        let mut socket = UnixStream::connect(recorder.socket()).unwrap();
+        writeln!(
+            socket,
+            "{}",
+            json!({"role": "implement", "harness": "claude", "arguments": ["-p", "x"]})
+        )
+        .unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                let frame = format!("{}\n", json!({"raw": "x\n"}));
+                let chunk = frame.repeat((64 << 10) / frame.len());
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+                while !stop.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+                    if socket.write_all(chunk.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        // Let the frames queue before the poll starts.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let started = std::time::Instant::now();
+        let polled = recorder.poll();
+        let elapsed = started.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        drop(recorder);
+        writer.join().unwrap();
+        polled.unwrap();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "one poll held supervision for {elapsed:?}"
+        );
     }
 }
