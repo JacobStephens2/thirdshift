@@ -261,10 +261,14 @@ impl Trace {
     /// Completion may add retained calls, usage or authoritative amendments.
     /// Preserve those facts as logs, never invent a second ended call span.
     pub fn reconcile(&mut self, events: &[Event]) -> io::Result<()> {
+        self.reconcile_at(events, now())
+    }
+
+    pub(crate) fn reconcile_at(&mut self, events: &[Event], observed: u64) -> io::Result<()> {
         for event in events {
             if !self.seen.contains(event) {
                 let raw = serde_json::to_string(event)?;
-                self.record(&raw, std::slice::from_ref(event))?;
+                self.record_at(raw.as_bytes(), std::slice::from_ref(event), observed)?;
             }
         }
         Ok(())

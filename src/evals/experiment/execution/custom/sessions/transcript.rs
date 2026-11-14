@@ -60,7 +60,7 @@ fn normalize(value: &Value, events: &mut Vec<Event>, next: &mut usize) {
     let kind = value["type"].as_str();
     let tool = match kind {
         Some("web_search_call" | "web_search_preview") => Some("web_search"),
-        Some("tool_use" | "function_call" | "tool_call") => {
+        Some("tool_use" | "server_tool_use" | "function_call" | "tool_call") => {
             value["name"].as_str().or_else(|| value["tool"].as_str())
         }
         _ => None,

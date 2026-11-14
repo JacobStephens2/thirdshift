@@ -288,3 +288,35 @@ fn sdk_entry(file: &str) -> serde_json::Value {
             "cache_write_tokens":300,"output_tokens":400}}
     })
 }
+
+#[test]
+fn spec_2191_sdk_anthropic_server_web_search_is_detected() {
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("output");
+    let retained = root.path().join("session");
+    fs::create_dir(&output).unwrap();
+    let transcript = json!({
+        "role": "assistant",
+        "content": [{
+            "type": "server_tool_use", "id": "srvtoolu_search",
+            "name": "web_search", "input": {"query": "reference fix"}
+        }]
+    });
+    fs::write(output.join("transcript.jsonl"), format!("{transcript}\n")).unwrap();
+    fs::write(
+        output.join("sessions.json"),
+        serde_json::to_vec(&json!([sdk_entry("transcript.jsonl")])).unwrap(),
+    )
+    .unwrap();
+    let imported = import(
+        &output,
+        &retained,
+        root.path(),
+        &Context::of_session(root.path()),
+    )
+    .unwrap();
+    assert!(
+        imported.web_search,
+        "Anthropic server_tool_use web_search must void the Trial"
+    );
+}

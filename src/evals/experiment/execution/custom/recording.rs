@@ -2,6 +2,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -33,7 +34,59 @@ struct Connection {
 
 struct Session {
     trace: Trace,
-    stream: Interpretation,
+    stream: Option<Interpretation>,
+    web_search: bool,
+    limit: Option<limits::Limit>,
+}
+
+impl Session {
+    fn record(&mut self, raw: &str) -> Result<()> {
+        let stream = self.stream.as_mut().context("recording already ended")?;
+        let events = stream.decode(raw).events;
+        self.limit = self.limit.take().or_else(|| stream.plan_limit().cloned());
+        self.web_search |= super::sessions::web_search(&events);
+        self.trace.record(raw, &events)?;
+        Ok(())
+    }
+
+    fn poll_limits(&mut self) -> Result<()> {
+        let records = self
+            .stream
+            .as_mut()
+            .map(|stream| stream.limit_records())
+            .unwrap_or_default();
+        for raw in records {
+            self.record(&raw)?;
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self, error: Option<&str>) -> Result<()> {
+        self.poll_limits()?;
+        let Some(stream) = self.stream.take() else {
+            return Ok(());
+        };
+        self.limit = self.limit.take().or_else(|| stream.plan_limit().cloned());
+        let completion =
+            stream.finish(Ok(std::process::ExitStatus::from_raw(if error.is_some() {
+                1 << 8
+            } else {
+                0
+            })));
+        if let Some(report) = completion.report {
+            for record in report.retained_records {
+                self.web_search |= super::sessions::web_search(&record.events);
+                self.trace.record(&record.raw, &record.events)?;
+            }
+            self.web_search |= super::sessions::web_search(&report.events);
+            self.trace.reconcile(&report.events)?;
+        }
+        let error = error
+            .map(str::to_owned)
+            .or_else(|| completion.outcome.err().map(|error| error.to_string()));
+        self.trace.finish(error.as_deref())?;
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -119,7 +172,7 @@ impl Recorder {
                 match connection.reader.read_until(b'\n', &mut connection.partial) {
                     Ok(0) => {
                         if let Some(session) = &mut connection.session {
-                            session.trace.finish(Some("recording connection closed"))?;
+                            session.finish(Some("recording connection closed"))?;
                         }
                         connection.ended = true;
                         break;
@@ -133,12 +186,10 @@ impl Recorder {
                 if let Some(session) = &mut connection.session {
                     match serde_json::from_slice::<Frame>(&line)? {
                         Frame::Raw { raw } => {
-                            let events = session.stream.decode(&raw).events;
-                            self.web_search |= super::sessions::web_search(&events);
-                            session.trace.record(&raw, &events)?;
+                            session.record(&raw)?;
                         }
                         Frame::End { error } => {
-                            session.trace.finish(error.as_deref())?;
+                            session.finish(error.as_deref())?;
                             connection.ended = true;
                         }
                     }
@@ -156,7 +207,18 @@ impl Recorder {
                         .join(format!("custom-live-{}.jsonl", self.sessions));
                     let mut command = std::process::Command::new(&start.harness);
                     command.args(&start.arguments).current_dir(&self.repository);
-                    let prompt = crate::args::shell_command(start.arguments.clone());
+                    let prompt = start
+                        .arguments
+                        .windows(2)
+                        .find(|pair| matches!(pair[0].as_str(), "-p" | "--prompt"))
+                        .map(|pair| pair[1].clone())
+                        .or_else(|| {
+                            start
+                                .arguments
+                                .iter()
+                                .find_map(|arg| arg.strip_prefix("--prompt=").map(str::to_owned))
+                        })
+                        .unwrap_or_else(|| crate::args::shell_command(start.arguments.clone()));
                     let trace = Trace::create(
                         &log,
                         "custom",
@@ -171,22 +233,20 @@ impl Recorder {
                     )?
                     .with_harness(harness.name())
                     .with_trial_role(Some(&start.role))?;
-                    let mut stream = harness
-                        .adapter()
-                        .interpretation(&self.repository, "")
-                        .without_retained();
+                    let mut stream = harness.adapter().interpretation(&self.repository, &prompt);
                     stream.set_home(&self.home);
-                    connection.session = Some(Session { trace, stream });
+                    connection.session = Some(Session {
+                        trace,
+                        stream: Some(stream),
+                        web_search: false,
+                        limit: None,
+                    });
                 }
             }
             if let Some(session) = &mut connection.session {
-                for raw in session.stream.limit_records() {
-                    let events = session.stream.decode(&raw).events;
-                    session.trace.record(&raw, &events)?;
-                }
-                if let Some(limit) = session.stream.plan_limit() {
-                    self.limit = Some(limit.clone());
-                }
+                session.poll_limits()?;
+                self.web_search |= session.web_search;
+                self.limit = self.limit.take().or_else(|| session.limit.clone());
             }
         }
         Ok(())
@@ -206,11 +266,85 @@ impl Recorder {
         for connection in &mut self.connections {
             if !connection.ended {
                 if let Some(session) = &mut connection.session {
-                    session.trace.finish(Some("Trial ended during recording"))?;
+                    session.finish(Some("Trial ended during recording"))?;
+                    self.web_search |= session.web_search;
+                    self.limit = self.limit.take().or_else(|| session.limit.clone());
                 }
                 connection.ended = true;
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod spec_2191_live_retained_repro {
+    use super::*;
+    use serde_json::json;
+    use std::io::{Cursor, Write};
+
+    #[test]
+    fn live_kimi_preserves_usage_from_its_trial_home() {
+        let root = tempfile::tempdir().unwrap();
+        for directory in [
+            "session",
+            "repository",
+            "home/.kimi-code/sessions/ws/ses_7f3c2a/agents/main",
+        ] {
+            fs::create_dir_all(root.path().join(directory)).unwrap();
+        }
+        fs::write(
+            root.path().join("trace-context.json"),
+            serde_json::to_vec(&TraceContext::of_session(root.path())).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.path()
+                .join("home/.kimi-code/sessions/ws/ses_7f3c2a/agents/main/wire.jsonl"),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/kimi-wire.jsonl"
+            )),
+        )
+        .unwrap();
+        let mut recorder = Recorder::start(root.path()).unwrap();
+        let mut socket = UnixStream::connect(recorder.socket()).unwrap();
+        // Buffer the frames so formatting's small writes cannot fill the
+        // socket before this single-threaded test starts the host reader.
+        let mut frames = Vec::new();
+        writeln!(
+            frames,
+            "{}",
+            json!({"role":"implement", "harness":"kimi", "arguments":["-p", "test"]})
+        )
+        .unwrap();
+        for raw in include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/normalized-kimi.jsonl"
+        ))
+        .lines()
+        {
+            writeln!(frames, "{}", json!({"raw": raw})).unwrap();
+        }
+        writeln!(frames, "{}", json!({"error": null})).unwrap();
+        socket.write_all(&frames).unwrap();
+        drop(socket);
+        recorder.finish().unwrap();
+        assert_eq!(recorder.sessions, 1);
+        let summary = crate::session::usage::from_spans(Cursor::new(
+            fs::read(root.path().join("session/custom-live-1.spans.jsonl")).unwrap(),
+        ))
+        .unwrap();
+        let kimi = summary
+            .models
+            .iter()
+            .find(|model| model.model.as_deref() == Some("kimi-k3.1-pro"));
+        assert!(
+            kimi.is_some(),
+            "a recorded Kimi session lost its native usage: {summary:?}"
+        );
+        let tokens = kimi.unwrap().measurement;
+        assert_eq!(tokens.input_tokens, Some(13_204));
+        assert_eq!(tokens.output_tokens, Some(275));
     }
 }

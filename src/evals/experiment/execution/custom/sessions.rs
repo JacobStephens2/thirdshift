@@ -158,7 +158,6 @@ fn raw(
         .adapter()
         .interpretation(repository, "")
         .without_retained();
-    let mut seen = Vec::new();
     for line in bytes.split_inclusive(|byte| *byte == b'\n') {
         let mut events = interpretation.decode(&String::from_utf8_lossy(line)).events;
         strip_costs(&mut events);
@@ -169,7 +168,6 @@ fn raw(
             .or_else(|| interpretation.plan_limit().cloned())
             .or_else(|| quota_error(harness, &events));
         trace.record_at(line, &events, started)?;
-        seen.extend(events);
     }
     let completion = interpretation.finish(Ok(std::process::ExitStatus::from_raw(0)));
     if let Some(report) = completion.report {
@@ -180,11 +178,7 @@ fn raw(
             .usage_limit
             .take()
             .or_else(|| quota_error(harness, &events));
-        for event in events {
-            if !seen.contains(&event) {
-                trace.record_at(&serde_json::to_vec(&event)?, &[event], ended)?;
-            }
-        }
+        trace.reconcile_at(&events, ended)?;
     }
     Ok(completion.outcome.err().map(|error| format!("{error:#}")))
 }
