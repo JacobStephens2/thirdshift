@@ -386,7 +386,7 @@ impl std::fmt::Display for Source {
 fn source_from(chosen_by: ChosenBy) -> Source {
     match chosen_by {
         ChosenBy::Command => Source::Command,
-        ChosenBy::UserConfig | ChosenBy::SecurityConfig => Source::UserConfig,
+        ChosenBy::UserConfig | ChosenBy::Routes | ChosenBy::SecurityConfig => Source::UserConfig,
         ChosenBy::Default => Source::Default,
         ChosenBy::Step => Source::Step,
     }

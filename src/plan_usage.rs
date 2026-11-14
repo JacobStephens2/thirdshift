@@ -2,7 +2,9 @@
 //! saved per machine. Running sessions update it passively from structured
 //! wire frames; `thirdshift plan-usage` refreshes it on demand with official
 //! non-billed reads, at most once a minute per Harness, and never on a
-//! background timer.
+//! background timer. A Command routed by the User config's routes reads it
+//! before each session Step ([`router`]), refreshing a stale Codex or Muse
+//! snapshot first, and never asks a Fleet peer.
 
 use std::time::Duration;
 
@@ -12,11 +14,13 @@ use chrono::{TimeDelta, Utc};
 pub(crate) mod observation;
 mod read;
 pub mod route;
+pub mod router;
 mod store;
 mod view;
 
 pub use observation::Observation;
 pub use route::Routing;
+pub use router::Router;
 use store::Store;
 
 use crate::config::UserConfig;
@@ -95,6 +99,12 @@ fn refresh(store: &Store) -> Result<()> {
                 .is_none_or(|read| now - read >= fresh || read > now)
         })
         .collect();
+    read_into(store, &stale)
+}
+
+/// Run each of `stale`'s non-billed reads side by side, and take their
+/// answers into the snapshot.
+fn read_into(store: &Store, stale: &[Harness]) -> Result<()> {
     let read: Vec<(Harness, read::Reading)> = std::thread::scope(|scope| {
         let reads: Vec<_> = stale
             .iter()
@@ -116,6 +126,26 @@ fn refresh(store: &Store) -> Result<()> {
             reading.apply(harnesses.entry(harness.name().into()).or_default(), now);
         }
     })
+}
+
+/// Before routing a session Step, run the non-billed read of each of
+/// `harnesses` that has one routing uses (Codex's and Muse's) and is
+/// installed, when its saved snapshot is missing, more than five minutes
+/// old or past a reset, side by side. Only this machine is read.
+fn refresh_for_routing(store: &Store, harnesses: &[Harness]) -> Result<()> {
+    let saved = store.read()?;
+    let now = Utc::now();
+    let mut stale: Vec<Harness> = Vec::new();
+    for harness in harnesses {
+        if matches!(harness, Harness::Codex | Harness::Muse)
+            && !stale.contains(harness)
+            && harness.installed()
+            && router::stale(saved.get(harness.name()), now)
+        {
+            stale.push(*harness);
+        }
+    }
+    read_into(store, &stale)
 }
 
 /// `thirdshift plan-usage`.

@@ -19,6 +19,23 @@ pub fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection
     }
 }
 
+/// The Continuation prompt a fresh Issue branch's implement session starts
+/// again with if Plan usage moves it to another route after it made
+/// commits: the prompt a later Run on the branch would get, saying nothing
+/// of why. None for a Continuation, whose prompt already is one.
+pub fn continuation(
+    issue: &IssueUrl,
+    base: &str,
+    selection: &crate::branch::Selection,
+) -> Option<String> {
+    match selection {
+        crate::branch::Selection::Fresh { .. } => {
+            Some(prompt::continuation(issue, base, selection.branch(), None))
+        }
+        crate::branch::Selection::Continuation { .. } => None,
+    }
+}
+
 pub enum Completed {
     Implemented(Option<String>),
     NotReproduced(String),
@@ -35,7 +52,11 @@ pub fn prepare(
     labels: Option<&Labels>,
 ) -> Result<Opening> {
     if labels.is_some_and(|labels| labels.has(crate::labels::FLAKY_TEST)) {
-        opening.prompt.push_str("\nThis is a Flaky-test Ticket. The recorded CI failure is the evidence: the same commit passed on re-run. Implement a fix for the test's dependence on timing or scheduling, or the race it exposes. Do not require reproduction on demand or end with needs-info because the failure does not reproduce.\n");
+        const FLAKY: &str = "\nThis is a Flaky-test Ticket. The recorded CI failure is the evidence: the same commit passed on re-run. Implement a fix for the test's dependence on timing or scheduling, or the race it exposes. Do not require reproduction on demand or end with needs-info because the failure does not reproduce.\n";
+        opening.prompt.push_str(FLAKY);
+        if let Some(continuation) = &mut opening.continuation {
+            continuation.push_str(FLAKY);
+        }
     } else if let Some(labels) = labels
         && labels.has(crate::labels::Label::new("bug", "A reported bug"))
         && !labels.has(crate::security::fixing::SECURITY_FIX)
@@ -43,6 +64,9 @@ pub fn prepare(
         opening.session = OpeningSession::BugDiagnosis;
         let merge_base = worktree.ahead_merge_base(base)?;
         opening.prompt = prompt::diagnosing_bugs(issue, &opening.prompt, merge_base.as_deref());
+        opening.continuation = opening.continuation.as_deref().map(|continuation| {
+            prompt::diagnosing_bugs(issue, continuation, merge_base.as_deref())
+        });
     }
     Ok(opening)
 }
@@ -52,9 +76,9 @@ pub fn prepare(
 pub fn run(
     issue: &IssueUrl,
     opening: &Opening,
-    session: impl FnOnce(&str) -> Result<Option<String>>,
+    session: impl FnOnce(&str, Option<&str>) -> Result<Option<String>>,
 ) -> Result<Completed> {
-    let final_message = session(&opening.prompt)?;
+    let final_message = session(&opening.prompt, opening.continuation.as_deref())?;
     if opening.session == OpeningSession::BugDiagnosis
         && let Some(comment_url) = not_reproduced(issue, final_message.as_deref())?
     {

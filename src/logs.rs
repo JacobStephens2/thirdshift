@@ -474,6 +474,12 @@ pub fn session(session: Logged, path: &Path) {
     record().stage(session.stage(), Some(path));
 }
 
+/// What the session just started runs on, for its stage: each Step's
+/// actual Harness, Model and Effort, which Plan usage may have routed.
+pub fn session_choice(choice: &crate::harness::Choice) {
+    record().session_choice(choice);
+}
+
 /// The selected Issue branch, retained unless completion says it was removed.
 pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);

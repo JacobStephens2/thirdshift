@@ -413,6 +413,7 @@ fn start_in_worktree<O: Outside>(
         Selection::Continuation { .. } => Checkout::Continuation,
     };
     let prompt = crate::implement::prompt(issue, base, selection);
+    let continuation = crate::implement::continuation(issue, base, selection);
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
@@ -420,6 +421,7 @@ fn start_in_worktree<O: Outside>(
     let opening = Opening {
         session: OpeningSession::Implementation,
         prompt,
+        continuation,
     };
     outside.deliver(worktree, base, opening, selection)
 }
