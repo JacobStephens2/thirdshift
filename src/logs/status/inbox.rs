@@ -55,6 +55,7 @@ pub(crate) struct Row {
     pub target_pr: Option<crate::review::PullRequestUrl>,
     pub base_branch: Option<String>,
     pub title: String,
+    pub command_kind: String,
     pub state: String,
     pub now_line: String,
     pub timing: Timing,
@@ -479,6 +480,10 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .filter(|pr| pr.issue.repo_slug().eq_ignore_ascii_case(&facts.repository)),
         base_branch: facts.base_branch.filter(|_| live_target),
         title,
+        command_kind: process.map_or_else(
+            || crate::logs::display_name(&facts.kind).to_owned(),
+            |name| format!("Process {name}"),
+        ),
         state,
         now_line: super::stage_details(
             facts.outcome.as_deref(),
@@ -739,6 +744,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 target_pr: None,
                 base_branch: None,
                 title,
+                command_kind: crate::logs::display_name(&command.kind).to_owned(),
                 state: command.state.into(),
                 now_line: command
                     .outcome
