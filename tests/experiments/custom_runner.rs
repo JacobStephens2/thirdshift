@@ -173,8 +173,12 @@ for host in ['github.com', 'example.com', 'api.x.ai']:
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let view: Value = serde_json::from_str(&result.stdout).unwrap();
     for result in view["results"].as_array().unwrap() {
-        assert_eq!(result["outcome"], "delivered", "{result}");
-        assert_eq!(result["score"]["passed"], true, "{result}");
+        assert_eq!(result["outcome"], "void", "{result}");
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "accounting_gap",
+            "{result}"
+        );
+        assert_eq!(result["score"]["passed"], false, "{result}");
     }
 }
 
@@ -343,8 +347,12 @@ assert (pathlib.Path(os.environ['HOME']) / '.grok/auth.json').read_text() == 'fi
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let view: Value = serde_json::from_str(&result.stdout).unwrap();
     for result in view["results"].as_array().unwrap() {
-        assert_eq!(result["outcome"], "delivered", "{result}");
-        assert_eq!(result["score"]["passed"], true, "{result}");
+        assert_eq!(result["outcome"], "void", "{result}");
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "accounting_gap",
+            "{result}"
+        );
+        assert_eq!(result["score"]["passed"], false, "{result}");
     }
 }
 
@@ -427,8 +435,12 @@ assert (home / 'credentials/kimi-code.json').read_text() == 'managed-login'
         json!(["fireworks-ai", "moonshot"])
     );
     for result in view["results"].as_array().unwrap() {
-        assert_eq!(result["outcome"], "delivered", "{result}");
-        assert_eq!(result["score"]["passed"], true, "{result}");
+        assert_eq!(result["outcome"], "void", "{result}");
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "accounting_gap",
+            "{result}"
+        );
+        assert_eq!(result["score"]["passed"], false, "{result}");
     }
 }
 
@@ -485,8 +497,12 @@ assert config['providers']['fireworks']['env']['OPENAI_API_KEY'] == 'declared-ap
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let view: Value = serde_json::from_str(&result.stdout).unwrap();
     for result in view["results"].as_array().unwrap() {
-        assert_eq!(result["outcome"], "delivered", "{result}");
-        assert_eq!(result["score"]["passed"], true, "{result}");
+        assert_eq!(result["outcome"], "void", "{result}");
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "accounting_gap",
+            "{result}"
+        );
+        assert_eq!(result["score"]["passed"], false, "{result}");
     }
 }
 
@@ -627,8 +643,12 @@ assert config['providers']['fireworks']['env']['OPENAI_API_KEY'] == 'declared-ap
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let view: Value = serde_json::from_str(&result.stdout).unwrap();
     for result in view["results"].as_array().unwrap() {
-        assert_eq!(result["outcome"], "delivered", "{result}");
-        assert_eq!(result["score"]["passed"], true, "{result}");
+        assert_eq!(result["outcome"], "void", "{result}");
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "accounting_gap",
+            "{result}"
+        );
+        assert_eq!(result["score"]["passed"], false, "{result}");
     }
 }
 
@@ -954,6 +974,253 @@ fn run(fixture: &Fixture, extra: &[&str]) -> support::RunResult {
     ];
     args.extend_from_slice(extra);
     fixture.scenario.run_with_env(&args, &NO_SANDBOX)
+}
+
+#[test]
+fn custom_runner_records_live_harness_sessions_with_roles() {
+    let fixture = process::fixture();
+    harness_script(
+        &fixture,
+        "claude",
+        r#"echo '{"type":"assistant","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"output_tokens":2},"content":[{"type":"text","text":"done"}]}}'
+echo '{"type":"result","subtype":"success","result":"done"}'"#,
+    );
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+assert isinstance(request['record_command'], list)
+subprocess.run(request['record_command'] + ['--role','implement','--','claude','-p','test'], check=True)
+"#,
+        ) + DELIVER),
+    );
+    declarations(&fixture, "harnesses = { claude = [] }");
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        let sessions = result["attempts"][0]["accounting"]["sessions"]
+            .as_array()
+            .unwrap();
+        assert_eq!(sessions.len(), 1, "{result}");
+        assert_eq!(sessions[0]["role"], "implement");
+        assert_eq!(sessions[0]["cost_usd"], 0.000060);
+        let path = PathBuf::from(sessions[0]["path"].as_str().unwrap());
+        assert!(path.with_extension("logs.jsonl").is_file(), "{path:?}");
+        assert!(path.with_extension("spans.jsonl").is_file(), "{path:?}");
+    }
+    for session in view["sessions"].as_array().unwrap() {
+        let evidence = fixture.scenario.run(&[
+            "experiments",
+            view["id"].as_str().unwrap(),
+            "--session",
+            session["id"].as_str().unwrap(),
+            "--json",
+        ]);
+        assert_eq!(evidence.code, Some(0), "{}", evidence.stderr);
+        assert!(evidence.stdout.contains("done"), "{}", evidence.stdout);
+    }
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let export = fixture.scenario.path("custom-trace");
+    let exported = fixture.scenario.run(&[
+        "logs",
+        record["name"].as_str().unwrap(),
+        "--export",
+        export.to_str().unwrap(),
+    ]);
+    assert_eq!(exported.code, Some(0), "{}", exported.stderr);
+    assert_eq!(
+        trace_spans(&export.join("spans.jsonl"))
+            .iter()
+            .filter(|span| span["name"] == "invoke_agent custom")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn custom_runner_live_quota_warning_pauses_before_the_harness_finishes() {
+    let fixture = process::fixture();
+    harness_script(
+        &fixture,
+        "claude",
+        r#"echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.85,"rateLimitType":"seven_day"}}'
+sleep 300"#,
+    );
+    runner(
+        &fixture,
+        "subprocess.run(request['record_command'] + ['--role','implement','--','claude','-p','test'], check=True)",
+    );
+    declarations(&fixture, "harnesses = { claude = [] }");
+    let result = run(&fixture, &["--timeout", "30"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let view = fixture.experiment();
+    assert_eq!(view["state"], "paused", "{view}");
+    let unfinished = view["unfinished_trials"].as_array().unwrap();
+    assert!(!unfinished.is_empty(), "{view}");
+    for result in unfinished {
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "usage_limit",
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn custom_runner_live_traces_cannot_be_deleted_in_the_sandbox() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Custom runner sandbox): bwrap is not on PATH");
+        return;
+    }
+    let fixture = process::fixture();
+    fixture
+        .scenario
+        .credentials_are("[claude]\nsetup_token = \"trial-login\"\n");
+    harness_script(
+        &fixture,
+        "claude",
+        r#"echo '{"type":"assistant","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"output_tokens":2},"content":[]}}'
+echo '{"type":"result","subtype":"success","result":"done"}'"#,
+    );
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+import time
+subprocess.run(request['record_command'] + ['--role','implement','--','claude','-p','test'], check=True)
+retained = output.parent / 'session'
+deadline = time.monotonic() + 10
+while not list(retained.glob('*.logs.jsonl')):
+    assert time.monotonic() < deadline, 'live trace never appeared'
+    time.sleep(0.02)
+for trace in retained.glob('*.jsonl'):
+    try:
+        trace.unlink()
+    except OSError:
+        pass
+    else:
+        raise AssertionError('runner deleted a host-owned trace')
+assert list(retained.glob('*.logs.jsonl'))
+"#,
+        ) + DELIVER),
+    );
+    declarations(&fixture, "harnesses = { claude = [] }");
+    let result = fixture.scenario.run(&runner_args());
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(
+            result["attempts"][0]["accounting"]["sessions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn declared_custom_runner_without_sessions_has_an_accounting_gap() {
+    for outcome in ["delivered", "stopped_to_ask"] {
+        let fixture = process::fixture();
+        runner(
+            &fixture,
+            &format!(
+                "json.dump({{'version':1,'outcome':{outcome:?}}}, open(output / 'result.json','w'))"
+            ),
+        );
+        harness_script(&fixture, "claude", "exit 0");
+        declarations(&fixture, "harnesses = { claude = [] }");
+        let result = run(&fixture, &[]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let view: Value = serde_json::from_str(&result.stdout).unwrap();
+        for result in view["results"].as_array().unwrap() {
+            assert_eq!(result["outcome"], "void", "{result}");
+            assert_eq!(
+                result["attempts"][0]["void_cause"], "accounting_gap",
+                "{result}"
+            );
+            assert!(
+                result["attempts"][0]["accounting"]["sessions"][0]["cost_usd"].is_null(),
+                "{result}"
+            );
+            assert!(
+                result["attempts"][0]["accounting"]["sessions"][0]["gap"].is_string(),
+                "{result}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_trials_with_normalized_web_search_calls_are_void() {
+    let fixture = process::fixture();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!("{script}\necho '{{\"type\":\"assistant\",\"message\":{{\"id\":\"search\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"search1\",\"name\":\"WebSearch\",\"input\":{{\"query\":\"test\"}}}}]}}}}'\n"));
+    let result = fixture.run(&[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "void", "{result}");
+        assert_eq!(
+            result["attempts"][0]["void_cause"], "web_search",
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn custom_runner_sdk_sessions_are_priced_and_checked_for_fix_leaks() {
+    let fixture = process::fixture();
+    let fix = fixture.scenario.launch_git(&["rev-parse", "reference-fix"]);
+    runner(
+        &fixture,
+        &(format!(
+            r#"
+(output / 'conversation.jsonl').write_text({fix:?})
+json.dump([{{'role':'review','transcript_file':'conversation.jsonl',
+    'started_at':'2026-11-14T15:00:00Z','ended_at':'2026-11-14T15:00:02Z',
+    'models':{{'claude-sonnet-4-6':{{'uncached_input_tokens':10,'cache_read_tokens':0,'cache_write_tokens':0,'output_tokens':2}}}},
+    'cost_usd':9999}}], open(output / 'sessions.json','w'))
+"#,
+            fix = fix.trim()
+        ) + DELIVER),
+    );
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(view["verdict"]["verdict"], "waiting_on_leaks", "{view}");
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        let session = &result["attempts"][0]["accounting"]["sessions"][0];
+        assert_eq!(session["role"], "review", "{session}");
+        assert_eq!(session["cost_usd"], 0.000060, "{session}");
+        assert_eq!(session["time_ms"], 2000, "{session}");
+    }
+    assert!(
+        view["leak_hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["identifier"] == fix.trim())
+    );
+    let session = &view["sessions"][0];
+    let evidence = fixture.scenario.run(&[
+        "experiments",
+        view["id"].as_str().unwrap(),
+        "--session",
+        session["id"].as_str().unwrap(),
+    ]);
+    assert_eq!(evidence.code, Some(0), "{}", evidence.stderr);
+    assert!(evidence.stdout.contains(fix.trim()), "{}", evidence.stdout);
 }
 
 #[test]

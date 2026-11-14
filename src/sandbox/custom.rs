@@ -13,12 +13,21 @@ pub(crate) fn prepare(
     attempt: &Path,
     home: &Path,
     environment: &[(String, String)],
+    record_socket: &Path,
 ) -> Result<Prepared> {
     let fresh_home = attempt.join("home");
     let credentials = Credentials::read().map_err(|error| no_login(format!("{error:#}")))?;
     let mut binds = Binds::default();
     binds.read_write(attempt, attempt);
     binds.read_only(&attempt.join("runner"), &attempt.join("runner"));
+    for path in [
+        attempt.join("session"),
+        attempt.join("record-command.py"),
+        attempt.join("request.json"),
+        record_socket.to_path_buf(),
+    ] {
+        binds.read_only(&path, &path);
+    }
     let mut env = Environment::default();
     for (name, value) in environment {
         if name != "PATH" {
@@ -34,6 +43,7 @@ pub(crate) fn prepare(
     }
     let wrappers = attempt.join("harness-wrappers");
     fs::create_dir_all(&wrappers)?;
+    let mut binaries = Vec::new();
     let mut allowed = BTreeSet::new();
     let mut grok = None;
     for (name, declared) in &runner.harnesses {
@@ -86,9 +96,7 @@ pub(crate) fn prepare(
         }
         allowed.extend(declared.hosts.iter().cloned());
         let binary = harness_into(&request, &mut binds, &mut env, &declared.binary.path);
-        let wrapper = wrappers.join(name);
-        write_without_following(&wrapper, wrapper_script(harness, &binary).as_bytes())?;
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+        binaries.push((name, harness, binary));
     }
     for provider in &runner.manifest.providers {
         let key = credentials.provider_key(*provider).ok_or_else(|| {
@@ -96,6 +104,17 @@ pub(crate) fn prepare(
         })?;
         env.set_str(provider.environment(), key);
         allowed.extend(provider.hosts().iter().map(|host| host.to_string()));
+    }
+    // Preserve missing-login classification even on hosts that cannot start
+    // a sandbox. Wrapper dependencies are needed only after credentials pass.
+    let socat = resolve_binary("socat")?;
+    for (name, harness, binary) in binaries {
+        let wrapper = wrappers.join(name);
+        write_without_following(
+            &wrapper,
+            wrapper_script(harness, &binary, &socat, Path::new(SOCKET_DEST)).as_bytes(),
+        )?;
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
     }
     binds.read_only(&wrappers, &wrappers);
     env.prepend_path(&wrappers);
@@ -289,7 +308,10 @@ fn kimi_setting<'a>(provider: &'a toml::Value, field: &str) -> Option<&'a str> {
         })
 }
 
-fn wrapper_script(harness: Harness, binary: &Path) -> String {
+/// Give each real Harness execution a relay whose connections the host can
+/// correlate, including concurrent invocations. The SYSTEM command's quotes
+/// survive socat's address parsing before its shell expands the environment.
+fn wrapper_script(harness: Harness, binary: &Path, socat: &Path, socket: &Path) -> String {
     let switches = crate::args::shell_command(
         harness
             .adapter()
@@ -298,6 +320,123 @@ fn wrapper_script(harness: Harness, binary: &Path) -> String {
             .map(|arg| arg.to_string())
             .collect(),
     );
-    let binary = binary.as_os_str().to_string_lossy().replace('\'', "'\\''");
-    format!("#!/bin/sh\nexec '{binary}' {switches} \"$@\"\n")
+    let quoted = |path: &Path| {
+        crate::args::shell_command(vec![path.as_os_str().to_string_lossy().into_owned()])
+    };
+    let binary = quoted(binary);
+    let socat = quoted(socat);
+    let socket = quoted(socket);
+    let method = proxy::HARNESS_REGISTER_METHOD;
+    let prefix = proxy::HARNESS_CONNECTION_PREFIX;
+    let base = proxy::HARNESS_RELAY_BASE;
+    let name = harness.name();
+    format!(
+        r#"#!/bin/sh
+if [ "$#" -eq 1 ]; then
+    case "$1" in
+        --version|-V|version|--help|-h|help) exec {binary} {switches} "$@" ;;
+    esac
+fi
+invocation=$(printf '{method} {name} HTTP/1.1\r\n\r\n' | {socat} - UNIX-CONNECT:{socket})
+case "$invocation" in
+    ''|*[!0-9]*) echo 'sandbox Harness accounting failed: registration unavailable' >&2; exit 1 ;;
+esac
+port=$(({base} + invocation))
+THIRDSHIFT_PROXY_INVOCATION="$invocation" THIRDSHIFT_PROXY_SOCAT={socat} THIRDSHIFT_PROXY_SOCKET=UNIX-CONNECT:{socket} \
+    {socat} "TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork" \
+    'SYSTEM:(printf \"{prefix}%s\\n\" \"$THIRDSHIFT_PROXY_INVOCATION\"; /bin/cat) | exec \"$THIRDSHIFT_PROXY_SOCAT\" - \"$THIRDSHIFT_PROXY_SOCKET\"' \
+    </dev/null >/dev/null 2>/dev/null & relay=$!
+trap 'kill "$relay" 2>/dev/null; wait "$relay" 2>/dev/null' EXIT
+i=0
+while [ "$i" -lt 50 ]; do
+    {socat} - "TCP:127.0.0.1:$port" </dev/null >/dev/null 2>&1 && break
+    i=$((i + 1)); sleep 0.1
+done
+if ! {socat} - "TCP:127.0.0.1:$port" </dev/null >/dev/null 2>&1; then
+    echo 'sandbox Harness accounting failed: relay unavailable' >&2; exit 1
+fi
+HTTPS_PROXY="http://127.0.0.1:$port" HTTP_PROXY="http://127.0.0.1:$port" \
+https_proxy="http://127.0.0.1:$port" http_proxy="http://127.0.0.1:$port" \
+    {binary} {switches} "$@"
+exit "$?"
+"#
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Stdio;
+
+    #[test]
+    fn wrappers_count_non_probe_runs_and_preserve_the_harness_protocol() {
+        let Ok(socat) = resolve_binary("socat") else {
+            println!("SKIPPED (Custom runner wrapper): socat is not on PATH");
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("harness with 'quotes'");
+        let response = directory.path().join("proxy-response");
+        fs::write(
+            &binary,
+            format!(
+                r#"#!/bin/sh
+case "$*" in *--version|*--help) printf 'probe'; exit 0 ;; esac
+printf '%s\n' "$@"
+cat
+printf 'CONNECT example.com:443 HTTP/1.1\r\n\r\n' | '{}' - "TCP:127.0.0.1:${{HTTPS_PROXY##*:}}" > '{}'
+printf 'harness stderr' >&2
+exit 7
+"#,
+                socat.display(),
+                response.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let guard = proxy::start(&["api.anthropic.com".into()]).unwrap();
+        let wrapper = directory.path().join("claude");
+        fs::write(
+            &wrapper,
+            wrapper_script(Harness::Claude, &binary, &socat, &guard.socket_path()),
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        for probe in ["--version", "--help"] {
+            let result = Command::new(&wrapper).arg(probe).output().unwrap();
+            assert!(result.status.success(), "{result:?}");
+            assert_eq!(result.stdout, b"probe");
+        }
+        assert!(guard.accounting().harness_invocations.is_empty());
+        let mut child = Command::new(&wrapper)
+            .args(["-p", "test"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"stdin preserved")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(7), "{output:?}");
+        assert_eq!(
+            output.stdout,
+            b"--disallowedTools=WebSearch,WebFetch\n-p\ntest\nstdin preserved"
+        );
+        assert_eq!(output.stderr, b"harness stderr");
+        let response = fs::read_to_string(response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 403 Forbidden\r\n"),
+            "{response:?}"
+        );
+        let accounting = guard.accounting();
+        assert_eq!(accounting.provider_connections, 0);
+        assert_eq!(accounting.harness_invocations.len(), 1);
+        assert_eq!(accounting.harness_invocations[0].harness, Harness::Claude);
+        assert_eq!(accounting.harness_invocations[0].provider_connections, 0);
+    }
 }

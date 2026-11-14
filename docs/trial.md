@@ -123,7 +123,8 @@ rules. Web search stays off by each Harness's own flag: Claude denies
 `--disable-web-search`, Muse passes `--disable-web-tools`, and the Trial's
 OpenCode config denies `webfetch` and `websearch`. agy and Kimi Code have no
 such switch, so a Trial keeps their session unchanged; the proxy still reaches only its provider
-hosts.
+hosts. In an Experiment, a Trial whose normalized session transcript records a
+web-search tool call, from any Harness, is void as `web_search`.
 
 The fresh home holds the login, and the user-level instructions, rules,
 settings and hooks a Run's session reads, those read-only. Codex's `auth.json`

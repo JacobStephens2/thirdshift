@@ -14,8 +14,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -313,7 +313,28 @@ pub(crate) struct Guard {
     dir: tempfile::TempDir,
     shutdown: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    accounting: Arc<Mutex<Accounting>>,
 }
+
+/// Provider connections and Harness executions observed outside the Trial.
+/// The runner can connect to the proxy, but cannot read or edit this state.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Accounting {
+    pub(crate) provider_connections: u64,
+    pub(crate) harness_invocations: Vec<HarnessInvocation>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HarnessInvocation {
+    pub(crate) harness: Harness,
+    pub(crate) provider_connections: u64,
+}
+
+/// A wrapper registers once, then prefixes its forwarded CONNECTs with the
+/// returned invocation number. Its own loopback relay uses the same number.
+pub(crate) const HARNESS_REGISTER_METHOD: &str = "THIRDSHIFT-HARNESS";
+pub(crate) const HARNESS_CONNECTION_PREFIX: &str = "THIRDSHIFT-INVOCATION ";
+pub(crate) const HARNESS_RELAY_BASE: u16 = 10000;
 
 impl Guard {
     /// The socket path to bind into the sandbox: a short directory of its
@@ -321,6 +342,10 @@ impl Guard {
     /// and never fits deep under an Experiment's folder.
     pub(crate) fn socket_path(&self) -> std::path::PathBuf {
         self.dir.path().join("proxy.sock")
+    }
+
+    pub(crate) fn accounting(&self) -> Accounting {
+        self.accounting.lock().unwrap().clone()
     }
 }
 
@@ -354,10 +379,12 @@ fn start_with(allowed: &[String], network: impl Network + 'static) -> Result<Gua
     listener
         .set_nonblocking(true)
         .context("sandbox failed to start: could not listen without blocking")?;
+    let accounting = Arc::new(Mutex::new(Accounting::default()));
     let shared = Arc::new(Shared {
         allowed: allowed.to_vec(),
         local: network.local_addresses(),
         network: Box::new(network),
+        accounting: Arc::clone(&accounting),
     });
     let shutdown = Arc::new(AtomicBool::new(false));
     let thread = std::thread::Builder::new()
@@ -371,6 +398,7 @@ fn start_with(allowed: &[String], network: impl Network + 'static) -> Result<Gua
         dir,
         shutdown,
         thread: Some(thread),
+        accounting,
     })
 }
 
@@ -380,6 +408,7 @@ struct Shared {
     allowed: Vec<String>,
     local: Vec<IpAddr>,
     network: Box<dyn Network>,
+    accounting: Arc<Mutex<Accounting>>,
 }
 
 /// Accept connections until `shutdown` is set.
@@ -419,7 +448,42 @@ fn serve_one(mut stream: std::os::unix::net::UnixStream, shared: &Shared) {
     let Some(head) = read_head(&mut stream) else {
         return;
     };
-    let decision = decide(&head, shared);
+    if let Some(harness) = head
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix(&format!("{HARNESS_REGISTER_METHOD} ")))
+        .and_then(|line| line.strip_suffix(" HTTP/1.1"))
+        .and_then(Harness::named)
+    {
+        let mut accounting = shared.accounting.lock().unwrap();
+        if accounting.harness_invocations.len() >= usize::from(u16::MAX - HARNESS_RELAY_BASE) {
+            return;
+        }
+        accounting.harness_invocations.push(HarnessInvocation {
+            harness,
+            provider_connections: 0,
+        });
+        let _ = writeln!(stream, "{}", accounting.harness_invocations.len());
+        return;
+    }
+    let (invocation, head) = if let Some(tagged) = head.strip_prefix(HARNESS_CONNECTION_PREFIX) {
+        let Some((id, head)) = tagged.split_once('\n') else {
+            return;
+        };
+        let Some(index) = id
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|id| id.checked_sub(1))
+            .filter(|index| *index < shared.accounting.lock().unwrap().harness_invocations.len())
+        else {
+            return;
+        };
+        (Some(index), head)
+    } else {
+        (None, head.as_str())
+    };
+    let decision = decide(head, shared);
     if let Decision::Refuse { status, message } = &decision {
         eprintln!("thirdshift proxy: refused CONNECT {message} ({status})");
     }
@@ -427,6 +491,13 @@ fn serve_one(mut stream: std::os::unix::net::UnixStream, shared: &Shared) {
         Decision::Refuse { .. } => None,
         Decision::Tunnel(request) => dial(request, shared.network.as_ref()),
     };
+    if tunnel.is_some() {
+        let mut accounting = shared.accounting.lock().unwrap();
+        accounting.provider_connections += 1;
+        if let Some(index) = invocation {
+            accounting.harness_invocations[index].provider_connections += 1;
+        }
+    }
     let (status, body) = match (&decision, &tunnel) {
         (Decision::Tunnel(_), Some(_)) => ("200 Connection Established".to_string(), None),
         (Decision::Tunnel(request), None) => (
@@ -974,6 +1045,77 @@ mod tests {
             "GET https://api.anthropic.com/ HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n",
         );
         assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
+        assert_eq!(guard.accounting().provider_connections, 0);
+    }
+
+    #[test]
+    fn accounting_distinguishes_harness_invocations_from_direct_provider_calls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let guard = start_with(
+            &["api.anthropic.com".to_string()],
+            LocalProvider(listener.local_addr().unwrap()),
+        )
+        .unwrap();
+        for (harness, expected) in [("claude", "1"), ("codex", "2"), ("claude", "3")] {
+            assert_eq!(
+                connect_status(
+                    &guard.socket_path(),
+                    &format!("{HARNESS_REGISTER_METHOD} {harness} HTTP/1.1\r\n\r\n"),
+                ),
+                expected
+            );
+        }
+        // More than one provider connection may belong to a single session.
+        for invocation in [Some(1), Some(1), Some(2), None] {
+            let prefix = invocation.map_or_else(String::new, |id| {
+                format!("{HARNESS_CONNECTION_PREFIX}{id}\n")
+            });
+            assert_eq!(
+                connect_status(
+                    &guard.socket_path(),
+                    &format!("{prefix}CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n"),
+                ),
+                "HTTP/1.1 200 Connection Established"
+            );
+            drop(listener.accept().unwrap());
+        }
+        assert_eq!(
+            connect_status(
+                &guard.socket_path(),
+                &format!("{HARNESS_CONNECTION_PREFIX}3\nCONNECT github.com:443 HTTP/1.1\r\n\r\n"),
+            ),
+            "HTTP/1.1 403 Forbidden"
+        );
+        let accounting = guard.accounting();
+        assert_eq!(accounting.provider_connections, 4);
+        assert_eq!(
+            accounting
+                .harness_invocations
+                .iter()
+                .map(|invocation| (invocation.harness, invocation.provider_connections))
+                .collect::<Vec<_>>(),
+            [
+                (Harness::Claude, 2),
+                (Harness::Codex, 1),
+                (Harness::Claude, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_provider_dials_do_not_create_accounting_gaps() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let guard = start_with(&["api.anthropic.com".to_string()], LocalProvider(address)).unwrap();
+        assert_eq!(
+            connect_status(
+                &guard.socket_path(),
+                "CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n",
+            ),
+            "HTTP/1.1 502 Bad Gateway"
+        );
+        assert_eq!(guard.accounting().provider_connections, 0);
     }
 
     #[test]
