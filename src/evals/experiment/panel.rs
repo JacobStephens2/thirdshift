@@ -277,6 +277,21 @@ pub(super) fn arm_families(description: &Description) -> BTreeSet<String> {
     }
     if let Some(prepared) = &description.prepared {
         for arm in [&prepared.baseline, &prepared.candidate] {
+            if let Some(runner) = &arm.runner {
+                families.extend(
+                    runner
+                        .harnesses
+                        .values()
+                        .flat_map(|harness| harness.families.iter().cloned()),
+                );
+                families.extend(
+                    runner
+                        .manifest
+                        .providers
+                        .iter()
+                        .map(|provider| provider.family().to_string()),
+                );
+            }
             for step in arm.process.iter().flat_map(|process| &process.steps) {
                 if let Some(harness) = Harness::named(&step.harness.name) {
                     families.insert(family(harness, step.model.as_deref()));
@@ -309,6 +324,12 @@ pub(super) fn prepare(experiment: &store::Stored) -> Result<()> {
         let pinned = [&prepared.baseline.harness, &prepared.candidate.harness]
             .into_iter()
             .filter_map(Option::as_ref)
+            .chain(
+                [&prepared.baseline.runner, &prepared.candidate.runner]
+                    .into_iter()
+                    .filter_map(Option::as_ref)
+                    .flat_map(|runner| runner.harnesses.values().map(|harness| &harness.binary)),
+            )
             .chain(&fixed)
             .find(|harness| harness.name == seat.harness)
             .cloned();

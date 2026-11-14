@@ -1,4 +1,437 @@
 use super::*;
+
+fn declarations(fixture: &Fixture, text: &str) {
+    let path = fixture
+        .scenario
+        .path("home/.thirdshift/runners/fixture.toml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    fs::write(path, format!("{text}\n{manifest}")).unwrap();
+}
+
+fn harness_script(fixture: &Fixture, name: &str, body: &str) {
+    let path = fixture.scenario.path(&format!("bin/{name}"));
+    let _ = fs::remove_file(&path);
+    fs::write(&path, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{name} fixture 1'; exit 0; fi\n{body}\n")).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn custom_runner_preparation_pins_declared_harnesses_and_provider_hosts() {
+    let fixture = process::fixture();
+    runner(&fixture, DELIVER);
+    harness_script(&fixture, "claude", "exit 0");
+    harness_script(&fixture, "opencode", "exit 0");
+    declarations(
+        &fixture,
+        "providers = [\"openai\", \"google\", \"kimi\"]\nharnesses = { claude = [], opencode = [\"anthropic/claude\", \"baseten/model\"] }",
+    );
+    let record = fixture.scenario.path("arms.json");
+    let result = fixture.scenario.run(&[
+        "evals",
+        "prepare-arms",
+        ".",
+        record.to_str().unwrap(),
+        "--baseline-runner",
+        "fixture",
+        "--candidate-runner",
+        "fixture",
+        "--suite",
+        "process",
+    ]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let record: Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+    for arm in ["baseline", "candidate"] {
+        let fixed = &record[arm]["runner"]["harnesses"]["claude"]["binary"];
+        assert_eq!(fixed["name"], "claude");
+        assert!(PathBuf::from(fixed["path"].as_str().unwrap()).is_absolute());
+        assert!(!fixed["version"].as_str().unwrap().is_empty());
+        let hosts = record[arm]["runner"]["harnesses"]["opencode"]["hosts"]
+            .as_array()
+            .unwrap();
+        assert!(hosts.contains(&json!("api.anthropic.com")), "{hosts:?}");
+        assert!(hosts.contains(&json!("inference.baseten.co")), "{hosts:?}");
+        assert!(!hosts.contains(&json!("api.openai.com")), "{hosts:?}");
+    }
+}
+
+#[test]
+fn custom_runner_preparation_refuses_unresolved_provider_declarations() {
+    for (declaration, evidence) in [
+        ("providers = [\"unknown\"]", "unknown variant"),
+        (
+            "harnesses = { unknown = [] }",
+            "unknown Custom runner Harness",
+        ),
+        ("harnesses = { opencode = [] }", "requires explicit Models"),
+        ("harnesses = { kimi = [] }", "requires explicit Models"),
+        (
+            "harnesses = { opencode = [\"unknown/model\"] }",
+            "unknown provider",
+        ),
+        (
+            "harnesses = { opencode = [\"anthropic/\"] }",
+            "<provider>/<model>",
+        ),
+        (
+            "harnesses = { kimi = [\"unknown\"] }",
+            "not in Kimi Code's config",
+        ),
+    ] {
+        let fixture = process::fixture();
+        runner(&fixture, DELIVER);
+        harness_script(&fixture, "opencode", "exit 0");
+        harness_script(
+            &fixture,
+            "kimi",
+            &format!(
+                "cat <<'JSON'\n{}\nJSON",
+                include_str!("../fixtures/kimi-providers.json")
+            ),
+        );
+        declarations(&fixture, declaration);
+        let record = fixture.scenario.path("arms.json");
+        let result = fixture.scenario.run(&[
+            "evals",
+            "prepare-arms",
+            ".",
+            record.to_str().unwrap(),
+            "--baseline-runner",
+            "fixture",
+            "--candidate-runner",
+            "fixture",
+            "--suite",
+            "process",
+        ]);
+        assert_ne!(result.code, Some(0), "{declaration} must be refused");
+        assert!(result.stderr.contains(evidence), "{}", result.stderr);
+        assert!(!record.exists());
+    }
+}
+
+#[test]
+fn custom_runner_sandbox_confines_children_credentials_network_and_harness_io() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Custom runner sandbox): bwrap is not on PATH");
+        return;
+    }
+    let fixture = process::fixture();
+    harness_script(
+        &fixture,
+        "claude",
+        "printf '%s\\n' \"$@\"; cat; printf 'harness stderr' >&2; exit 7",
+    );
+    harness_script(&fixture, "opencode", "exit 0");
+    fixture.scenario.credentials_are("[claude]\nsetup_token = \"trial-login\"\n[providers]\nopenai = \"trial-sdk-key\"\nxai = \"undeclared-key\"\n[opencode.keys]\nanthropic = \"anthropic-key\"\nbaseten = \"baseten-key\"\nxai = \"undeclared-opencode-key\"\n");
+    let hidden = fixture.scenario.path("operator-private");
+    fs::write(&hidden, "operator secret").unwrap();
+    fs::create_dir_all(fixture.scenario.path("home/.codex")).unwrap();
+    fs::write(
+        fixture.scenario.path("home/.codex/auth.json"),
+        "undeclared login",
+    )
+    .unwrap();
+    runner(
+        &fixture,
+        &(format!(
+            r#"
+assert not pathlib.Path({hidden:?}).exists(), 'unbound host file exposed'
+assert 'THIRDSHIFT_OPERATOR_TOKEN' not in os.environ
+assert os.environ['OPENAI_API_KEY'] == 'trial-sdk-key'
+assert 'XAI_API_KEY' not in os.environ
+assert os.environ['CLAUDE_CODE_OAUTH_TOKEN'] == 'trial-login'
+assert not (pathlib.Path(os.environ['HOME']) / '.codex/auth.json').exists()
+assert not (pathlib.Path(os.environ['HOME']) / '.thirdshift/credentials.toml').exists()
+config = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
+assert sorted(config['provider']) == ['anthropic', 'baseten'], config
+assert config['permission'] == {{'webfetch':'deny', 'websearch':'deny'}}, config
+assert 'undeclared' not in str(config)
+child = subprocess.run(['claude', '-p', 'test'], input='stdin preserved', text=True, capture_output=True)
+assert child.returncode == 7, child
+assert child.stdout == '--disallowedTools=WebSearch,WebFetch\n-p\ntest\nstdin preserved', child
+assert child.stderr == 'harness stderr', child
+import socket
+proxy = os.environ['HTTPS_PROXY'].split('://')[1].split(':')
+for host in ['github.com', 'example.com', 'api.x.ai']:
+    with socket.create_connection((proxy[0], int(proxy[1])), timeout=5) as sock:
+        sock.sendall(('CONNECT '+host+':443 HTTP/1.1\r\nHost: '+host+'\r\n\r\n').encode())
+        assert b'403' in sock.recv(4096), host
+"#
+        ) + DELIVER),
+    );
+    declarations(
+        &fixture,
+        "providers = [\"openai\"]\nharnesses = { claude = [], opencode = [\"anthropic/claude\", \"baseten/model\"] }",
+    );
+    let result = fixture.scenario.run_with_env(
+        &runner_args(),
+        &[("THIRDSHIFT_OPERATOR_TOKEN", "operator-token")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+}
+
+fn runner_args() -> Vec<&'static str> {
+    vec![
+        "experiment",
+        "--baseline-runner",
+        "fixture",
+        "--candidate-runner",
+        "fixture",
+        "--suite",
+        "process",
+        "--json",
+        "--yes",
+        "--draws",
+        "100",
+        "--min-discriminating-tasks",
+        "1",
+    ]
+}
+
+#[test]
+fn custom_runner_families_constrain_the_panel_before_trials_start() {
+    for declaration in [
+        "providers = [\"openai\"]",
+        "harnesses = { codex = [] }",
+        "harnesses = { opencode = [\"openai/model\"] }",
+    ] {
+        let fixture = process::fixture();
+        pairs::pair_fixture(&fixture, pairs::CANDIDATE_TEST);
+        runner(&fixture, DELIVER);
+        harness_script(&fixture, "claude", "exit 0");
+        harness_script(&fixture, "codex", "exit 0");
+        harness_script(&fixture, "opencode", "exit 0");
+        declarations(&fixture, declaration);
+        let result = run(
+            &fixture,
+            &[
+                "--panel-seat",
+                "harness=claude,model=judge-one",
+                "--panel-seat",
+                "harness=codex,model=judge-two",
+                "--panel",
+                "counted",
+                "--people",
+                "counted",
+                "--people-reader",
+                "ann@example.com",
+            ],
+        );
+        assert_ne!(
+            result.code,
+            Some(0),
+            "stand-in must be refused: {}",
+            result.stdout
+        );
+        assert!(
+            result
+                .stderr
+                .contains("the voting Grader panel spans 1 family (anthropic)"),
+            "{}",
+            result.stderr
+        );
+        let trials = fixture.scenario.path("home/.thirdshift/evals/experiments");
+        if trials.is_dir() {
+            for experiment in fs::read_dir(trials).unwrap() {
+                assert!(!experiment.unwrap().path().join("started").exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn missing_declared_credentials_void_custom_trials_without_using_ambient_keys() {
+    for declaration in [
+        "providers = [\"openai\"]",
+        "harnesses = { claude = [] }",
+        "harnesses = { codex = [] }",
+        "harnesses = { muse = [] }",
+        "harnesses = { agy = [] }",
+        "harnesses = { grok = [] }",
+        "harnesses = { opencode = [\"anthropic/model\"] }",
+    ] {
+        let fixture = process::fixture();
+        runner(
+            &fixture,
+            "raise Exception('runner must not start without declared credentials')",
+        );
+        for name in ["claude", "codex", "muse", "agy", "grok", "opencode"] {
+            harness_script(&fixture, name, "exit 0");
+        }
+        declarations(&fixture, declaration);
+        let result = fixture
+            .scenario
+            .run_with_env(&runner_args(), &[("OPENAI_API_KEY", "ambient-key")]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let view: Value = serde_json::from_str(&result.stdout).unwrap();
+        let results = view["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "{view}");
+        for result in results {
+            assert_eq!(result["outcome"], "void", "{result}");
+            for attempt in result["attempts"].as_array().unwrap() {
+                assert_eq!(attempt["void_cause"], "session_unavailable", "{attempt}");
+                assert!(
+                    !attempt.to_string().contains("runner must not start"),
+                    "{attempt}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn declared_harness_wrappers_apply_web_restrictions_and_preserve_process_io() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Custom runner wrappers): bwrap is not on PATH");
+        return;
+    }
+    let fixture = process::fixture();
+    for name in ["claude", "codex", "grok", "muse"] {
+        harness_script(
+            &fixture,
+            name,
+            "printf '%s\\n' \"$@\"; cat; printf 'stderr' >&2; exit 7",
+        );
+    }
+    fixture
+        .scenario
+        .credentials_are("[claude]\nsetup_token = \"trial-login\"\n");
+    for relative in [
+        ".codex/auth.json",
+        ".config/muse/auth.json",
+        ".thirdshift/trials/grok/auth.json",
+    ] {
+        let login = fixture.scenario.path(&format!("home/{relative}"));
+        fs::create_dir_all(login.parent().unwrap()).unwrap();
+        fs::write(login, "fixture-login").unwrap();
+    }
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+for name, switches in [
+    ('claude', ['--disallowedTools=WebSearch,WebFetch']),
+    ('codex', ['-c', 'web_search="disabled"']),
+    ('grok', ['--disable-web-search']),
+    ('muse', ['--disable-web-tools']),
+]:
+    child = subprocess.run([name, '-p', 'prompt'], input='stdin', text=True, capture_output=True)
+    assert child.returncode == 7, child
+    assert child.stdout == '\n'.join(switches + ['-p', 'prompt', 'stdin']), child
+    assert child.stderr == 'stderr', child
+assert (pathlib.Path(os.environ['HOME']) / '.grok/auth.json').read_text() == 'fixture-login'
+"#,
+        ) + DELIVER),
+    );
+    declarations(
+        &fixture,
+        "harnesses = { claude = [], codex = [], grok = [], muse = [] }",
+    );
+    let result = fixture.scenario.run(&runner_args());
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+}
+
+#[test]
+fn custom_kimi_trials_keep_only_declared_alias_logins_and_provider_families() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Custom Kimi runner): bwrap is not on PATH");
+        return;
+    }
+    let fixture = process::fixture();
+    harness_script(
+        &fixture,
+        "kimi",
+        &format!(
+            "cat <<'JSON'\n{}\nJSON",
+            include_str!("../fixtures/kimi-providers.json")
+        ),
+    );
+    let home = fixture.scenario.path("home/.kimi-code");
+    fs::create_dir_all(home.join("credentials")).unwrap();
+    fs::write(home.join("credentials/kimi-code.json"), "managed-login").unwrap();
+    fs::write(
+        home.join("config.toml"),
+        r#"
+default_model = "undeclared"
+[providers.fireworks]
+type = "openai"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "FIREWORKS_API_KEY"
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1"
+[providers.undeclared]
+type = "openai"
+api_key = "undeclared-key"
+[models."kimi-k3.1-pro"]
+provider = "fireworks"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
+max_context_size = 262144
+[models."kimi-code/kimi-for-coding"]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+max_context_size = 262144
+[models.undeclared]
+provider = "undeclared"
+model = "undeclared"
+"#,
+    )
+    .unwrap();
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+import tomllib
+home = pathlib.Path(os.environ['KIMI_CODE_HOME'])
+config = tomllib.loads((home / 'config.toml').read_text())
+assert sorted(config['models']) == ['kimi-code/kimi-for-coding', 'kimi-k3.1-pro'], config
+assert sorted(config['providers']) == ['fireworks', 'managed:kimi-code'], config
+assert 'undeclared-key' not in str(config), config
+assert os.environ['FIREWORKS_API_KEY'] == 'declared-login'
+assert (home / 'credentials/kimi-code.json').read_text() == 'managed-login'
+"#,
+        ) + DELIVER),
+    );
+    declarations(
+        &fixture,
+        "harnesses = { kimi = [\"kimi-k3.1-pro\", \"kimi-code/kimi-for-coding\"] }",
+    );
+    let result = fixture
+        .scenario
+        .run_with_env(&runner_args(), &[("FIREWORKS_API_KEY", "declared-login")]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(
+        view["prepared"]["baseline"]["runner"]["harnesses"]["kimi"]["families"],
+        json!(["fireworks-ai", "moonshot"])
+    );
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+}
+
 #[test]
 fn custom_runner_does_not_inherit_the_operator_environment() {
     let fixture = process::fixture();

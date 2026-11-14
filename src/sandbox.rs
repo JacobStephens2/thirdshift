@@ -43,6 +43,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use crate::harness::Harness;
+
+pub(crate) mod custom;
 use crate::proxy;
 use crate::resend_key::{Credentials, OpenCodeKeys};
 use crate::{config, interrupt};
@@ -275,6 +277,20 @@ impl Launch {
         self
     }
 
+    /// The Custom runner's one memory scope encloses bwrap and all children.
+    pub(crate) fn trial_command(
+        &self,
+        args: &[String],
+        trial: &str,
+        attempt: usize,
+        caps: &crate::scope::Caps,
+    ) -> Result<crate::scope::Launch> {
+        let program = resolve_binary("bwrap")?;
+        let mut launched = crate::scope::trial_command(&program, &[], trial, attempt, caps)?;
+        self.configure_command(launched.command(), args)?;
+        Ok(launched)
+    }
+
     /// The bwrap command running the Harness's `args` inside the sandbox.
     /// The caller sets the working directory, which must be the bound
     /// repository. `argv` clears the environment and sets only the sandbox's
@@ -444,7 +460,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         request.home.is_absolute(),
         "sandbox failed to start: home path must be absolute"
     );
-    let bwrap = find_bwrap().ok_or_else(|| {
+    find_bwrap().ok_or_else(|| {
         anyhow::Error::new(Unavailable {
             diagnostic: "bwrap is not on PATH".into(),
         })
@@ -483,7 +499,6 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             diagnostic: format!("{SHELL} is missing"),
         }));
     }
-    let socat = resolve_binary("socat")?;
     let mut binds = Binds::default();
     let mut environment = Environment::default();
     // The prepared repository, read-write, at its own path so the session's
@@ -504,7 +519,22 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             diagnostic: format!("{error:#}"),
         })
     })?;
-    let proxy = proxy::start(&allowed).map_err(|error| {
+    let program = harness_into(request, &mut binds, &mut environment, &binary);
+    finish(request, binds, environment, program, _grok, &allowed)
+}
+
+/// Shared native and Custom runner namespace, proxy relay and startup check.
+fn finish(
+    request: &Request<'_>,
+    mut binds: Binds,
+    mut environment: Environment,
+    program: PathBuf,
+    grok: Option<GrokGuard>,
+    allowed: &[String],
+) -> Result<Prepared> {
+    let bwrap = resolve_binary("bwrap")?;
+    let socat = resolve_binary("socat")?;
+    let proxy = proxy::start(allowed).map_err(|error| {
         anyhow::Error::new(Unavailable {
             diagnostic: format!("{error:#}"),
         })
@@ -521,7 +551,6 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     for name in ["NO_PROXY", "no_proxy"] {
         environment.set_str(name, "127.0.0.1,localhost");
     }
-    let program = harness_into(request, &mut binds, &mut environment, &binary);
     conceal_toolchain_credentials(request, &mut binds)?;
     let mut argv = base_argv();
     binds.argv(&mut argv);
@@ -568,7 +597,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         program,
         prefix,
         stderr: request.fresh_home.join("launcher.stderr"),
-        _grok,
+        _grok: grok,
         _proxy: proxy,
     })
 }

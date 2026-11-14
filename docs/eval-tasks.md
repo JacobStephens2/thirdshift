@@ -455,7 +455,7 @@ thirdshift evals prepare-arms <repository> <record.json> HEAD --baseline-runner 
 
 Each runner is `~/.thirdshift/runners/<name>.toml` or an explicit `.toml` path.
 The repository need not be a thirdshift checkout when both Arms are Custom
-runners, and no Cargo build or Harness lookup runs for those Arms. A native
+runners, and no Cargo build runs for those Arms. Only declared Harnesses are pinned. A native
 Baseline defaults to HEAD when Candidate is a Custom runner. A runner conflicts
 with a commit or Process/Harness/Model/Effort selection on the same Arm. Custom
 runners require explicit process suites; review suites and `--release` are
@@ -464,6 +464,8 @@ refused before preparation or dispatch.
 ```toml
 command = ["python3", "{runner_dir}/runner.py"]
 git_exclude = [".scratch/"]
+providers = ["openai"]
+harnesses = { claude = [], opencode = ["anthropic/claude", "baseten/model"], kimi = ["kimi-code/kimi-for-coding"] }
 [files]
 "runner.py" = "runner.py"
 "skills/example" = { home = ".agents/skills/example" }
@@ -488,12 +490,38 @@ end in `/` and hash their ordered subtree, preserving empty folders. Each Trial
 verifies both frozen Arms and copies verified bytes into its private runner directory
 and HOME. A frozen-input mismatch stops the Experiment before launch.
 
+Each Trial encloses the runner and all its children in one `bwrap` sandbox
+inside the Trial's memory scope. `harnesses` maps CLI names to Model lists:
+OpenCode requires `<provider>/<model>` entries and Kimi requires configured
+aliases; other Harnesses may use an empty list. Preparation pins real binary
+paths and `--version`, and resolves the declared provider hosts before Trials.
+Only declared Harness logins are copied into fresh HOME; operator settings,
+instructions and other logins are excluded unless explicitly mapped by `files`.
+Grok holds the shared Trials login lock for the whole Trial. OpenCode gets one
+config covering all its declared providers, with `webfetch` and `websearch` denied.
+Executable wrappers at the front of PATH apply the same web-search restrictions
+as native Trials and exec the pinned Harness, preserving its streams and status.
+
+`providers` declares direct-SDK access: `anthropic`, `openai`, `xai`, `meta`,
+`google`, `fireworks-ai`, `baseten` or `kimi`. Supply Trials-only keys as quoted
+strings under `[providers]` in `~/.thirdshift/credentials.toml` (mode 600),
+for example `openai = "..."`. Only declared keys enter the sandbox, as
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `META_API_KEY`,
+`GOOGLE_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY` or `KIMI_API_KEY`.
+Missing declared logins or keys produce `session_unavailable` Void Trials.
+One HTTPS proxy allows the union of declared Harness and SDK provider hosts;
+GitHub, general web hosts and unbound host paths remain unreachable. Every
+declared provider family participates in the panel's Arm-family voting and
+stand-in breadth checks. `THIRDSHIFT_TRIAL_NO_SANDBOX` remains the test/emergency
+escape from confinement.
+
 Each Trial starts the runner with an empty environment. thirdshift sets `PATH`,
 `HOME` to that Trial's fresh home, the home's XDG base directories,
 `THIRDSHIFT_EVAL_LIMIT_SIGNAL`, `CARGO_HOME` when a toolchain was prepared,
 `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, and `LANG`, `LC_ALL` or
 `LC_CTYPE` when the operator set one and it is a single locale token. The
-runner does not receive the rest of the operator's environment.
+runner does not receive the rest of the operator's environment. The sandbox also
+sets the declared credentials and proxy variables.
 
 Custom runners receive version-1 request.json with `repository`, `issue_file`,
 `issue_url`, `base`, `branch`, `runner_dir`, `output_dir` and `record_command`.

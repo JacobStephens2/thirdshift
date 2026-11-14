@@ -44,6 +44,76 @@ const BASETEN_HOSTS: &[&str] = &["inference.baseten.co"];
 const KIMI_HOSTS: &[&str] = &["api.kimi.com", "auth.kimi.com"];
 const KIMI_GLOBAL_HOSTS: &[&str] = &["api.kimi.ai", "auth.kimi.ai"];
 
+/// Direct-SDK providers accepted by a Custom runner manifest and Credentials.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Provider {
+    Anthropic,
+    Openai,
+    Xai,
+    Meta,
+    Google,
+    FireworksAi,
+    Baseten,
+    Kimi,
+}
+
+impl Provider {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+            Self::Xai => "xai",
+            Self::Meta => "meta",
+            Self::Google => "google",
+            Self::FireworksAi => "fireworks-ai",
+            Self::Baseten => "baseten",
+            Self::Kimi => "kimi",
+        }
+    }
+
+    pub(crate) fn environment(self) -> &'static str {
+        match self {
+            Self::Anthropic => "ANTHROPIC_API_KEY",
+            Self::Openai => "OPENAI_API_KEY",
+            Self::Xai => "XAI_API_KEY",
+            Self::Meta => "META_API_KEY",
+            Self::Google => "GOOGLE_API_KEY",
+            Self::FireworksAi => "FIREWORKS_API_KEY",
+            Self::Baseten => "BASETEN_API_KEY",
+            Self::Kimi => "KIMI_API_KEY",
+        }
+    }
+
+    pub(crate) fn hosts(self) -> &'static [&'static str] {
+        match self {
+            Self::Anthropic => &["api.anthropic.com"],
+            Self::Openai => &["api.openai.com"],
+            Self::Xai => XAI_HOSTS,
+            Self::Meta => META_HOSTS,
+            Self::Google => &["generativelanguage.googleapis.com"],
+            Self::FireworksAi => FIREWORKS_HOSTS,
+            Self::Baseten => BASETEN_HOSTS,
+            Self::Kimi => &["api.kimi.com", "api.kimi.ai"],
+        }
+    }
+
+    pub(crate) fn family(self) -> &'static str {
+        match self {
+            Self::Kimi => "moonshot",
+            Self::Anthropic
+            | Self::Openai
+            | Self::Xai
+            | Self::Meta
+            | Self::Google
+            | Self::FireworksAi
+            | Self::Baseten => self.name(),
+        }
+    }
+}
+
 /// One provider's hosts by the name an OpenCode Model uses for it.
 fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
     match provider {
@@ -62,8 +132,9 @@ fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
 pub(crate) fn opencode_provider(model: Option<&str>) -> Option<&str> {
     model
         .and_then(|model| model.split('#').next())
-        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
-        .filter(|provider| !provider.is_empty())
+        .and_then(|model| model.split_once('/'))
+        .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
+        .map(|(provider, _)| provider)
 }
 
 /// What the proxy allows, per Harness: that Harness's provider hosts.
@@ -129,7 +200,7 @@ fn kimi_trial_hosts(
 /// A Kimi provider's hosts, by the host of the base URL its Model's
 /// provider sends requests to. A provider this lookup does not know fails
 /// before the session starts rather than reaching further than its list.
-fn kimi_hosts(base_url: &str) -> Result<Vec<&'static str>> {
+pub(crate) fn kimi_hosts(base_url: &str) -> Result<Vec<&'static str>> {
     let host = base_url
         .split_once("://")
         .map_or(base_url, |(_, rest)| rest)

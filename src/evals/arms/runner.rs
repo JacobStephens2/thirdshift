@@ -1,19 +1,26 @@
 //! A Custom runner's declared inputs, frozen independently of a thirdshift build.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+use super::FixedHarness;
 use super::frozen::{digest, tree_hashes};
 use crate::git::Git;
+use crate::harness::Harness;
+use crate::proxy::{self, Provider};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
     pub command: Vec<String>,
+    #[serde(default)]
+    pub harnesses: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub providers: BTreeSet<Provider>,
     #[serde(default)]
     pub files: BTreeMap<String, Target>,
     #[serde(default)]
@@ -63,6 +70,15 @@ pub(crate) struct Runner {
     pub manifest: Manifest,
     pub files: BTreeMap<String, String>,
     pub provenance: BTreeMap<String, Provenance>,
+    #[serde(default)]
+    pub harnesses: BTreeMap<String, RunnerHarness>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct RunnerHarness {
+    pub binary: FixedHarness,
+    pub hosts: BTreeSet<String>,
+    pub families: BTreeSet<String>,
 }
 
 impl Runner {
@@ -98,6 +114,50 @@ impl Runner {
         fs::create_dir_all(directory.join("home"))?;
         fs::write(directory.join("manifest.toml"), &bytes)?;
         let mut provenance = BTreeMap::new();
+        let mut harnesses = BTreeMap::new();
+        for (name, models) in &manifest.harnesses {
+            let harness = Harness::named(name)
+                .with_context(|| format!("unknown Custom runner Harness {name}"))?;
+            ensure!(
+                !matches!(harness, Harness::OpenCode | Harness::Kimi) || !models.is_empty(),
+                "Custom runner {name} requires explicit Models for provider host resolution"
+            );
+            let binary = super::fixed_harness(harness)?;
+            let mut hosts = BTreeSet::new();
+            let mut families = BTreeSet::new();
+            let models: Vec<Option<&str>> = if models.is_empty() {
+                vec![None]
+            } else {
+                models.iter().map(|model| Some(model.as_str())).collect()
+            };
+            for model in models {
+                let allowed = proxy::allowed_hosts(harness, model)?;
+                let family = match harness {
+                    Harness::Claude => "anthropic",
+                    Harness::Codex => "openai",
+                    Harness::Grok => "xai",
+                    Harness::Muse => "meta",
+                    Harness::Agy => "google",
+                    Harness::OpenCode => {
+                        proxy::opencode_provider(model).context("missing provider")?
+                    }
+                    Harness::Kimi if allowed.iter().any(|host| host == "api.fireworks.ai") => {
+                        "fireworks-ai"
+                    }
+                    Harness::Kimi => "moonshot",
+                };
+                families.insert(family.to_string());
+                hosts.extend(allowed);
+            }
+            harnesses.insert(
+                name.clone(),
+                RunnerHarness {
+                    binary,
+                    hosts,
+                    families,
+                },
+            );
+        }
         if let Some(origin) = source_provenance(&path)? {
             provenance.insert("manifest.toml".into(), origin);
         }
@@ -119,6 +179,7 @@ impl Runner {
             manifest,
             files: tree_hashes(directory)?,
             provenance,
+            harnesses,
         })
     }
 

@@ -1387,8 +1387,16 @@ Graders ignore uncommitted scratch, and committing a manifest <code>git_exclude<
 path fails the Trial. The runner&#39;s process environment is an allowlist: a fresh
 HOME, PATH, the private XDG directories, and git settings that ignore system
 and operator git config. It does not include the operator&#39;s other environment
-variables. See the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation">Custom runner contract</a>.
-Provider sandbox adapters and session recording follow in #2189 and #2191.</p>
+variables. One Trial-wide bwrap sandbox and memory scope enclose the runner
+and its children. The manifest&#39;s <code>harnesses</code> map pins CLI paths and versions;
+OpenCode lists provider/model entries and Kimi lists aliases. <code>providers</code>
+lists direct-SDK providers whose Trials-only keys come from <code>[providers]</code>
+in Credentials. Only declared logins and keys enter fresh HOME and the
+environment; missing credentials void the Trial as <code>session_unavailable</code>.
+One provider-only HTTPS proxy and PATH wrappers disable Harness web search.
+Declared provider families also count in Grader panel voting and stand-in
+checks. See the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation">Custom runner contract</a>.
+Session recording follows in #2191.</p>
 <p>From a local thirdshift clone, <code>thirdshift experiment &lt;candidate&gt;</code> compares a
 branch or commit with its merge-base with <code>main</code>. Use <code>--baseline &lt;ref&gt;</code> to name
 another Baseline. Suites default to those touched by the change, using their

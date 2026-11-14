@@ -526,7 +526,8 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "FrozenRunner": {
     "name": "string", "directory": "string", "files": {"*": "string"},
-    "manifest": {"command": ["string"], "files": {"*": "RunnerTarget"}, "roles": {"*": {"model": "string", "effort": "string?"}}, "git_exclude": ["string"]},
+    "manifest": {"command": ["string"], "harnesses?": {"*": ["string"]}, "providers?": ["string"], "files": {"*": "RunnerTarget"}, "roles": {"*": {"model": "string", "effort": "string?"}}, "git_exclude": ["string"]},
+    "harnesses?": {"*": {"binary": "FixedHarness", "hosts": ["string"], "families": ["string"]}},
     "provenance": {"*": {"repository": "string", "origin": "string?", "path": "string", "commit": "string", "dirty": "boolean"}}
   },
   "RunnerTarget": "string|RunnerHomeTarget",
