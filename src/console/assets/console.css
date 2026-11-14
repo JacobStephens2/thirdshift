@@ -35,6 +35,11 @@ header h1 a:hover, header h1 a:focus-visible { text-decoration: underline; }
 p[role="alert"] { overflow-wrap: anywhere; }
 .page-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 8px; }
 .start-controls { margin: 16px 0; padding: 12px; border: 1px solid var(--rule); border-radius: var(--radius); }
+/* Inbox's closed disclosure is one line; Cron jobs keeps its panel spacing. */
+.start-work { padding-block: 0; }
+.start-work > details > summary { min-height: 44px; }
+.start-work > details[open] { padding-bottom: 12px; }
+.start-work > [data-start-result]:empty { margin: 0; }
 .start-form > label, .start-options > label, .start-field { display: grid; gap: 4px; margin: 10px 0; min-width: 0; }
 .start-field select { min-width: 0; max-width: 100%; }
 .start-form input { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); }
