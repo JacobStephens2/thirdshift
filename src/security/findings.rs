@@ -120,7 +120,7 @@ impl Findings {
             }
             let mut metadata = record.metadata().clone();
             let url = metadata.url.clone();
-            let first = seen.insert(finding.fingerprint);
+            let first = seen.insert(url.clone());
             // A new candidate's write-up may quote an outcome no reproduction wrote.
             let kept = (!resolved.created)
                 .then(|| record.completed_reproduction())
