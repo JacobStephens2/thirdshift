@@ -1310,6 +1310,14 @@ and operator git config. It does not include the operator's other environment
 variables. See the [Custom runner contract](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation).
 Provider sandbox adapters and session recording follow in #2189 and #2191.
 
+Console clients can start the same Experiment with `POST /api/v1/start` (also
+served at `/api/v1/runs`), putting `baseline_runner`, `candidate_runner` and
+`suite` in the request's `experiment` object. The CLI's per-Arm conflicts and
+process-suite requirements apply. Experiment pages and Trial Peek show each
+Custom runner's name, digest, recorded Git HEAD and dirty state, and declared
+roles. Blind pairwise pages keep that identity hidden until the preference is
+submitted; `revealed` then includes the Custom runner's details.
+
 From a local thirdshift clone, `thirdshift experiment <candidate>` compares a
 branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
 another Baseline. Suites default to those touched by the change, using their

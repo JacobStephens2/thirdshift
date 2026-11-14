@@ -8,7 +8,148 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
+const customRunner = require('./fixtures/custom-runner.cjs');
 const { replaceRecord } = require('./records.cjs');
+
+test('Custom runner Arms render in comparisons, Trial Peek and only after blind calls', async t => {
+  const folder = await customRunner.save(home);
+  t.after(async () => {
+    await fixture.save(home, fixture.record());
+    for (const name of ['results', 'pairs', 'reviews']) await rm(join(folder, name), { recursive: true, force: true });
+  });
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await rm(join(folder, 'reviews'), { recursive: true, force: true });
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      await page.goto(`${origin}/experiments/${fixture.id}`);
+      await page.locator('#experiment-arms > details > summary').click();
+      const arms = await page.locator('#experiment-arms').textContent();
+      for (const text of ['Custom runner', 'outside-review', 'outside-candidate<script>', 'e'.repeat(64), 'HEAD', 'f'.repeat(40), 'dirty', 'inspect<role>', 'role-model', 'high']) assert.ok(arms.includes(text), `${text}: ${arms}`);
+      assert.doesNotMatch(arms, /ref unknown|default|Harness version.*unknown/);
+      assert.equal(await page.locator('#experiment-arms script').count(), 0);
+      await openSuites(page);
+      await page.locator(`.trial-cell[data-experiment-peek="trial-${fixture.key('alpha', 'candidate', 0, 'process')}"]`).click();
+      const peek = await page.locator('#peek').textContent();
+      for (const text of ['Custom runner', 'outside-candidate<script>', 'e'.repeat(64), 'HEAD', 'dirty', 'inspect<role>', 'role-model']) assert.ok(peek.includes(text), `${text}: ${peek}`);
+      assert.equal(await page.locator('#peek script').count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+
+      const base = `/experiments/${fixture.id}/pairs/${customRunner.pair}`;
+      for (const sealed of [false, true]) {
+        await page.goto(`${origin}${base}`);
+        const html = await page.content();
+        const blind = await (await context.request.get(`${origin}/api/v1${base}`)).text();
+        for (const hidden of ['outside-review', 'outside-candidate', 'd'.repeat(64), 'e'.repeat(64), 'inspect', 'role-model']) {
+          assert.ok(!html.includes(hidden), `HTML leaked ${hidden}`);
+          assert.ok(!blind.includes(hidden), `JSON leaked ${hidden}`);
+        }
+        if (!sealed) {
+          await page.locator('input[name=a][value=ready]').check();
+          await page.locator('input[name=b][value=ready]').check();
+          await page.getByRole('button', { name: 'Seal both merge calls' }).click();
+        }
+      }
+      await page.locator('input[name=preference][value=tie]').check();
+      await page.getByRole('button', { name: 'Save preference' }).click();
+      const reveal = page.locator('section[aria-label=Revealed]');
+      await reveal.waitFor();
+      const text = await reveal.textContent();
+      for (const expected of ['outside-review', 'outside-candidate<script>', 'e'.repeat(64), 'inspect<role>', 'role-model', 'HEAD', 'dirty']) assert.ok(text.includes(expected), `${expected}: ${text}`);
+      const view = await (await context.request.get(`${origin}/api/v1${base}`)).json();
+      const setups = [view.revealed.a_setup, view.revealed.b_setup];
+      assert.deepEqual(setups.map(s => s.runner).sort(), ['outside-candidate<script>', 'outside-review']);
+      assert.equal(await reveal.locator('script').count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    } finally { await context.close(); }
+  }
+});
+
+test('Custom runner Experiment JSON matches the CLI and its OpenAPI Setup schema', async t => {
+  const folder = await customRunner.save(home);
+  t.after(async () => {
+    await fixture.save(home, fixture.record());
+    for (const name of ['results', 'pairs']) await rm(join(folder, name), { recursive: true, force: true });
+  });
+  const context = await browser.newContext();
+  try {
+    const document = await (await context.request.get(`${origin}/api/v1/openapi.json`)).json();
+    const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+    for (const [route, args] of [['/api/v1/experiments', ['experiments', '--json']], [`/api/v1/experiments/${fixture.id}`, ['experiments', fixture.id, '--json']]]) {
+      const served = await (await context.request.get(`${origin}${route}`)).json();
+      const cli = JSON.parse(execFileSync(binary, args, { env: { ...process.env, HOME: home }, timeout: 20000 }));
+      assert.deepEqual(served, cli);
+      let schema = document.paths[route.endsWith(fixture.id) ? '/api/v1/experiments/{id}' : route].get.responses['200'].content['application/json'].schema;
+      if (Array.isArray(served)) schema = schema.items;
+      for (const arm of ['baseline', 'candidate']) {
+        const setup = schema.properties[arm];
+        assert.ok(setup, `${arm} Setup schema missing`);
+        assert.deepEqual(setup.properties.commit.type, ['string', 'null']);
+        assert.deepEqual(setup.properties.harness.type, ['string', 'null']);
+        assert.equal(setup.properties.runner.type, 'string');
+        assert.equal(setup.properties.runner_digest.type, 'string');
+        assert.ok(!setup.required.includes('runner'), 'native Setups omit runner');
+        assert.ok(!setup.required.includes('runner_digest'), 'native Setups omit runner_digest');
+      }
+    }
+  } finally { await context.close(); }
+});
+
+test('Custom runner identity in retained pair evidence stays blind', async t => {
+  const folder = await customRunner.save(home);
+  t.after(async () => {
+    await fixture.save(home, fixture.record());
+    for (const name of ['results', 'pairs']) await rm(join(folder, name), { recursive: true, force: true });
+  });
+  const path = join(folder, 'pairs', `${customRunner.pair}.json`);
+  const pair = JSON.parse(await readFile(path, 'utf8'));
+  pair.baseline.diff[0].patch = `+Runner: outside-review\n+Digest: ${'d'.repeat(64)}\n+Roles: inspect<role> role-model\n+| Role | Model | Effort |\n+| inspect<role> | role-model | high |\n+Keep this change.\n`;
+  pair.baseline.base = [{ command: ['outside-review', '--check'], passed: true, reason: 'outside-review passed with role-model' }];
+  pair.baseline.test_files = ['outside-review_test.py'];
+  await writeFile(path, JSON.stringify(pair));
+  const context = await browser.newContext();
+  try {
+    for (const prefix of ['', '/api/v1']) {
+      const response = await context.request.get(`${origin}${prefix}/experiments/${fixture.id}/pairs/${customRunner.pair}`);
+      assert.equal(response.status(), 200);
+      const text = await response.text();
+      for (const hidden of ['outside-review', 'd'.repeat(64), 'inspect', 'role-model']) assert.ok(!text.includes(hidden), `${prefix} leaked ${hidden}`);
+      assert.ok(text.includes('Keep this change.'));
+    }
+  } finally { await context.close(); }
+});
+
+test('blinding runner roles and effort preserves ordinary source evidence', async t => {
+  const folder = await customRunner.save(home);
+  t.after(async () => {
+    await fixture.save(home, fixture.record());
+    for (const name of ['results', 'pairs']) await rm(join(folder, name), { recursive: true, force: true });
+  });
+  const path = join(folder, 'pairs', `${customRunner.pair}.json`);
+  const pair = JSON.parse(await readFile(path, 'utf8'));
+  const patches = ['+if score > high_watermark { return score; }\n', '+def highest_score(scores):\n+    return max(scores)\n'];
+  pair.baseline.diff[0].patch = patches[0];
+  pair.candidate.diff[0].patch = patches[1];
+  pair.baseline.diff[0].path = 'tests/test_highest.py';
+  pair.baseline.test_files = ['tests/test_highest.py'];
+  patches.push('+struct Settings {\n+    runner: bool,\n+}\n', '+role = load_user_role()\n+return role.permissions\n');
+  pair.baseline.diff.push({ path: 'src/settings.rs', test: false, patch: patches[2] });
+  pair.candidate.diff.push({ path: 'src/roles.py', test: false, patch: patches[3] });
+  await writeFile(path, JSON.stringify(pair));
+  const value = customRunner.record();
+  value.prepared.baseline.runner.manifest.roles.test = { model: 'role-model', effort: 'high' };
+  await fixture.save(home, value);
+  const context = await browser.newContext();
+  try {
+    const response = await context.request.get(`${origin}/api/v1/experiments/${fixture.id}/pairs/${customRunner.pair}`);
+    assert.equal(response.status(), 200);
+    const page = await response.json();
+    const diffs = [page.a, page.b].flatMap(side => side.diff);
+    assert.deepEqual(diffs.map(diff => diff.patch).sort(), patches.sort());
+    assert.ok(diffs.some(diff => diff.path === 'tests/test_highest.py'));
+    assert.ok([page.a, page.b].some(side => side.test_files.includes('tests/test_highest.py')));
+  } finally { await context.close(); }
+});
 
 test('the Inbox names the Commands blocking a waiting Experiment', async t => {
   const folder = join(home, '.thirdshift/logs/acme/widgets/commands/experiment');

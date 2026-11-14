@@ -606,10 +606,28 @@ fn span() -> Value {
 fn experiment() -> Value {
     object(json!({
         "format": {"type": "integer", "const": 13}, "id": {"type": "string"},
+        "baseline": experiment_setup(), "candidate": experiment_setup(),
         "waiting_for": array(json!({"type":"string"})),
         "no_wait": {"type":"boolean"}, "commands_at_start": {"type":"integer"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))
     }))
+}
+
+fn experiment_setup() -> Value {
+    json!({
+        "type": "object",
+        "required": ["commit", "harness", "model", "effort"],
+        "properties": {
+            "commit": {"type": ["string", "null"]},
+            "harness": {"type": ["string", "null"]},
+            "model": {"type": ["string", "null"]},
+            "effort": {"type": ["string", "null"]},
+            "process": {"type": "string"},
+            "process_digest": {"type": "string"},
+            "runner": {"type": "string"},
+            "runner_digest": {"type": "string"}
+        }
+    })
 }
