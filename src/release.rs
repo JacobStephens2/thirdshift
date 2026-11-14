@@ -14,8 +14,11 @@ use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::{interrupt, logs, poll, progress};
 
+mod controls;
+mod recovery;
 mod selection;
 mod summary;
+mod workflow;
 
 pub const REPOSITORY: &str = "JacobStephens2/thirdshift";
 
@@ -97,17 +100,26 @@ impl Version {
 }
 
 /// Own the locks, worktree and live PR label through interruption cleanup.
-pub fn run(
-    version: Option<&str>,
-    pinned: Option<Bump>,
-    choice: &mut Choice,
-) -> Result<Option<Ended>, FailedRun> {
+pub struct Request<'a> {
+    pub version: Option<&'a str>,
+    pub bump: Option<Bump>,
+    pub with_experiment: bool,
+    pub review: bool,
+}
+
+pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, FailedRun> {
     let mut pr_url = None;
     let mut trace = None;
     let result = (|| -> Result<Option<Ended>> {
         outside_session()?;
-        let explicit = version.map(Version::parse).transpose()?;
-        let pass = version.is_none();
+        if request.review {
+            ensure!(
+                std::io::IsTerminal::is_terminal(&std::io::stdin()),
+                "release --review requires a terminal on standard input"
+            );
+        }
+        let explicit = request.version.map(Version::parse).transpose()?;
+        let pass = request.version.is_none();
         let launch = Git::new(std::env::current_dir()?);
         let repo = Repo::of_origin(&git_run(&launch, &["config", "remote.origin.url"])?)
             .context("release requires a GitHub origin")?;
@@ -134,7 +146,6 @@ pub fn run(
             }
             anyhow::bail!("another Release run holds the machine-local release lock");
         };
-        // Declared before the reservation so Drop pushes its delete first.
         let isolated = Isolated::open(&launch)?;
         let git = &isolated.git;
         fetch(git)?;
@@ -149,170 +160,105 @@ pub fn run(
             None => anyhow::bail!("another Release run holds the origin release reservation"),
         };
         let github = GitHub::new();
-        let (base, previous) = match selection::candidate(git, &github, explicit.as_ref())? {
-            selection::Candidate::Ready { base, previous } => (base, previous),
-            selection::Candidate::Skipped(reason) => return skipped(&repo, reason),
-        };
-        if pass {
-            logs::started(logs::Work::ReleaseRun(&repo), choice);
-        }
         let mut automatic_summary = None;
-        let version = if let Some(version) = version {
-            version.to_owned()
-        } else {
-            let current = main_version(git)?;
-            if let Some(bump) = pinned {
-                current.bumped(bump)?
-            } else {
-                let minor = current.bumped(Bump::Minor)?;
-                let patch = current.bumped(Bump::Patch)?;
-                let input = summary::selection_input(
-                    git,
-                    &github,
-                    &base,
-                    previous.as_deref(),
-                    &minor,
-                    &patch,
-                )?;
-                let selected = summary::select(choice, &repo, &input, &mut trace)?;
-                automatic_summary = Some(selected.summary);
-                if selected.bump == Bump::Minor {
-                    minor
-                } else {
-                    patch
+        let mut cut =
+            match recovery::discover(git, &launch, &github, request.version, request.bump)? {
+                recovery::Discovery::Blocked(reason) => {
+                    if pass {
+                        return skipped(&repo, reason);
+                    }
+                    anyhow::bail!("{reason}");
                 }
-            }
-        };
-        let version = version.as_str();
-        let wanted = Version::parse(version)?;
-        validate_version(git, &wanted)?;
-        let branch = format!("release-{version}");
-        let tag = format!("v{version}");
-        ensure!(
-            git_run(
-                git,
-                &[
-                    "ls-remote",
-                    "--refs",
-                    "origin",
-                    &format!("refs/heads/{branch}"),
-                    &format!("refs/tags/{tag}")
-                ]
-            )?
-            .is_empty(),
-            "{branch} or {tag} already exists on origin; recovery requires the Day shift"
-        );
-        ensure!(
-            git_run(&launch, &["tag", "--list", &tag])?.is_empty(),
-            "{tag} already exists locally"
-        );
-        checkout(git, &base)?;
-        bump(git.dir(), version)?;
-        git_run(git, &["add", "--", "Cargo.toml", "Cargo.lock"])?;
-        git_run(
-            git,
-            &[
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "commit.gpgSign=false",
-                "commit",
-                "-m",
-                &format!("Release {version}"),
-            ],
-        )?;
-        let head = git_run(git, &["rev-parse", "HEAD"])?;
-        let diff = git_run(
-            git,
-            &[
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                &base,
-                &head,
-                "--",
-                "Cargo.toml",
-                "Cargo.lock",
-            ],
-        )?;
-        let summary = if let Some(summary) = automatic_summary {
-            summary
-        } else {
-            let input = summary::input(git, &github, &base, previous.as_deref(), version, &diff)?;
-            match summary::write(choice, &repo, &input, &mut trace) {
-                Ok(text) => Some(text),
-                Err(error) => {
-                    interrupt::check()?;
-                    progress::warn(
-                        &error,
-                        format_args!("release summary unavailable; using GitHub generated notes"),
+                recovery::Discovery::Resume(cut) => {
+                    if pass {
+                        logs::started(logs::Work::ReleaseRun(&repo), choice);
+                    }
+                    cut
+                }
+                recovery::Discovery::Fresh { previous } => {
+                    if let Some(wanted) = &explicit {
+                        validate_version(git, wanted)?;
+                    }
+                    let (base, _) = match selection::candidate(
+                        git,
+                        &github,
+                        explicit.as_ref(),
+                        previous.as_deref(),
+                    )? {
+                        selection::Candidate::Ready { base, previous } => (base, previous),
+                        selection::Candidate::Skipped(reason) => return skipped(&repo, reason),
+                    };
+                    if pass {
+                        logs::started(logs::Work::ReleaseRun(&repo), choice);
+                    }
+                    let version = if let Some(version) = request.version {
+                        version.to_owned()
+                    } else {
+                        let current = main_version(git)?;
+                        if let Some(bump) = request.bump {
+                            current.bumped(bump)?
+                        } else {
+                            let minor = current.bumped(Bump::Minor)?;
+                            let patch = current.bumped(Bump::Patch)?;
+                            let input = summary::selection_input(
+                                git,
+                                &github,
+                                &base,
+                                previous.as_deref(),
+                                &minor,
+                                &patch,
+                            )?;
+                            let selected = summary::select(choice, &repo, &input, &mut trace)?;
+                            automatic_summary = Some(selected.summary);
+                            if selected.bump == Bump::Minor {
+                                minor
+                            } else {
+                                patch
+                            }
+                        }
+                    };
+                    validate_version(git, &Version::parse(&version)?)?;
+                    ensure!(
+                        git_run(&launch, &["tag", "--list", &format!("v{version}")])?.is_empty(),
+                        "v{version} already exists locally"
                     );
-                    None
+                    recovery::Cut {
+                        version,
+                        base,
+                        previous,
+                        head: String::new(),
+                        pr: None,
+                        tagged: None,
+                        published: false,
+                        recut: false,
+                        supersedes: None,
+                        expected_branch: None,
+                        expected_tag: None,
+                    }
                 }
-            }
-        };
-        let notes = if summary.is_none() {
-            github.release_notes(&tag, &base, previous.as_deref())?
-        } else {
-            String::new()
-        };
-        let body = format!(
-            "## Summary\n\n<!-- release-summary:start -->\n{}\n<!-- release-summary:end -->\n\n{notes}\n\n## Version diff\n\n```diff\n{diff}\n```\n\n<!-- release-content-base: {base} -->\n",
-            summary
-                .as_deref()
-                .unwrap_or("_The agent summary was unavailable._")
-        );
-        logs::stage(logs::Stage::PullRequest);
-        // A release merged while the summary was running invalidates this cut.
-        fetch(git)?;
-        validate_version(git, &wanted)?;
-        ensure!(
-            last_tag(git)? == previous,
-            "a newer release appeared while preparing this release; retry"
-        );
-        git_run(
+            };
+        if request.with_experiment && !cut.published {
+            let pin = format!("refs/thirdshift/release-candidates/{}", cut.version);
+            git_run(&launch, &["fetch", "--quiet", "origin", &cut.base])?;
+            git_run(&launch, &["update-ref", &pin, &cut.base])?;
+        }
+        if cut.head.is_empty() {
+            cut.commit(git)?;
+        }
+        workflow::finish(
             git,
-            &[
-                "push",
-                "--no-verify",
-                "origin",
-                &format!("{head}:refs/heads/{branch}"),
-            ],
+            &github,
+            &repo,
+            &mut cut,
+            &request,
+            choice,
+            automatic_summary,
+            &mut trace,
+            &mut pr_url,
         )?;
-        let url = github.open_release(version, &branch, &body)?;
-        pr_url = Some(url.clone());
-        let pr = crate::review::PullRequestUrl::parse(&url)?;
-        logs::pull_request(&pr.url);
-        let _label = LiveLabel::take(&github, &pr)?;
-        logs::stage(logs::Stage::CiWatch);
-        wait_for_bump(&github, &pr, &head, &branch)?;
-        // Only the validated head is tagged, never a branch name that can move.
-        progress::step(format_args!("publishing {tag} at {head}"));
-        git_run(
-            git,
-            &[
-                "push",
-                "--no-verify",
-                "origin",
-                &format!("{head}:refs/tags/{tag}"),
-            ],
-        )?;
-        wait_for_release(&github, &head)?;
-        check_bump(&github, &pr, &head, &branch)?;
-        logs::stage(logs::Stage::SelfMerge);
-        ensure!(
-            !github.review_blocks_merge(&pr.issue, pr.issue.number),
-            "review required before merging the release bump pull request; the GitHub Release remains published"
-        );
-        github.merge(&pr.issue, pr.issue.number, &head)
-            .context("GitHub Release was published, but the bump pull request was not merged; the Day shift must merge it")?;
-        ensure!(
-            github.pr_state(&pr.issue, &url)? == PrState::Merged,
-            "GitHub Release was published, but the bump pull request has not merged"
-        );
         Ok(Some(Ended {
-            pr_url: url,
-            version: version.into(),
+            pr_url: cut.pr.context("release has no PR")?.url,
+            version: cut.version,
         }))
     })();
     result.map_err(|error| FailedRun {
@@ -377,29 +323,6 @@ fn main_version(git: &Git) -> Result<Version> {
     Version::parse(current)
 }
 
-fn last_tag(git: &Git) -> Result<Option<String>> {
-    if git_run(
-        git,
-        &["tag", "--merged", "origin/main", "--list", "v[0-9]*"],
-    )?
-    .is_empty()
-    {
-        return Ok(None);
-    }
-    git_run(
-        git,
-        &[
-            "describe",
-            "--tags",
-            "--abbrev=0",
-            "--match",
-            "v[0-9]*",
-            "origin/main",
-        ],
-    )
-    .map(Some)
-}
-
 fn check_bump(
     github: &GitHub,
     pr: &crate::review::PullRequestUrl,
@@ -423,57 +346,6 @@ fn check_bump(
         "release bump pull request has a merge conflict"
     );
     Ok(snapshot.mergeable)
-}
-
-fn wait_for_bump(
-    github: &GitHub,
-    pr: &crate::review::PullRequestUrl,
-    head: &str,
-    branch: &str,
-) -> Result<()> {
-    let mut line = poll::WaitingLine::new();
-    let started = Instant::now();
-    let mut green_since = None;
-    loop {
-        let mergeable = check_bump(github, pr, head, branch)?;
-        let checks = github.checks_on(&pr.issue, head)?;
-        for check in &checks {
-            ensure!(
-                matches!(
-                    check.conclusion,
-                    Conclusion::Success
-                        | Conclusion::Skipped
-                        | Conclusion::Neutral
-                        | Conclusion::Pending
-                        | Conclusion::Unfinished
-                ),
-                "release bump check {} failed: {:?}",
-                check.name,
-                check.conclusion
-            );
-        }
-        let green = (!checks.is_empty() || started.elapsed() >= poll::grace_period())
-            && checks.iter().all(|check| {
-                matches!(
-                    check.conclusion,
-                    Conclusion::Success | Conclusion::Skipped | Conclusion::Neutral
-                )
-            });
-        if green {
-            if mergeable == Mergeable::Yes {
-                return Ok(());
-            }
-            let since = green_since.get_or_insert_with(Instant::now);
-            ensure!(
-                since.elapsed() < poll::grace_period(),
-                "GitHub did not report the green bump pull request mergeable"
-            );
-        }
-        if line.should_report(()) {
-            progress::step("waiting for release bump pull-request checks and mergeability");
-        }
-        poll::pause()?;
-    }
 }
 
 fn wait_for_release(github: &GitHub, head: &str) -> Result<()> {
@@ -551,6 +423,7 @@ struct Isolated {
 
 impl Isolated {
     fn open(launch: &Git) -> Result<Self> {
+        let canonical = git_run(launch, &["config", "remote.origin.url"])?;
         let origin = git_run(launch, &["remote", "get-url", "origin"])?;
         ensure!(
             usable_origin(&origin),
@@ -579,7 +452,13 @@ impl Isolated {
         git_run(&git, &["config", "commit.gpgSign", "false"])?;
         git_run(&git, &["config", "protocol.ext.allow", "never"])?;
         copy_identity(launch, &git)?;
-        git_run(&git, &["remote", "add", "origin", &origin])?;
+        git_run(&git, &["remote", "add", "origin", &canonical])?;
+        if origin != canonical {
+            git_run(
+                &git,
+                &["config", &format!("url.{origin}.insteadOf"), &canonical],
+            )?;
+        }
         Ok(Self {
             _directory: directory,
             git,

@@ -531,7 +531,7 @@ impl Stored {
         Ok(stored)
     }
 
-    fn view(&self) -> Result<View> {
+    pub(super) fn view(&self) -> Result<View> {
         super::reading::read(self)
     }
 

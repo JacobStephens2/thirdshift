@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use anyhow::{Result, ensure};
 
-use super::{Version, fetch, git_run, last_tag, validate_version};
+use super::{Version, fetch, git_run};
 use crate::{git::Git, github::GitHub, poll, progress};
 
 pub(super) enum Candidate {
@@ -14,15 +14,17 @@ pub(super) enum Candidate {
     Skipped(String),
 }
 
-pub(super) fn candidate(git: &Git, github: &GitHub, wanted: Option<&Version>) -> Result<Candidate> {
+pub(super) fn candidate(
+    git: &Git,
+    github: &GitHub,
+    wanted: Option<&Version>,
+    previous: Option<&str>,
+) -> Result<Candidate> {
     let mut line = poll::WaitingLine::new();
     let started = Instant::now();
     loop {
         fetch(git)?;
-        if let Some(wanted) = wanted {
-            validate_version(git, wanted)?;
-        }
-        let previous = last_tag(git)?;
+        let previous = previous.map(str::to_owned);
         let boundary = previous.as_ref().map(|tag| format!("^{tag}"));
         let mut args = vec!["rev-list", "--first-parent", "origin/main"];
         if let Some(boundary) = &boundary {

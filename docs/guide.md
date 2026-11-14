@@ -4381,8 +4381,32 @@ outside the summary markers, so the post-release notes job does not repeat them.
 The Command pushes `release-<version>`, opens `Release <version>` into `main`,
 waits for checks and mergeability, pushes `v<version>` at that validated bump
 head, waits for the release workflow and merges the bump PR. It does not run
-`thirdshift update`. Existing branches or tags require the Day shift; this
-flow does not yet resume unfinished releases.
+`thirdshift update`. After taking both locks it discovers unfinished release
+branches, pull requests and unpublished tags. A Pass automatically resumes an
+exact-bump branch or ready PR, and recovers a completed failed release workflow
+only after verifying that its GitHub Release was never published. A draft PR,
+non-bump changes or an unverifiable publication lookup produces a quiet,
+deduplicated skip naming the blocked release. An explicit version resumes that
+version and refuses another live unfinished version with recovery instructions.
+Published GitHub Releases are final: their tags are never moved.
+
+While waiting on the bump PR, a Merge conflict or completed failing check can
+start one in-process targeted Fix run with `--no-merge --no-base-fix`. Every
+adopted head must still have the exact tree of its main merge-base plus the Cargo
+version bump. A draft, unresolved failure or conflict stops before tagging.
+When the content base changes, requested Experiments and release notes refresh.
+
+Experiments are off by default. `--with-experiment` pins the selected content
+commit across interruptions and runs or resumes the release Experiment from the
+running binary, on touched Eval suites against the last published release tag.
+Pending rechecks and leak decisions wait with progress lines. A failed or
+inconclusive Verdict requires `release anyway? [y/N]` on a terminal; unattended
+runs fail. Console Start's **Run release Experiment** checkbox and the admin-only
+start API's `with_experiment` boolean select the same behavior.
+
+`--review` requires terminal stdin and is checked before Setup or network work.
+It prints the summary and offers accept, `$EDITOR` edit or cancel. It is a
+documented CLI-only flag because it needs the maintainer's local terminal.
 
 With no version, the command is a Release Pass. It skips quietly with exit `0`
 and no Run notification during a live Experiment or Quota wait, while either

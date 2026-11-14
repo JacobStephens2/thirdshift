@@ -1,6 +1,110 @@
 use super::*;
 
 #[test]
+fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_verdict() {
+    let fixture = Fixture::new();
+    let scenario = &fixture.scenario;
+    scenario.user_config_is("[harness]\ndefault = 'claude'\n");
+    scenario.launch_git(&[
+        "config",
+        "remote.origin.url",
+        "https://github.com/JacobStephens2/thirdshift.git",
+    ]);
+    scenario.launch_git(&[
+        "config",
+        "--global",
+        &format!("url.{}.insteadOf", scenario.path("origin.git").display()),
+        "https://github.com/JacobStephens2/thirdshift.git",
+    ]);
+    scenario.launch_git(&["tag", "v0.1.0", &fixture.baseline]);
+    scenario.launch_git(&["push", "origin", "v0.1.0"]);
+    scenario.commit_locally(
+        "Cargo.toml",
+        "[package]\nname = 'thirdshift'\nversion = '0.1.0'\n",
+        "Manifest",
+    );
+    scenario.commit_locally(
+        "Cargo.lock",
+        "version = 4\n[[package]]\nname = 'thirdshift'\nversion = '0.1.0'\n",
+        "Lockfile",
+    );
+    let candidate = scenario
+        .launch_git(&["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    scenario.launch_git(&["push", "origin", "HEAD:main"]);
+    let build = scenario.path(&format!("home/.thirdshift/evals/builds/{candidate}"));
+    fs::create_dir_all(&build).unwrap();
+    support::copy_executable(
+        std::path::Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &build.join("thirdshift"),
+    );
+    let mut state = scenario.gh_state();
+    state["repo"] = json!("JacobStephens2/thirdshift");
+    state["runs"] = json!([{"databaseId":1,"workflow":"ci.yml","event":"push","branch":"main","headSha":candidate,"status":"completed","conclusion":"success","attempt":1}]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(review_reports_prelude());
+    let run = scenario.run_with_env(&["release", "0.2.0", "--with-experiment"], &NO_SANDBOX);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("unattended release has no terminal override"),
+        "{}",
+        run.stderr
+    );
+    let view = fixture.experiment();
+    assert_eq!(view["candidate"]["commit"], candidate);
+    assert_eq!(view["baseline"]["commit"], fixture.baseline);
+    assert_eq!(view["verdict"]["verdict"], "inconclusive");
+    let calls = fixture.trial_calls().len();
+    assert!(calls > 0);
+    scenario.commit_locally(
+        "src/prompt.rs",
+        "Newer content after interruption",
+        "Newer main",
+    );
+    scenario.launch_git(&["push", "origin", "HEAD:main"]);
+    let run = scenario.run_with_env(&["release", "--with-experiment"], &NO_SANDBOX);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("unattended release has no terminal override"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(
+        fixture.trial_calls().len(),
+        calls,
+        "resumed release repeated completed Trials"
+    );
+    assert!(scenario.origin_git(&["tag", "--list", "v0.2.0"]).is_empty());
+    let records = scenario
+        .entries("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/release")
+        .into_iter()
+        .filter(|name| name.ends_with(".command.json"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    let overridden = scenario.run_on_terminal(
+        &["release", "0.2.0", "--with-experiment"],
+        &NO_SANDBOX,
+        &[("release anyway? [y/N]", "y")],
+    );
+    assert!(
+        overridden
+            .stderr
+            .contains("no release bump checks appeared"),
+        "{}",
+        overridden.stderr
+    );
+    assert!(
+        !scenario
+            .origin_git(&["branch", "--list", "release-0.2.0"])
+            .is_empty()
+    );
+    assert_eq!(fixture.trial_calls().len(), calls);
+}
+
+#[test]
 fn release_names_all_approved_tasks_missing_trial_inputs_before_building() {
     assert_missing_trial_inputs_refused_before_builds(true);
 }

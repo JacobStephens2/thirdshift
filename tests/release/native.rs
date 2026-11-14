@@ -42,6 +42,287 @@ fn command(release: &Release, version: &str) -> Command {
 }
 
 #[test]
+fn release_review_requires_a_terminal_before_setup_or_git() {
+    let release = Release::new();
+    let output = command(&release, "0.2.0")
+        .arg("--review")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("--review requires a terminal"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(release.origin_tag("v0.2.0").is_none());
+}
+
+#[test]
+fn native_resume_adopts_exact_bump_branches_and_open_prs() {
+    for open in [false, true] {
+        let release = Release::new();
+        let head = release.push_bump("0.2.0");
+        if open {
+            release.open_bump_pr("0.2.0");
+        }
+        release.ci_reports(GREEN);
+        let output = command(&release, "0.2.0").output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+        assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+        assert_eq!(release.prs_from("release-0.2.0").len(), 1);
+    }
+}
+
+#[test]
+fn native_pass_skips_human_blocked_releases_and_direct_mode_names_recovery() {
+    for blocker in ["draft", "foreign", "closed"] {
+        let release = Release::new();
+        release.push_bump("0.2.0");
+        release.open_bump_pr("0.2.0");
+        if blocker == "foreign" {
+            release.push_change_to_bump("0.2.0", BumpChange::AddedFile);
+        } else if blocker == "draft" {
+            release.gh(&["fake", "pr", "release-0.2.0", "isDraft", "true"]);
+        } else {
+            release.gh(&["fake", "pr", "release-0.2.0", "state", "\"CLOSED\""]);
+        }
+        let before = release.origin_refs();
+        for _ in 0..2 {
+            let output = command(&release, "").output().unwrap();
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty(), "{}", stderr(&output));
+        }
+        let activity = fs::read_to_string(
+            release
+                .root()
+                .join("home/.thirdshift/logs/JacobStephens2/thirdshift/activity.log"),
+        )
+        .unwrap();
+        assert_eq!(
+            activity.matches("Release run skipped:").count(),
+            1,
+            "{activity}"
+        );
+        assert!(activity.contains("0.2.0"), "{activity}");
+        let output = command(&release, "0.2.0").output().unwrap();
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("0.2.0"), "{}", stderr(&output));
+        assert_eq!(release.origin_refs(), before);
+    }
+}
+
+#[test]
+fn native_direct_mode_refuses_a_different_unfinished_release() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    let output = command(&release, "0.3.0").output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("thirdshift release 0.2.0"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(release.origin_tag("v0.3.0").is_none());
+}
+
+#[test]
+fn native_with_experiment_uses_the_engine_without_cargo_on_the_launch_directory() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    write_executable(
+        &release.bin().join("cargo"),
+        "#!/bin/sh\necho 'cargo must not be run' >&2\nexit 93\n",
+    );
+    let output = command(&release, "0.2.0")
+        .arg("--with-experiment")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no Eval suite touched"),
+        "{}",
+        stderr(&output)
+    );
+    let pin = git(
+        &release.maintainer(),
+        &["rev-parse", "refs/thirdshift/release-candidates/0.2.0"],
+    );
+    assert_eq!(pin, release.origin(&["rev-parse", "release-0.2.0^"]));
+}
+
+#[test]
+fn native_failed_unpublished_release_recuts_and_published_tags_never_move() {
+    for published in [false, true] {
+        let release = Release::new();
+        release.ci_reports(GREEN);
+        let mut failed = failed_release();
+        failed["published"] = json!(published);
+        release.release_workflow(failed);
+        let output = command(&release, "0.2.0").output().unwrap();
+        assert!(!output.status.success(), "{}", stderr(&output));
+        let old = release.origin_tag("v0.2.0").unwrap();
+        release.merge_pr("newer", "New content after failed workflow", "");
+        let base = release.origin(&["rev-parse", "main"]);
+        release.main_ci("completed", "success");
+        release.release_workflow(json!({}));
+        release.ci_reports(GREEN);
+        let output = command(&release, "0.2.0").output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let head = release.origin_tag("v0.2.0").unwrap();
+        if published {
+            assert_eq!(head, old);
+        } else {
+            assert_ne!(head, old);
+            assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+        }
+        assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    }
+}
+
+#[test]
+fn native_recovery_honors_a_higher_requested_bump() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.release_workflow(failed_release());
+    let output = command(&release, "0.2.0").output().unwrap();
+    assert!(!output.status.success(), "{}", stderr(&output));
+    release.merge_pr("newer", "New content for recut", "");
+    let base = release.origin(&["rev-parse", "main"]);
+    release.main_ci("completed", "success");
+    release.release_workflow(json!({}));
+    release.ci_reports(GREEN);
+    let output = command(&release, "").arg("--major").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let head = release.origin_tag("v1.0.0").unwrap();
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+    assert_eq!(release.pr("release-1.0.0")["state"], "MERGED");
+    assert_eq!(release.pr("release-0.2.0")["state"], "CLOSED");
+}
+
+#[test]
+fn native_publication_outage_skips_a_pass_and_refuses_direct_recovery() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.gh(&["fake", "fails", "release view"]);
+    let before = release.origin_refs();
+    let output = command(&release, "").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+    let output = command(&release, "0.2.0").output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("cannot verify GitHub Release publication"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(release.origin_refs(), before);
+}
+
+#[test]
+fn native_review_accepts_edits_or_cancels_on_a_terminal() {
+    for answer in ["y\n", "e\n", "n\n"] {
+        let release = Release::new();
+        release.ci_reports(GREEN);
+        sandbox_summary(&release);
+        let prepared = command(&release, "0.2.0");
+        let editor = release.bin().join("release-editor");
+        write_executable(
+            &editor,
+            "#!/bin/sh\nprintf 'Edited release summary' > \"$1\"\n",
+        );
+        let mut terminal = release.command(Path::new("script"), &release.maintainer());
+        for (key, value) in prepared.get_envs() {
+            if let Some(value) = value {
+                terminal.env(key, value);
+            } else {
+                terminal.env_remove(key);
+            }
+        }
+        let output = with_input(
+            terminal
+                .args([
+                    "-q",
+                    "-e",
+                    "-c",
+                    "\"$THIRDSHIFT_TEST_BINARY\" release --review 0.2.0",
+                    "/dev/null",
+                ])
+                .env("EDITOR", editor),
+            answer,
+        );
+        assert_eq!(
+            output.status.success(),
+            answer != "n\n",
+            "{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        if answer == "n\n" {
+            assert!(!release.origin_branch("release-0.2.0"));
+            assert!(release.origin_tag("v0.2.0").is_none());
+        } else {
+            assert!(
+                release
+                    .pr_body("release-0.2.0")
+                    .contains(if answer == "e\n" {
+                        "Edited release summary"
+                    } else {
+                        "A sandboxed release summary"
+                    })
+            );
+        }
+    }
+}
+
+#[test]
+fn native_conflict_runs_one_in_process_fix_and_revalidates_the_repaired_tree() {
+    let release = Release::new();
+    let (_, repaired) = checks::conflicted_bump(&release);
+    release.agent_runs(&format!(
+        "git fetch origin prepared-repair\ngit reset --hard {repaired}\ngit push origin HEAD:release-0.2.0\ngh fake pr release-0.2.0 mergeable '\"MERGEABLE\"'\ngh fake checks {repaired} '{GREEN}'\n"
+    ));
+    let output = command(&release, "0.2.0").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
+    assert_eq!(
+        stderr(&output)
+            .matches("starting one targeted Fix run:")
+            .count(),
+        1
+    );
+    assert!(stderr(&output).contains("--no-merge --no-base-fix"));
+    assert!(
+        !release.root().join("gh-state.json.fix-calls").exists(),
+        "Fix ran through Cargo"
+    );
+    assert_eq!(record(&release)["kind"], "Release run");
+}
+
+#[test]
+fn native_failed_fix_leaves_a_draft_and_no_tag_then_a_pass_skips_it() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.ci_reports(RED);
+    release.agent_runs("exit 1");
+    let output = command(&release, "0.2.0").output().unwrap();
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("targeted Fix run"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(release.origin_tag("v0.2.0").is_none());
+    assert_eq!(release.pr("release-0.2.0")["isDraft"], true);
+    let output = command(&release, "").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+}
+
+#[test]
 fn release_pass_skips_non_shipped_changes_quietly_and_records_each_firing() {
     let release = Release::new();
     let before = release.origin_refs();

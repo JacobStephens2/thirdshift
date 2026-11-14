@@ -3,6 +3,10 @@ use super::*;
 
 #[derive(Deserialize)]
 pub(crate) struct ReleasePushRun {
+    #[serde(rename = "databaseId")]
+    pub id: u64,
+    #[serde(default)]
+    pub attempt: u64,
     #[serde(rename = "headSha")]
     pub head_sha: String,
     pub status: String,
@@ -10,6 +14,60 @@ pub(crate) struct ReleasePushRun {
 }
 
 impl GitHub {
+    pub(crate) fn close_superseded_release(&self, version: &str) -> Result<()> {
+        for pr in self.release_prs()? {
+            if pr["headRefName"] == format!("release-{version}") && pr["state"] == "OPEN" {
+                let url = pr["url"]
+                    .as_str()
+                    .context("superseded release PR has no URL")?;
+                self.gh_stdout(&["pr", "close", url, "--repo", crate::release::REPOSITORY])?;
+            }
+        }
+        Ok(())
+    }
+    /// Only a verified missing/draft Release is safe to re-cut. Authentication,
+    /// transport errors and malformed responses must never authorize a tag move.
+    pub(crate) fn release_published(&self, tag: &str) -> Result<bool> {
+        let args = [
+            "release",
+            "view",
+            tag,
+            "--repo",
+            crate::release::REPOSITORY,
+            "--json",
+            "url,isDraft",
+        ];
+        let output = self.output(&args)?;
+        if !output.status.success() {
+            if output.status.code() == Some(1)
+                && String::from_utf8_lossy(&output.stderr).trim() == "release not found"
+            {
+                return Ok(false);
+            }
+            bail!(
+                "cannot verify GitHub Release publication for {tag}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let value: Value = serde_json::from_slice(&output.stdout)?;
+        let draft = value["isDraft"]
+            .as_bool()
+            .context("release publication response has no isDraft")?;
+        anyhow::ensure!(
+            value["url"].as_str().is_some_and(|url| !url.is_empty()),
+            "release publication response has no URL"
+        );
+        Ok(!draft)
+    }
+
+    pub(crate) fn release_prs(&self) -> Result<Vec<Value>> {
+        serde_json::from_value(self.gh_json(&[
+            "pr", "list", "--repo", crate::release::REPOSITORY,
+            "--state", "all", "--search", "head:release-", "--limit", "1000", "--json",
+            "url,title,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeCommit",
+        ])?).map_err(Into::into)
+    }
+
     pub(crate) fn release_push_run(
         &self,
         workflow: &str,
@@ -30,7 +88,7 @@ impl GitHub {
             "--limit",
             "1",
             "--json",
-            "headSha,status,conclusion",
+            "databaseId,attempt,headSha,status,conclusion",
         ];
         if !branch.is_empty() {
             args.extend(["--branch", branch]);

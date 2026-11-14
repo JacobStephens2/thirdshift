@@ -302,6 +302,24 @@ impl<'de> serde::Deserialize<'de> for Pass {
 static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
     LazyLock::new(|| Mutex::new(Record::new(OnMachine)));
 
+/// Temporarily record an in-process Command under its owning Command. Restores
+/// the parent's writer and quota attachment even when nested work fails.
+pub(crate) struct Nested(Option<Record<OnMachine>>);
+
+pub(crate) fn nested() -> Nested {
+    let mut current = record();
+    let mut child = Record::new(OnMachine);
+    child.child_of(current.record_path());
+    Nested(Some(std::mem::replace(&mut *current, child)))
+}
+
+impl Drop for Nested {
+    fn drop(&mut self) {
+        *record() = self.0.take().expect("nested recording restored once");
+        attach_quota_budget();
+    }
+}
+
 const PARENT_RECORD: &str = "THIRDSHIFT_PARENT_RECORD";
 const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 

@@ -134,6 +134,10 @@ const ACTIONS: &[&str] = &[
 // an exclusion: each entry is parsed and covers only its command/action.
 const EXCLUSIONS: &[(&str, &str)] = &[
     (
+        "release --review 1.2.3",
+        "Interactive release summary review opens an editor on a local terminal (#2054 Q13, Q15).",
+    ),
+    (
         "cronjobs --fleet",
         "Fleet schedule aggregation is an explicit client of owning-machine inventories; the API stays local and cannot lend saved Fleet credentials.",
     ),
@@ -251,6 +255,7 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
         Command::ConsoleFleet(action) => format!("{:?}", discriminant(action)),
         Command::ConsoleReport(action) => format!("{:?}", discriminant(action)),
         Command::Update { check, .. } => check.to_string(),
+        Command::Release(args) => args.review.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
         Command::CronJobs { fleet, .. } => fleet.to_string(),
         // `--machine` reads one Fleet machine through the same client;
@@ -391,7 +396,8 @@ fn every_cli_command_has_an_api_twin_or_reasoned_exclusion() {
             .chain(FLEET)
             .chain(REPORT)
             .map(|(_, words)| words.to_string())
-            .chain(ACTIONS.iter().map(|s| s.to_string())),
+            .chain(ACTIONS.iter().map(|s| s.to_string()))
+            .chain(["release --review 1.2.3".to_owned()]),
         twins,
     );
 }

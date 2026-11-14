@@ -187,7 +187,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
-       thirdshift release [<version> | --major | --minor | --patch]  Release green shipped changes; no version runs a Pass
+       thirdshift release [<version> | --major | --minor | --patch] [--with-experiment] [--review]  Release or resume green shipped changes; no version runs a Pass
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -610,6 +610,11 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 
 #[cfg(target_os = "linux")]
 fn release(args: args::ReleaseArgs) -> ExitCode {
+    if args.review && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return failure(&anyhow::anyhow!(
+            "release --review requires a terminal on standard input"
+        ));
+    }
     if let Err(error) = release::outside_session() {
         return failure(&error);
     }
@@ -630,7 +635,15 @@ fn release(args: args::ReleaseArgs) -> ExitCode {
     };
     let mut harness = flags.harness(&config);
     started.built_with(&harness);
-    match release::run(args.version.as_deref(), args.bump, &mut harness) {
+    match release::run(
+        release::Request {
+            version: args.version.as_deref(),
+            bump: args.bump,
+            with_experiment: args.with_experiment,
+            review: args.review,
+        },
+        &mut harness,
+    ) {
         Ok(None) => ExitCode::SUCCESS,
         result => started.finish(Ending::Release(result.map(Option::unwrap))),
     }

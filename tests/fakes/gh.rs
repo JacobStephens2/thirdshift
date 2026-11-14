@@ -528,6 +528,7 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
             pr.get("reviewDecision").cloned().unwrap_or(string("")),
         ),
         ("body", pr.get("body").cloned().unwrap_or(string(""))),
+        ("title", pr.get("title").cloned().unwrap_or(string(""))),
         (
             "mergeCommit",
             match pr.get("mergeCommit") {
@@ -2178,6 +2179,9 @@ fn run_list(state: &mut Json, flags: &Flags) {
         );
     }
     let fields: &[&str] = match flag(flags, "jq") {
+        None if flag(flags, "json") == Some("databaseId,attempt,headSha,status,conclusion") => {
+            &["databaseId", "attempt", "headSha", "status", "conclusion"]
+        }
         None if flag(flags, "json") == Some("headSha,status,conclusion") => {
             &["headSha", "status", "conclusion"]
         }
@@ -2267,7 +2271,8 @@ fn run_view(state: &Json, positional: &[String], flags: &Flags) {
 /// `gh release view <tag> --json url --jq .url`: the Release's URL, for a tag
 /// on origin.
 fn release_view(state: &Json, positional: &[String], flags: &Flags) {
-    if flag(flags, "json") != Some("url") || flag(flags, "jq") != Some(".url") {
+    let native = flag(flags, "json") == Some("url,isDraft");
+    if !native && (flag(flags, "json") != Some("url") || flag(flags, "jq") != Some(".url")) {
         die(
             &format!("fake gh: unsupported release view flags {flags:?}"),
             2,
@@ -2304,6 +2309,13 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
     );
     if !tagged.status.success() {
         die("release not found", 1);
+    }
+    if native {
+        println!(
+            "{{\"url\":\"https://github.com/{}/releases/tag/{tag}\",\"isDraft\":false}}",
+            state.at("repo").str()
+        );
+        return;
     }
     println!(
         "https://github.com/{}/releases/tag/{tag}",
@@ -3126,6 +3138,14 @@ pub fn main(args: Vec<String>) {
         ["pr", "edit", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             pr_edit(&mut state, &positional, &flags);
+        }
+        ["pr", "close", rest @ ..] => {
+            let (positional, _) = parsed(rest);
+            let at = selected_pr(&state, &positional[0]);
+            let pr = &mut state.at_mut("prs").items_mut()[at];
+            ensure_open(pr);
+            pr.set("state", string("CLOSED"));
+            save(&state);
         }
         ["pr", "merge", rest @ ..] => {
             let (positional, flags) = parsed(rest);

@@ -8,7 +8,7 @@ fn release_start_requires_admin_including_the_named_person() {
     let scenario = fixture();
     scenario.user_config_is("[console]\nport = 0\nallowed_emails = ['owner@example.test']\n");
     let console = server(&scenario);
-    let request = json!({"command":"release", "repository":"acme/unknown", "version":"1.2.3",
+    let request = json!({"command":"release", "repository":"acme/unknown", "version":"1.2.3", "with_experiment":true,
         "harness":"codex", "model":"model-1", "effort":"high", "email":{"mode":"never"}});
     for path in ["/api/v1/runs", "/api/v1/start"] {
         for scope in ["read", "run", "read,run"] {
@@ -102,6 +102,7 @@ fn release_start_schema_exposes_pass_bumps_and_standard_options() {
                 "repository",
                 "version",
                 "bump",
+                "with_experiment",
                 "email",
                 "harness",
                 "model",
@@ -153,8 +154,7 @@ fn release_start_accepts_versionless_and_pinned_passes_with_admin_scope() {
     let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
     for path in ["/api/v1/start", "/api/v1/runs"] {
         for bump in [None, Some("major"), Some("minor"), Some("patch")] {
-            let mut request =
-                json!({"command":"release", "repository":"JacobStephens2/thirdshift"});
+            let mut request = json!({"command":"release", "repository":"JacobStephens2/thirdshift", "with_experiment":true});
             if let Some(bump) = bump {
                 request["bump"] = json!(bump);
             }
