@@ -771,7 +771,7 @@ test('Overview folds Done and Resolved below Working and opens them in place on 
 });
 
 test('Done and Resolved open in their own folders until this browser folds them', async t => {
-  for (const [slug, name] of [['done', 'done'], ['resolved', 'resolved']]) {
+  for (const name of ['done', 'resolved']) {
     const page = await pageFor(t);
     // Older Consoles saved every group's state; only a fold was a choice.
     await page.addInitScript(() => {
@@ -779,7 +779,7 @@ test('Done and Resolved open in their own folders until this browser folds them'
         localStorage.setItem('thirdshift:console:folded', JSON.stringify({ 'needs you': false, done: true, resolved: true }));
       }
     });
-    await page.goto(`${origin}/?section=${slug}`);
+    await page.goto(`${origin}/?section=${name}`);
     const section = page.locator(`#inbox > [data-group="${name}"]`);
     assert.equal(await section.getAttribute('open'), '');
     await folder(page, 'overview').click();
@@ -789,9 +789,24 @@ test('Done and Resolved open in their own folders until this browser folds them'
     assert.equal(await section.getAttribute('open'), '');
     await section.locator(':scope > summary').click();
     await page.waitForFunction(group => JSON.parse(localStorage.getItem('thirdshift:console:folds'))?.[group] === false, name);
-    await page.goto(`${origin}/?section=${slug}`);
+    await page.goto(`${origin}/?section=${name}`);
     assert.equal(await section.getAttribute('open'), null);
   }
+});
+
+test('re-folding Done in Overview leaves its own folder open', async t => {
+  const page = await pageFor(t);
+  await page.goto(`${origin}/?section=overview`);
+  const done = page.locator('#inbox > [data-group="done"]');
+  assert.equal(await done.getAttribute('open'), null);
+  await done.locator(':scope > summary').click();
+  await page.waitForFunction(() => document.querySelector('#inbox > [data-group="done"]').open);
+  await done.locator(':scope > summary').click();
+  await page.waitForFunction(() => !document.querySelector('#inbox > [data-group="done"]').open);
+  await page.locator('#inbox .folders a[data-group="done"]').click();
+  assert.equal(await done.getAttribute('open'), '');
+  await page.goto(`${origin}/?section=done`);
+  assert.equal(await done.getAttribute('open'), '');
 });
 
 test('Overview folds Done and Resolved without JavaScript and opens them in place', async t => {

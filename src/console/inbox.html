@@ -68,7 +68,7 @@
     {% match inbox.github_quota_wait %}{% when Some with (wait) %}<p class="github-quota-wait" role="status">{{ wait }}</p>{% when None %}{% endmatch %}
     {% match inbox.plan_usage_banner %}{% when Some with (banner) %}<p class="plan-usage-exhausted" role="status">{{ banner }}</p>{% when None %}{% endmatch %}
     {% for section in inbox.sections %}
-    <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.in_overview(section.group) %} data-overview{% endif %}{% if self.folded_in_overview(section.group) %} data-overview-folded{% endif %}{% if !self.shown(section.group) %} hidden{% endif %}{% if self.opens(section.group) %} open{% endif %}>
+    <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.folded_in_overview(section.group) %} data-overview-folded{% endif %}{% if !self.shown(section.group) %} hidden{% endif %}{% if self.opens(section.group) %} open{% endif %}>
       <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}

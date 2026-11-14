@@ -1323,6 +1323,13 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
         "resolved",
     ];
     assert_eq!(shown(&html), overview, "{html}");
+    let opens = |html: &str, group: &str| {
+        section(html, group)
+            .split('>')
+            .next()
+            .unwrap()
+            .ends_with(" open")
+    };
     // Done and Resolved follow Working, folded closed even without JavaScript.
     for (group, title, open) in [
         ("needs you", "Needs you", true),
@@ -1332,10 +1339,11 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
         ("done", "Done", false),
         ("resolved", "Resolved", false),
     ] {
-        let group = section(&html, group);
-        assert!(group.contains(&format!("<summary><h3>{title} ")), "{html}");
-        let tag = group.split('>').next().unwrap();
-        assert_eq!(tag.ends_with(" open"), open, "{tag}");
+        assert!(
+            section(&html, group).contains(&format!("<summary><h3>{title} ")),
+            "{html}"
+        );
+        assert_eq!(opens(&html, group), open, "{group}: {html}");
     }
     assert!(
         section(&html, "resolved").contains("<p class=\"empty\">Nothing here.</p>"),
@@ -1343,17 +1351,10 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     );
 
     // A section's own folder opens it.
-    for (slug, group) in [("done", "done"), ("resolved", "resolved")] {
-        let html = console.get(&format!("/?section={slug}")).text().unwrap();
+    for group in ["done", "resolved"] {
+        let html = console.get(&format!("/?section={group}")).text().unwrap();
         assert_eq!(shown(&html), [group], "{html}");
-        assert!(
-            section(&html, group)
-                .split('>')
-                .next()
-                .unwrap()
-                .ends_with(" open"),
-            "{html}"
-        );
+        assert!(opens(&html, group), "{html}");
     }
     let html = console.get("/?section=done").text().unwrap();
     assert!(

@@ -1327,14 +1327,6 @@ impl InboxPage {
             .map_or("overview", |section| section.group)
     }
 
-    /// Overview shows every section, so a switch needs no request.
-    fn in_overview(&self, group: &str) -> bool {
-        matches!(
-            group,
-            "needs you" | "ready for review" | "landing" | "working" | "done" | "resolved"
-        )
-    }
-
     /// Finished sections sit folded below Working in Overview, until opened.
     fn folded_in_overview(&self, group: &str) -> bool {
         matches!(group, "done" | "resolved")
@@ -1345,9 +1337,9 @@ impl InboxPage {
         !(self.folder() == "overview" && self.folded_in_overview(group))
     }
 
+    /// Overview shows every visible section, so a switch needs no request.
     fn shown(&self, group: &str) -> bool {
-        !self.hidden(group)
-            && (self.folder() == group || (self.folder() == "overview" && self.in_overview(group)))
+        !self.hidden(group) && (self.folder() == group || self.folder() == "overview")
     }
 
     fn slug(&self, group: &str) -> String {

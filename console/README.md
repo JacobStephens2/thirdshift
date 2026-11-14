@@ -219,9 +219,10 @@ Click a heading, or focus it and press Enter or Space, to fold or open its rows.
 The heading and count stay visible; counts and active runs still include folded
 rows. Each browser keeps the groups it folded or opened through live updates,
 folder changes and reloads when storage is available; a group it never changed
-follows the folder's default. Without storage, folding still works through live
-updates. Keyboard row navigation skips folded rows, and the same controls work
-in every Theme and on phones. Without JavaScript, groups start as above and
+follows the folder's default. Opening or folding Done or Resolved in Overview
+leaves them as they were in their own folders. Without storage, folding still
+works through live updates. Keyboard row navigation skips folded rows, and the
+same controls work in every Theme and on phones. Without JavaScript, groups start as above and
 their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved,
 which open in their own folders.

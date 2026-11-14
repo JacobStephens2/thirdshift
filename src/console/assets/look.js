@@ -84,7 +84,7 @@ export function activity() {
   root.dataset.live = String(!!document.querySelector('.command[data-live="true"], #log-content[data-live="true"], #span-tree[data-live="true"]'));
 }
 
-// Both navigation and changed section preferences use the server's Overview groups.
+// Both navigation and changed section preferences follow the server: Overview shows every visible section.
 export function showFolder(group) {
   const links = [...document.querySelectorAll('#inbox .folders a[data-group]')];
   const current = links.find(link => link.dataset.group === group && !link.hidden)
@@ -96,7 +96,7 @@ export function showFolder(group) {
   for (const section of document.querySelectorAll('#inbox > .group[data-group]')) {
     const hidden = links.find(link => link.dataset.group === section.dataset.group)?.hidden;
     section.hidden = hidden || !(section.dataset.group === current?.dataset.group
-      || (current?.dataset.group === 'overview' && section.hasAttribute('data-overview')));
+      || current?.dataset.group === 'overview');
   }
   applyFolds();
 }
