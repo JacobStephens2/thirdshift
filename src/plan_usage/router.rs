@@ -458,7 +458,10 @@ mod tests {
     fn old_or_reset_snapshots_are_stale_for_routing() {
         let now = Utc::now();
         assert!(stale(None, now));
-        let fresh = window(10.0, now + TimeDelta::hours(1));
+        let fresh = State {
+            observed_at: Some(now),
+            ..window(10.0, now + TimeDelta::hours(1))
+        };
         assert!(!stale(Some(&fresh), now));
         let old = State {
             observed_at: Some(now - TimeDelta::minutes(6)),

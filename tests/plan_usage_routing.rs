@@ -86,7 +86,7 @@ fn a_step_starts_on_its_first_route_below_its_reserve_ceiling() {
         result.stderr
     );
     // The Command record names what the Step ran on.
-    let record = scenario.command_record("issue");
+    let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/issue");
     let stages = record["stages"].as_array().unwrap();
     assert!(
         stages.iter().any(|stage| stage["harness"] == "codex"),
