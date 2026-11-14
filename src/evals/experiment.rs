@@ -46,6 +46,7 @@ use crate::issue::Repo;
 use crate::trial::VoidCause;
 use crate::verdict::{Levels, decimal};
 use crate::{interrupt, logs, progress};
+pub(crate) use arms::{Arm as PreparedArm, Runner as CustomRunner};
 
 pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::{Conclusion, Flip, Pending};
@@ -229,6 +230,14 @@ pub(crate) struct Description {
 }
 
 impl Description {
+    pub(crate) fn runner(&self, arm: Arm) -> Option<&arms::Runner> {
+        let prepared = self.prepared.as_ref()?;
+        match arm {
+            Arm::Baseline => prepared.baseline.runner.as_ref(),
+            Arm::Candidate => prepared.candidate.runner.as_ref(),
+        }
+    }
+
     pub(crate) fn setup(&self, arm: Arm) -> &Setup {
         match arm {
             Arm::Baseline => &self.baseline,

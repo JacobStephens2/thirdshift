@@ -1,4 +1,5 @@
 #experiments { min-width: 0; }
+.experiment-question { overflow-wrap: anywhere; }
 #experiments h2 { margin: 20px 0 8px; font-size: 17px; }
 #experiments h3 { font-size: 15px; margin: 14px 0 6px; }
 .experiment-group .commands { max-height: none; }

@@ -167,6 +167,10 @@ pub(crate) struct Reveal {
     pub b: Arm,
     pub a_setup: Setup,
     pub b_setup: Setup,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a_runner: Option<crate::evals::arms::Runner>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b_runner: Option<crate::evals::arms::Runner>,
     pub panel: Option<PanelCalls>,
     pub records: Vec<Record>,
 }
@@ -430,6 +434,13 @@ pub(crate) fn next_command(page: &Page) -> String {
 
 /// Which Arm made one side, with its setup, for the CLI and the page alike.
 pub(crate) fn revealed_side(arm: Arm, setup: &Setup) -> String {
+    if let Some(runner) = &setup.runner {
+        return format!(
+            "{} arm · Custom runner {runner} · digest {}",
+            capitalized(arm),
+            setup.runner_digest.as_deref().unwrap_or("not recorded")
+        );
+    }
     format!(
         "{} arm · {} · {} · {} · {}",
         capitalized(arm),
@@ -648,6 +659,7 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
         Arm::Candidate => std::mem::take(&mut candidate),
     };
     let (mut a, mut b) = (take(sides[0]), take(sides[1]));
+    let runner_identities = runner_identities(&stored.description);
     for side in [&mut a, &mut b] {
         side.diff.sort_by_key(|file| file.test);
         // Blinded as the panel's packet is: added lines that would name the
@@ -655,6 +667,7 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
         for file in &mut side.diff {
             file.patch = blind_diff(&file.patch);
         }
+        blind_runner_side(side, &runner_identities);
         if side.error.is_some() {
             side.error = Some("the evidence could not run".into());
         }
@@ -681,10 +694,58 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
             b: sides[1],
             a_setup: stored.description.setup(sides[0]).clone(),
             b_setup: stored.description.setup(sides[1]).clone(),
+            a_runner: stored.description.runner(sides[0]).cloned(),
+            b_runner: stored.description.runner(sides[1]).cloned(),
             panel,
             records: all,
         }),
     })
+}
+
+/// Retained diffs and check diagnostics can name an outside workflow even
+/// though its Setup and prepared metadata are confined to the reveal.
+fn runner_identities(description: &super::Description) -> Vec<String> {
+    let mut identities = Vec::new();
+    for arm in [Arm::Baseline, Arm::Candidate] {
+        let setup = description.setup(arm);
+        identities.extend(setup.runner.iter().chain(&setup.runner_digest).cloned());
+        if let Some(runner) = description.runner(arm) {
+            for (role, choice) in &runner.manifest.roles {
+                identities.extend([role.clone(), choice.model.clone()]);
+                identities.extend(choice.effort.iter().cloned());
+            }
+            for git in runner.provenance.values() {
+                identities.push(git.commit.clone());
+                identities.extend(git.origin.iter().cloned());
+            }
+        }
+    }
+    identities.retain(|value| !value.is_empty());
+    // Redact a full identity before any other identity that is its prefix.
+    identities.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    identities.dedup();
+    identities
+}
+
+fn blind_runner_side(side: &mut pairs::Side, identities: &[String]) {
+    let blind = |text: &mut String| {
+        for identity in identities {
+            *text = text.replace(identity, "[withheld]");
+        }
+    };
+    for file in &mut side.diff {
+        blind(&mut file.path);
+        blind(&mut file.patch);
+    }
+    for file in &mut side.test_files {
+        blind(file);
+    }
+    for check in side.base.iter_mut().chain(&mut side.cross) {
+        for argument in check.command.iter_mut().flatten() {
+            blind(argument);
+        }
+        blind(&mut check.reason);
+    }
 }
 
 /// The retained pair named by `key`, which must be one of the Experiment's.

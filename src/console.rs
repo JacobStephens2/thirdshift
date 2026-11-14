@@ -469,6 +469,14 @@ const PAGES: &[PageRoute] = &[
         view: View::Recheck,
     },
     PageRoute {
+        path: "/api/v1/start",
+        api: "/api/v1/start",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift experiment HEAD"],
+        method: Method::POST,
+        view: View::StartRun,
+    },
+    PageRoute {
         path: "/api/v1/runs",
         api: "/api/v1/runs",
         scope: Some(Scope::Run),

@@ -4,6 +4,182 @@ use std::time::Instant;
 const RECORDS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn api_starts_custom_runner_experiments_and_shares_cli_refusals() {
+    let scenario = fixture();
+    scenario.agent_does("exit 1\n");
+    // Arm preparation pins a Harness by canonical path; keep its argv[0]
+    // identifying the fake provider after that canonicalization.
+    for name in ["claude", "codex"] {
+        let link = scenario.path(&format!("bin/{name}"));
+        let pinned = scenario.path(&format!("versions/{name}"));
+        fs::create_dir_all(pinned.parent().unwrap()).unwrap();
+        support::copy_executable(&link.canonicalize().unwrap(), &pinned);
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(pinned, link).unwrap();
+    }
+    scenario.commit_locally("check.txt", "fixture\n", "Process fixture");
+    let commit = scenario
+        .launch_git(&["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let build = scenario.path(&format!("home/.thirdshift/evals/builds/{commit}"));
+    fs::create_dir_all(&build).unwrap();
+    support::copy_executable(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &build.join("thirdshift"),
+    );
+    for (name, script) in [
+        ("systemctl", "echo running"),
+        (
+            "systemd-run",
+            "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"",
+        ),
+        ("journalctl", "exit 0"),
+    ] {
+        support::write_executable(
+            &scenario.path(&format!("bin/{name}")),
+            &format!("#!/bin/sh\n{script}\n"),
+        );
+    }
+    let runners = scenario.path("home/.thirdshift/runners");
+    fs::create_dir_all(&runners).unwrap();
+    fs::write(runners.join("outside.toml"), "command = [\"false\"]\n").unwrap();
+    let suite = scenario.path("home/.thirdshift/evals/suites/process");
+    let task = suite.join("tasks/fixture");
+    fs::create_dir_all(&task).unwrap();
+    fs::write(suite.join("suite.toml"), "format = 1\ntrials_per_arm = 1\n[dependencies]\nfactory_skills = []\nsession_prompts = []\nharness_defaults = []\nmodel_defaults = []\neffort_defaults = []\n").unwrap();
+    fs::write(
+        task.join("task.toml"),
+        format!(
+            r#"format = 1
+state = "approved"
+session = "process"
+provenance = "real"
+environment = "host"
+repository = {:?}
+base = "{commit}"
+change = "{commit}"
+criteria = "Keep the fixture"
+[inputs]
+[trial]
+issue_url = "https://github.com/acme/widgets/issues/7"
+base = "main"
+branch = "issue-7"
+pr_url = "https://github.com/acme/widgets/pull/1"
+[process_grading]
+test_files = ["check.txt"]
+fail_to_pass = [["true"]]
+pass_to_pass = [["true"]]
+"#,
+            scenario.launch_dir()
+        ),
+    )
+    .unwrap();
+    let token = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let shell = scenario.path("login-shell");
+    support::write_executable(&shell, "#!/bin/sh\nshift\nexec /bin/sh \"$@\"\n");
+    let mut command = scenario.command(&["console", "--no-sign-in"]);
+    command
+        .env("SHELL", shell)
+        .env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1");
+    let console = Console::start_command(command);
+    let request =
+        |options: Value| {
+            reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(45)).build().unwrap()
+        .post(format!("{}/api/v1/start", console.address)).bearer_auth(&token)
+        .json(&json!({"repository":"acme/widgets", "command":"experiment", "experiment":options}))
+        .send().unwrap()
+        };
+    for (selection, flags, native) in [
+        (
+            json!({"baseline_runner":"outside", "candidate":"HEAD"}),
+            vec!["--baseline-runner", "outside", "HEAD"],
+            Some("candidate"),
+        ),
+        (
+            json!({"candidate_runner":"outside"}),
+            vec!["--candidate-runner", "outside"],
+            Some("baseline"),
+        ),
+        (
+            json!({"baseline_runner":"outside", "candidate_runner":"outside"}),
+            vec![
+                "--baseline-runner",
+                "outside",
+                "--candidate-runner",
+                "outside",
+            ],
+            None,
+        ),
+    ] {
+        let mut options = json!({"suite":["process"], "draws":32, "yes":true, "no_wait":true});
+        options
+            .as_object_mut()
+            .unwrap()
+            .extend(selection.as_object().unwrap().clone());
+        let response = request(options);
+        assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+        // The API starts detached work; wait for its retained terminal view before
+        // comparing a repeat CLI invocation, and before dropping the Scenario.
+        let deadline = Instant::now() + support::WAIT_BOUND;
+        let view = loop {
+            let views = api::json(console.get("/api/v1/experiments"));
+            assert!(
+                !views
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|view| view["state"] == "paused"),
+                "{views}"
+            );
+            if let Some(view) = views.as_array().unwrap().iter().find(|view| {
+                view["baseline"]["runner"].is_string() == (native != Some("baseline"))
+                    && view["candidate"]["runner"].is_string() == (native != Some("candidate"))
+                    && view["state"] == "completed"
+            }) {
+                break view.clone();
+            }
+            assert!(Instant::now() < deadline, "{views}");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        if let Some(native) = native {
+            assert_eq!(view[native]["commit"], commit);
+        }
+        let mut args = vec!["experiment"];
+        args.extend(flags);
+        args.extend([
+            "--suite",
+            "process",
+            "--draws",
+            "32",
+            "--yes",
+            "--no-wait",
+            "--json",
+        ]);
+        let cli = scenario.run_with_env(&args, &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")]);
+        assert_eq!(cli.code, Some(0), "{}", cli.stderr);
+        assert_eq!(serde_json::from_str::<Value>(&cli.stdout).unwrap(), view);
+    }
+    for options in [
+        json!({"candidate_runner":"outside"}),
+        json!({"candidate_runner":"outside", "suite":["process"], "release":true}),
+        json!({"candidate_runner":"outside", "candidate":"HEAD", "suite":["process"]}),
+        json!({"candidate_runner":"outside", "candidate_process":"ticket-run", "suite":["process"]}),
+        json!({"baseline_runner":"outside", "baseline":"HEAD", "candidate":"HEAD", "suite":["process"]}),
+        json!({"candidate_runner":"outside", "suite":["code-review"]}),
+    ] {
+        let response = request(options.clone());
+        assert_eq!(
+            response.status(),
+            422,
+            "{options}: {}",
+            response.text().unwrap()
+        );
+    }
+}
+
+#[test]
 fn targeted_fix_keeps_run_scope_csrf_and_launch_directory_checks() {
     let scenario = fixture();
     let console = server(&scenario);
