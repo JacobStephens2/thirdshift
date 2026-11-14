@@ -160,11 +160,12 @@ impl Logged {
         };
         let (kind, route) = without_route(rest)?;
         let kind = Kind::read(kind)?;
-        Some(Logged {
-            kind,
-            resume,
-            route,
-        })
+        let logged = if resume {
+            Self::resume_of(kind)
+        } else {
+            Self::of(kind)
+        };
+        Some(logged.on_route(route))
     }
 
     /// The Command record stage the session enters. A Resume of the
