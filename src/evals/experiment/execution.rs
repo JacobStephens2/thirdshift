@@ -220,8 +220,28 @@ impl<'a> Execution<'a> {
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        let mut launched =
-            self.command(arm, &request, &request_path, &caps, toolchains.as_deref())?;
+        let (mut launched, sandbox) =
+            match self.command(arm, &request, &request_path, &caps, toolchains.as_deref()) {
+                Ok(command) => command,
+                Err(error) if arm.runner.is_some() => {
+                    interrupt::check()?;
+                    let mut output =
+                        Output::failed(started.elapsed().as_millis(), &format!("{error:#}"));
+                    output.outcome = Outcome::Void;
+                    output.void_cause = Some(if error.is::<crate::sandbox::NoLogin>() {
+                        VoidCause::SessionUnavailable
+                    } else {
+                        VoidCause::SandboxUnavailable
+                    });
+                    output.timings.session_ms = 0;
+                    let score = trace.grade(|| {
+                        grading::score(task, &grading_repository, &output, self.timeout)
+                    })?;
+                    trace.outcome(output.outcome);
+                    return complete(attempt, output, score);
+                }
+                Err(error) => return Err(error),
+            };
         // The unit name stays in the attempt for `journalctl --user -u` after.
         fs::write(attempt.join("scope"), launched.unit())?;
         trace.inherit(launched.command())?;
@@ -252,6 +272,9 @@ impl<'a> Execution<'a> {
             .as_nanos()
             .try_into()?;
         drop(caches);
+        // The runner and its children have ended. Release the Grok login
+        // before a Grader might need that same serialized Trials home.
+        drop(sandbox);
         let interruption = self.accounting_interruption()?;
         // A kernel kill in the Trial's scope is the outer launcher's evidence
         // the cap killed Trial work. The live watch catches slow kills; the
@@ -466,7 +489,7 @@ impl<'a> Execution<'a> {
         path: &Path,
         caps: &crate::scope::Caps,
         toolchains: Option<&Path>,
-    ) -> Result<crate::scope::Launch> {
+    ) -> Result<(crate::scope::Launch, Option<crate::sandbox::Prepared>)> {
         let directory = self
             .directory
             .join("harnesses")
@@ -480,18 +503,39 @@ impl<'a> Execution<'a> {
         )?
         .into_string()
         .map_err(|_| anyhow::anyhow!("PATH is not valid Unicode"))?;
+        let mut sandbox = None;
         let mut launched = if let Some(runner) = &arm.runner {
             let attempt = path.parent().context("Trial request has no directory")?;
             let environment = self.runner_environment(attempt, &path_env, toolchains)?;
-            let argv = custom::confined(custom::command(runner, attempt)?, &environment)?;
-            let args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
-            let mut launched = crate::scope::trial_command(
-                Path::new(&argv[0]),
-                &args,
-                &request.identity.key(),
-                request.attempt,
-                caps,
-            )?;
+            let argv = custom::command(runner, attempt)?;
+            let mut launched = if crate::sandbox::disabled() {
+                let argv = custom::confined(argv, &environment)?;
+                let args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
+                crate::scope::trial_command(
+                    Path::new(&argv[0]),
+                    &args,
+                    &request.identity.key(),
+                    request.attempt,
+                    caps,
+                )?
+            } else {
+                let prepared = crate::sandbox::custom::prepare(
+                    runner,
+                    attempt,
+                    &crate::config::home()?,
+                    &environment,
+                )?;
+                let mut args = vec!["-c".into(), r#"exec "$0" "$@""#.into()];
+                args.extend(argv);
+                let launched = prepared.launch().trial_command(
+                    &args,
+                    &request.identity.key(),
+                    request.attempt,
+                    caps,
+                )?;
+                sandbox = Some(prepared);
+                launched
+            };
             // These belong to systemd-run and `--oom-exec`. The runner sees
             // only the allowlist inside `env -i`.
             launched
@@ -537,12 +581,12 @@ impl<'a> Execution<'a> {
         if let Some(toolchains) = toolchains {
             launched.command().env("CARGO_HOME", toolchains);
         }
-        Ok(launched)
+        Ok((launched, sandbox))
     }
 
     /// The runner's whole environment. Native Trials drop the operator
     /// environment with `bwrap --clearenv`; this is the same boundary for the
-    /// Custom runner seam until #2189 supplies the Trial sandbox.
+    /// Custom runner's escape path and the starting allowlist for its sandbox.
     fn runner_environment(
         &self,
         attempt: &Path,

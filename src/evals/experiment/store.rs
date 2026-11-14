@@ -297,6 +297,21 @@ impl Stored {
                 description.bar.discriminating_tasks = None;
             }
             if started {
+                // Provider identity belongs to the saved Bar, including the
+                // legacy absence of a resolved Kimi family. CLI flags select
+                // the seat; they cannot reclassify it on resume.
+                if let (Some(requested), Some(saved)) =
+                    (&mut description.bar.panel, &stored.description.bar.panel)
+                {
+                    for (requested, saved) in requested.seats.iter_mut().zip(&saved.seats) {
+                        if requested.harness == saved.harness
+                            && requested.model == saved.model
+                            && requested.effort == saved.effort
+                        {
+                            requested.provider_family.clone_from(&saved.provider_family);
+                        }
+                    }
+                }
                 // Cause defaults belong to the installed runner, not a CLI
                 // override. Resume keeps the rules recorded before its Trials.
                 description

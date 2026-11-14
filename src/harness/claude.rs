@@ -55,10 +55,16 @@ impl Adapter for Claude {
         let at = invocation.args.len() - 1;
         // One argument: the flag takes every following word as a tool name,
         // so a separate value would also take the prompt after it.
+        invocation.args.splice(
+            at..at,
+            self.trial_web_restrictions()
+                .iter()
+                .map(|arg| arg.to_string()),
+        );
         invocation
-            .args
-            .insert(at, "--disallowedTools=WebSearch,WebFetch".to_string());
-        invocation
+    }
+    fn trial_web_restrictions(&self) -> &'static [&'static str] {
+        &["--disallowedTools=WebSearch,WebFetch"]
     }
     fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
         super::check_sign_in(self, &["auth", "status"])?;
