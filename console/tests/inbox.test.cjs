@@ -2263,6 +2263,170 @@ test('Enter and Space activate focused peek buttons', async t => {
   }
 });
 
+test('Ready for review copies rendered context in Overview and its folder without changing Details', async t => {
+  const logs = join(home, '.thirdshift/logs');
+  const dir = join(logs, 'acme/widgets/commands/issue');
+  const path = join(dir, '2174-copy.command.json');
+  const log = join(dir, '2174-copy.log');
+  const cache = join(logs, 'github-inbox.json');
+  // The Console's startup GitHub read must finish before installing kept facts.
+  // Otherwise its older answer can overwrite this fixture in an isolated run.
+  const deadline = Date.now() + 15000;
+  let previous;
+  while (previous === undefined) {
+    previous = await readFile(cache, 'utf8').catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    assert.ok(Date.now() < deadline, 'Console completed its startup GitHub read');
+    if (previous === undefined) await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const pr = 'https://github.com/acme/widgets/pull/2174';
+  const subjects = { [pr]: { state: 'Open', ci: 'red', mergeable: 'conflicting', title: 'Copy ready PR context' } };
+  Object.assign(fixture, { kind: 'Run', outcome: 'ready for review', cause: null, pull_request: pr });
+  try {
+    await replaceRecord(path, JSON.stringify(fixture));
+    await writeFile(log, 'Output must not be copied or fetched\n');
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(join(logs, 'github-inbox.changed'), 'copy ready context');
+    const page = await pageFor(t);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      for (const section of ['overview', 'ready-for-review']) {
+        await page.goto(`${origin}/?section=${section}`);
+        const row = page.locator('[data-group="ready for review"] > .commands > .command');
+        await row.getByText('Copy ready PR context', { exact: true }).waitFor({ state: 'attached' });
+        await row.locator('.ci').getByText('CI red', { exact: true }).waitFor({ state: 'attached' });
+        const selector = await row.getAttribute('data-command');
+        const copy = row.getByRole('button', { name: 'Copy', exact: true });
+        assert.equal(await copy.isVisible(), true);
+        const box = await copy.boundingBox();
+        assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
+        const url = page.url();
+        const requests = [];
+        const recordRequest = request => requests.push(request.url());
+        page.on('request', recordRequest);
+        await copy.click();
+        await row.locator('[data-copy-status]').filter({ hasText: 'Copied.' }).waitFor();
+        page.off('request', recordRequest);
+        const text = await page.evaluate(() => navigator.clipboard.readText());
+        assert.match(text, /^thirdshift · Ready for review\n/);
+        assert.ok(text.includes(`Machine: ${await row.getAttribute('data-machine')}`));
+        assert.ok(text.includes(`Command: ${selector}`));
+        for (const fact of ['acme/widgets', 'Copy ready PR context', pr, 'Ready for review', 'CI red', 'Merge conflict', 'Ticket #98']) assert.ok(text.includes(fact), fact);
+        for (const link of ['.peek-link', '.row-actions a[href^="/log"]']) {
+          assert.ok(text.includes(new URL(await row.locator(link).getAttribute('href'), origin).href));
+        }
+        assert.ok(text.includes(`thirdshift show '${selector}' --json`));
+        assert.doesNotMatch(text, /Output must not be copied or fetched|Dismiss|Copy fix command/);
+        assert.equal(await page.locator('#peek').isVisible(), false);
+        assert.equal(page.url(), url);
+        assert.deepEqual(requests.filter(url => /\/(peek|log|logs)(\?|\/)/.test(url)), []);
+        // Native keyboard activation must preserve an already open Details pane too.
+        await row.locator(':scope > .row-head > .state').click();
+        await page.locator('#peek dt').first().waitFor();
+        const details = await page.locator('#peek-content').textContent();
+        for (const key of ['Enter', 'Space']) {
+          await page.evaluate(() => navigator.clipboard.writeText('Waiting for keyboard copy'));
+          await copy.focus();
+          await page.keyboard.press(key);
+          await page.waitForFunction(() => navigator.clipboard.readText().then(text => text.startsWith('thirdshift · Ready for review\n')));
+          assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes(pr));
+          assert.equal(await page.locator('#peek-content').textContent(), details);
+          assert.equal(page.url(), url);
+        }
+        await page.locator('[data-close-peek]').click();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      }
+    }
+    subjects[pr].title = 'Updated ready title';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(join(logs, 'github-inbox.changed'), 'updated copy context');
+    const row = page.locator('[data-group="ready for review"] > .commands > .command');
+    await row.getByText('Updated ready title', { exact: true }).waitFor({ state: 'attached' });
+    assert.equal(await row.locator('.copy [data-copy-status]').textContent(), 'Copied.');
+    await row.getByRole('button', { name: 'Copy', exact: true }).click();
+    await page.waitForFunction(() => navigator.clipboard.readText().then(text => text.includes('Updated ready title')));
+  } finally {
+    await Promise.all([path, log].map(path => rm(path, { force: true })));
+    await replaceRecord(cache, previous);
+    await writeFile(join(logs, 'github-inbox.changed'), 'restore copy context');
+  }
+});
+
+test('Inbox Copy is available in Working, Landing, Done and Resolved folders', { skip: process.platform !== 'linux' }, async t => {
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const fixtures = [
+    ['working', 'Working', { process_id: server.pid, process_start: start, ended_at: null, outcome: null, stages: [{ name: 'implement', began_at: new Date().toISOString() }] }],
+    ['landing', 'Landing', { process_id: server.pid, process_start: start, ended_at: null, outcome: null, stages: [{ name: 'CI watch', began_at: new Date().toISOString() }] }],
+    ['done', 'Done', { outcome: 'merged' }],
+    ['resolved', 'Resolved', { outcome: 'merged', started_at: new Date(Date.now() - 172800000).toISOString(), ended_at: new Date(Date.now() - 172800000).toISOString() }],
+  ];
+  const paths = [];
+  try {
+    for (const [index, [, , change]] of fixtures.entries()) {
+      const path = join(dir, `2180-${index}.command.json`);
+      paths.push(path);
+      await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', cause: null, tickets: [], ...change,
+        issue: { number: 2180 + index, url: `https://github.com/acme/widgets/issues/${2180 + index}`, title: 'Copy another Inbox section' } }));
+    }
+    const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+    for (const [index, [section, title]] of fixtures.entries()) {
+      await page.goto(`${origin}/?section=${section}`);
+      const row = page.locator(`.command[data-command$="2180-${index}.command.json"]`);
+      const copy = row.getByRole('button', { name: 'Copy', exact: true });
+      await copy.click();
+      await row.locator('[data-copy-status]').filter({ hasText: 'Copied.' }).waitFor();
+      const text = await page.evaluate(() => navigator.clipboard.readText());
+      assert.ok(text.startsWith(`thirdshift · ${title}\n`));
+      assert.ok(text.includes(`https://github.com/acme/widgets/issues/${2180 + index}`));
+      assert.equal(await page.locator('#peek').isVisible(), false);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+  } finally { await Promise.all(paths.map(path => rm(path, { force: true }))); }
+});
+
+for (const clipboard of ['refused', 'unavailable']) {
+  test(`Ready for review keeps the fallback snapshot through live updates with clipboard ${clipboard}`, async t => {
+    const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+    const path = join(dir, '2175-copy.command.json');
+    const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+    Object.assign(fixture, { kind: 'Run', outcome: 'ready for review', cause: null, tickets: [], pull_request: 'https://github.com/acme/widgets/pull/2175' });
+    try {
+      await replaceRecord(path, JSON.stringify(fixture));
+      const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+      await page.addInitScript(clipboard => {
+        if (clipboard === 'unavailable') Object.defineProperty(navigator, 'clipboard', { value: undefined });
+        else navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+      }, clipboard);
+      await page.goto(`${origin}/?section=ready-for-review`);
+      const row = page.locator('.command[data-command$="2175-copy.command.json"]');
+      await row.getByRole('button', { name: 'Copy', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Inbox information' });
+      const field = dialog.getByRole('textbox', { name: 'Information to share with an agent' });
+      await dialog.waitFor();
+      const text = await field.inputValue();
+      assert.match(text, /^thirdshift · Ready for review\n/);
+      assert.ok(text.includes('https://github.com/acme/widgets/pull/2175'));
+      assert.equal(await field.evaluate(field => field.value.slice(field.selectionStart, field.selectionEnd)), text);
+      fixture.harness = 'claude';
+      await replaceRecord(path, JSON.stringify(fixture));
+      await row.getByText('claude · gpt-6 · high', { exact: true }).waitFor({ state: 'attached' });
+      assert.equal(await field.inputValue(), text);
+      assert.equal(await field.evaluate(field => field.value.slice(field.selectionStart, field.selectionEnd)), text);
+      assert.equal(await field.evaluate(field => document.activeElement === field), true);
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+      assert.equal(await page.locator('#peek').isVisible(), false);
+      assert.equal(new URL(page.url()).searchParams.get('section'), 'ready-for-review');
+    } finally { await rm(path, { force: true }); }
+  });
+}
+
 test('Needs you copies problem context and links for an agent by keyboard', async t => {
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const recordPath = join(directory, '1365-copy.command.json');
@@ -2327,7 +2491,7 @@ for (const clipboard of ['refused', 'unavailable']) {
     const original = await readFile(recordPath, 'utf8');
     await row.getByRole('button', { name: 'Copy', exact: true }).focus();
     await page.keyboard.press('Space');
-    const dialog = page.getByRole('dialog', { name: 'Needs you information' });
+    const dialog = page.getByRole('dialog', { name: 'Inbox information' });
     await dialog.waitFor();
     const field = dialog.getByRole('textbox', { name: 'Information to share with an agent' });
     const text = await field.inputValue();

@@ -453,23 +453,26 @@ for (const [letter, target] of targets) {
 }
 
 // Copy the rendered facts, including child Commands, without fetching or exposing logs.
-function needsYouContext(row) {
+function inboxContext(row) {
   const facts = row.cloneNode(true);
   for (const control of facts.querySelectorAll('button, form, [role="status"], .new, .heartbeat, .gist')) control.remove();
   for (const link of facts.querySelectorAll('a')) {
     link.replaceWith(link.textContent === link.href ? link.href : `${link.textContent} (${link.href})`);
   }
-  for (const block of facts.querySelectorAll('p, li, ul, .row-head, .row-head > span')) block.append('\n');
+  for (const block of facts.querySelectorAll('p, li, ul, .row-head, .row-head > span, .pr-checks > span')) block.append('\n');
   const text = facts.textContent.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
   const command = row.dataset.command.replaceAll("'", "'\\''");
-  return `thirdshift · Needs you\nMachine: ${document.querySelector('header h1').textContent}\nCommand: ${row.dataset.command}\n${text}\nthirdshift show '${command}' --json`;
+  const section = row.closest('.group').getAttribute('aria-label');
+  const machine = row.dataset.machine || document.querySelector('header h1').textContent;
+  const remote = row.dataset.console ? ` --machine '${machine.replaceAll("'", "'\\''")}'` : '';
+  return `thirdshift · ${section}\nMachine: ${machine}\nCommand: ${row.dataset.command}\n${text}\nthirdshift show '${command}' --json${remote}`;
 }
 
 document.addEventListener('click', async event => {
   const copy = event.target.closest('[data-copy-context]');
   if (!copy) return;
   const row = copy.closest('.command');
-  const text = needsYouContext(row);
+  const text = inboxContext(row);
   try {
     await navigator.clipboard.writeText(text);
     document.getElementById(row.id)?.querySelector('[data-copy-status]')?.replaceChildren('Copied.');
