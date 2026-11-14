@@ -2820,13 +2820,16 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
 
 #[test]
 fn a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures() {
-    let scenario = ready_spec(
-        "echo 'API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.' > \"$FAKE_MUSE_ERROR\"\nexit 1",
-    );
+    // #9 exhausts usage only once #11's session has started: a Ticket
+    // started after the exhaustion is recorded would not start its session.
+    let scenario = ready_spec(&format!(
+        "{}echo 'API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+        waits_on(9)
+    ));
     scenario.spec_has_tickets(7, &[(8, &[]), (9, &[]), (10, &[9]), (11, &[])]);
     scenario.agent_does_for(
         11,
-        "echo 'stream protocol error' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+        "touch \"$(dirname \"$FAKE_CLAUDE_RECORD\")/release-9\"\necho 'stream protocol error' > \"$FAKE_MUSE_ERROR\"\nexit 1",
     );
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
