@@ -33,6 +33,14 @@ impl Cut {
         checkout(git, &self.base)?;
         bump(git.dir(), &self.version)?;
         git_run(git, &["add", "--", "Cargo.toml", "Cargo.lock"])?;
+        let message = format!(
+            "Release {}{}",
+            self.version,
+            self.supersedes
+                .as_ref()
+                .map(|old| format!("\n\nThirdshift-Supersedes: {old}"))
+                .unwrap_or_default()
+        );
         git_run(
             git,
             &[
@@ -41,14 +49,7 @@ impl Cut {
                 "commit",
                 "--allow-empty",
                 "-m",
-                &format!(
-                    "Release {}{}",
-                    self.version,
-                    self.supersedes
-                        .as_ref()
-                        .map(|old| format!("\n\nThirdshift-Supersedes: {old}"))
-                        .unwrap_or_default()
-                ),
+                &message,
             ],
         )?;
         self.head = git_run(git, &["rev-parse", "HEAD"])?;
@@ -300,44 +301,10 @@ fn inspect(
                 .is_some_and(|pr| pr.pr.state == PrState::Open)
             || wanted == Some(&entry.version)
     });
-    if live.len() > 1 {
-        let mut superseded = Vec::new();
-        for entry in live.values() {
-            let Some(head) = &entry.branch_head else {
-                continue;
-            };
-            git_run(git, &["fetch", "--quiet", "origin", head])?;
-            if let Some(old) = supersedes(git, head)?
-                && let Some(prior) = live.get(&Version::parse(&old)?)
-            {
-                let old_head = prior
-                    .branch_head
-                    .as_ref()
-                    .or(prior.tag_head.as_ref())
-                    .context("superseded release has no head")?;
-                git_run(git, &["fetch", "--quiet", "origin", old_head])?;
-                let base = git_run(git, &["merge-base", head, "origin/main"])?;
-                let old_base = git_run(git, &["merge-base", old_head, "origin/main"])?;
-                ensure!(
-                    prior
-                        .pr
-                        .as_ref()
-                        .is_none_or(|pr| !pr.pr.is_draft && pr.pr.state != PrState::Closed),
-                    "superseded release {old} requires human review"
-                );
-                ensure!(
-                    !github.release_published(&format!("v{old}"))?,
-                    "superseded release {old} was published; inspect both cuts"
-                );
-                exact_bump(git, &base, head, &entry.version)?;
-                exact_bump(git, &old_base, old_head, &old)?;
-                superseded.push(Version::parse(&old)?);
-            }
-        }
-        for old in superseded {
-            live.remove(&old);
-        }
-    }
+    // Two live cuts always block. A Thirdshift-Supersedes trailer is not
+    // authority to drop one: anyone who can push release-* can write it, and
+    // honoring it would publish the planted version and close the other PR.
+    // Only this process's recut() may set Cut::supersedes, after discovery.
     if let Some(wanted) = wanted
         && let Some(other) = live.values().find(|entry| entry.version != wanted)
     {
@@ -422,7 +389,6 @@ fn inspect(
             expected_tag,
         };
         cut.validate(git, github)?;
-        cut.supersedes = supersedes(git, &cut.head)?;
         if cut.tagged.is_none()
             && !cut.published
             && let Some(previous) = &cut.previous
@@ -490,15 +456,6 @@ pub(super) fn remote_head(git: &Git, branch: &str) -> Result<Option<String>> {
     .split_whitespace()
     .next()
     .map(str::to_owned))
-}
-
-fn supersedes(git: &Git, head: &str) -> Result<Option<String>> {
-    let message = git_run(git, &["show", "-s", "--format=%B", head])?;
-    Ok(message
-        .lines()
-        .filter_map(|line| line.strip_prefix("Thirdshift-Supersedes: "))
-        .find(|version| Version::parse(version).is_ok())
-        .map(str::to_owned))
 }
 
 fn pinned_cut(

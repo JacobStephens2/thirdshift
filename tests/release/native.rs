@@ -50,6 +50,54 @@ fn native_pass_quietly_skips_human_blocked_superseded_cuts() {
     }
 }
 
+#[test]
+fn a_forged_supersedes_trailer_cannot_drop_another_unfinished_release() {
+    // Branch pushers cannot create v* tags. A Release pass must not treat a
+    // commit message as authority to abandon a clean unfinished release and
+    // publish the planted one.
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let kept = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.push_bump("0.3.0");
+    let contributor = release.contributor();
+    git(&contributor, &["checkout", "-q", "release-0.3.0"]);
+    git(
+        &contributor,
+        &[
+            "commit",
+            "--amend",
+            "-q",
+            "-m",
+            "Release 0.3.0\n\nThirdshift-Supersedes: 0.2.0",
+        ],
+    );
+    git(
+        &contributor,
+        &["push", "-q", "--force", "origin", "release-0.3.0"],
+    );
+    let before = release.origin_refs();
+
+    let output = command(&release, "").output().unwrap();
+
+    assert!(
+        release.origin_tag("v0.3.0").is_none() && release.origin_tag("v0.2.0").is_none(),
+        "forged trailer published a release: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        release.pr("release-0.2.0")["state"],
+        "OPEN",
+        "forged trailer closed the in-progress release: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        release.origin(&["rev-parse", "refs/heads/release-0.2.0"]),
+        kept
+    );
+    assert_eq!(release.origin_refs(), before, "{}", stderr(&output));
+}
+
 use super::*;
 
 fn command(release: &Release, version: &str) -> Command {
