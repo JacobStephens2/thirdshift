@@ -757,6 +757,38 @@ test('folded Inbox groups keep live counts and choices through folders, hiding a
   }
 });
 
+test('Done and Resolved explain themselves on a phone, empty or populated, through live refresh', async t => {
+  const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const help = group => page.locator(`#inbox > [data-group="${group}"] > .section-help`);
+  const fits = async group => {
+    const box = await help(group).boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
+    assert.equal(await help(group).evaluate(node => node.scrollWidth <= node.clientWidth), true);
+  };
+  try {
+    await page.goto(`${origin}/?section=resolved`);
+    await help('resolved').waitFor({ state: 'visible' });
+    assert.match(await help('resolved').textContent(), /^Older Commands with nothing waiting for you/);
+    await fits('resolved');
+    await page.goto(`${origin}/?section=done`);
+    const done = page.locator('#inbox > [data-group="done"]');
+    const count = Number(await done.locator(':scope > summary .count').textContent());
+    await help('done').waitFor({ state: 'visible' });
+    await fits('done');
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="done"] > summary .count').textContent === String(expected), count + 1);
+    await help('done').waitFor({ state: 'visible' });
+    assert.equal(await help('done').textContent(), 'Ended within the last 24 hours, with nothing waiting for you.');
+    await fits('done');
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('every Inbox section folder has a native disclosure without JavaScript', async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   await page.goto(origin);
