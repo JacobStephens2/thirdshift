@@ -1,4 +1,5 @@
 import { activity, loadLook, motionAllowed, showFolder } from './look.js';
+import './folds.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
@@ -39,28 +40,10 @@ function markNew() {
 markNew();
 remember(visitKey, Date.now());
 window.addEventListener("pagehide", () => remember(visitKey, Date.now()));
-const foldKey = "thirdshift:console:folded";
-let folded = stored(foldKey, {});
-if (typeof folded !== "object" || Array.isArray(folded)) folded = {};
-for (const section of document.querySelectorAll("details[data-group]")) {
-  if (typeof folded[section.dataset.group] === "boolean") section.open = folded[section.dataset.group];
-  else folded[section.dataset.group] = section.open;
-}
-window.addEventListener("pagehide", () => {
-  // Navigation can discard a native toggle event before it saves the choice.
-  const pending = {};
-  for (const section of document.querySelectorAll("details[data-group]")) {
-    if (folded[section.dataset.group] !== section.open) {
-      pending[section.dataset.group] = section.open;
-    }
-  }
-  if (Object.keys(pending).length) remember(foldKey, { ...stored(foldKey, {}), ...pending });
-});
+// Folding a group keeps a selected row inside it, to regain focus when reopened.
 document.addEventListener("toggle", event => {
   const section = event.target;
   if (!section.matches("details[data-group]")) return;
-  folded[section.dataset.group] = section.open;
-  remember(foldKey, folded);
   if (section.open && selected && section.contains(selected)) selected.focus({ preventScroll: true });
 }, true);
 document.addEventListener("focusin", event => {

@@ -1327,11 +1327,22 @@ impl InboxPage {
             .map_or("overview", |section| section.group)
     }
 
+    /// Overview shows every section, so a switch needs no request.
     fn in_overview(&self, group: &str) -> bool {
         matches!(
             group,
-            "needs you" | "ready for review" | "landing" | "working"
+            "needs you" | "ready for review" | "landing" | "working" | "done" | "resolved"
         )
+    }
+
+    /// Finished sections sit folded below Working in Overview, until opened.
+    fn folded_in_overview(&self, group: &str) -> bool {
+        matches!(group, "done" | "resolved")
+    }
+
+    /// Without a browser choice, a section opens unless Overview folds it.
+    fn opens(&self, group: &str) -> bool {
+        !(self.folder() == "overview" && self.folded_in_overview(group))
     }
 
     fn shown(&self, group: &str) -> bool {

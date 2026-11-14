@@ -1,3 +1,5 @@
+import { applyFolds } from './folds.js';
+
 // The machine owns its look; only Pause motion belongs to this browser.
 const root = document.documentElement;
 const themes = document.querySelector('#themes');
@@ -96,6 +98,7 @@ export function showFolder(group) {
     section.hidden = hidden || !(section.dataset.group === current?.dataset.group
       || (current?.dataset.group === 'overview' && section.hasAttribute('data-overview')));
   }
+  applyFolds();
 }
 
 function apply(settings) {
