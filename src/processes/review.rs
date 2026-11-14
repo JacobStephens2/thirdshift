@@ -154,7 +154,9 @@ impl ReviewProcess {
     ) -> Result<String> {
         interrupt::install()?;
         let config = UserConfig::load()?;
-        let goal = Goal::from_flag(flags.goal, config.review.merge);
+        // A recommend-only review changes nothing, so the machine's default
+        // cannot make it merge; only an explicit merge word is refused.
+        let goal = Goal::from_flag(flags.goal, config.review.merge && mode == Mode::Address);
         ensure!(
             mode != Mode::RecommendOnly || goal != Goal::Merged,
             "--recommend-only cannot be combined with merge"
@@ -239,7 +241,9 @@ impl ReviewProcess {
             &command.choice,
         );
         let retry = crate::args::review_retry(&pr.url, flags);
-        if mode == Mode::Address && self.built_in {
+        // Only a merge request has a Continuation for its Self-merge.
+        let resumable = mode == Mode::Address && self.built_in && goal == Goal::Merged;
+        if resumable {
             logs::resumable(&retry);
         }
         let mut last_log = None;
@@ -575,15 +579,18 @@ impl ReviewProcess {
                                     return Err(hold.into());
                                 }
                                 let worktree = checkout.take_for_delivery(&snapshot.branch);
-                                match self_merge::run(
-                                    worktree,
+                                let logs = session::Logs::of_process_review(&repo, index + 1);
+                                match (self_merge::SelfMerge {
                                     pr,
-                                    &snapshot,
-                                    &step.choice,
-                                    flags,
-                                    &self.file.limits,
-                                    run_started,
-                                ) {
+                                    snapshot: &snapshot,
+                                    choice: &step.choice,
+                                    logs: &logs,
+                                    retry: &retry,
+                                    limits: &self.file.limits,
+                                    started: run_started,
+                                })
+                                .run(worktree)
+                                {
                                     Ok(reached) => {
                                         last_log = reached.log.or(last_log.take());
                                         merged = true;
@@ -663,7 +670,7 @@ impl ReviewProcess {
         logs::finished(&account);
         logs::ended(outcome);
         notification.finish(&account);
-        if result.is_err() && mode == Mode::Address && self.built_in {
+        if result.is_err() && !held && resumable {
             progress::step(format_args!("Recovery: {retry}"));
         }
         if held && pass {

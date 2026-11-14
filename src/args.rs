@@ -1381,13 +1381,15 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
 }
 
 pub(crate) fn fix_retry(pr_url: &str, flags: &Flags) -> String {
-    let mut words = vec!["thirdshift".into(), "fix".into(), pr_url.into()];
-    public_flag_words(flags, &mut words);
-    shell_command(words)
+    pull_request_retry("fix", pr_url, flags)
 }
 
 pub(crate) fn review_retry(pr_url: &str, flags: &Flags) -> String {
-    let mut words = vec!["thirdshift".into(), "review".into(), pr_url.into()];
+    pull_request_retry("review", pr_url, flags)
+}
+
+fn pull_request_retry(command: &str, pr_url: &str, flags: &Flags) -> String {
+    let mut words = vec!["thirdshift".into(), command.into(), pr_url.into()];
     public_flag_words(flags, &mut words);
     shell_command(words)
 }

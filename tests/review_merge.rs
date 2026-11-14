@@ -129,9 +129,10 @@ fn merge_holds_leave_ready_with_pass_specific_exit() {
 #[test]
 fn recovery_freezes_the_effective_review_merge_choice() {
     for (config, word, expected) in [
-        ("[review]\nmerge = true\n", None, " merge"),
-        ("[review]\nmerge = true\n", Some("no-merge"), "--no-merge"),
-        ("[merge]\nalways = true\n", None, "--no-merge"),
+        ("[review]\nmerge = true\n", None, Some(" merge")),
+        ("[review]\nmerge = true\n", Some("no-merge"), None),
+        ("[merge]\nalways = true\n", None, None),
+        ("", None, None),
     ] {
         let scenario = Scenario::new();
         let url = pull_request(&scenario);
@@ -144,16 +145,38 @@ fn recovery_freezes_the_effective_review_merge_choice() {
 
         assert_eq!(result.code, Some(1), "{}", result.stderr);
         let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/review");
-        let command = record["resume_command"]
-            .as_str()
-            .expect("saved Continuation command");
-        assert!(command.contains(expected), "{command}");
-        assert!(
-            result.stderr.contains(&format!("Recovery: {command}")),
-            "{}",
-            result.stderr
-        );
+        match expected {
+            Some(expected) => {
+                let command = record["resume_command"]
+                    .as_str()
+                    .expect("saved Continuation command");
+                assert!(command.contains(expected), "{command}");
+                assert!(
+                    result.stderr.contains(&format!("Recovery: {command}")),
+                    "{}",
+                    result.stderr
+                );
+            }
+            // A Review run that did not ask to merge keeps today's ending.
+            None => {
+                assert!(record["resume_command"].is_null(), "{record}");
+                assert!(!result.stderr.contains("Recovery:"), "{}", result.stderr);
+            }
+        }
     }
+}
+
+#[test]
+fn review_merge_config_does_not_break_recommend_only() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is("[review]\nmerge = true\n");
+    scenario.agent_does(NO_FINDINGS);
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
 }
 
 #[test]
@@ -362,5 +385,34 @@ fn review_merge_merges_the_reviewed_head_and_reports_merged() {
         scenario
             .launch_git(&["ls-remote", "origin", "refs/heads/colleague"])
             .is_empty()
+    );
+}
+
+#[test]
+fn custom_review_self_merge_logs_under_its_own_step_number() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("foreign", "colleague", &["Late foreign commit"]);
+    let directory = scenario.path("home/.thirdshift/processes");
+    std::fs::create_dir_all(&directory).unwrap();
+    let process = include_str!("../processes/review-run.toml").replacen(
+        "[[steps]]",
+        "[[steps]]\nname = \"preflight\"\ncommand = \"true\"\nworktree = \"review\"\n\n[[steps]]",
+        1,
+    );
+    std::fs::write(directory.join("prefixed-review.toml"), process).unwrap();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.agent_does_in_session(1, &format!(
+        "gh fake on-merge 1 'git fetch -q origin foreign; git push -q origin FETCH_HEAD:refs/heads/colleague'\n{NO_FINDINGS}"
+    ));
+
+    let result = scenario.run(&["process", "prefixed-review", "pull-request", &url, "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    // The merge-time Repair belongs to the fifth Step, not the delivery Step.
+    assert!(
+        result.stderr.contains("process-step-5-"),
+        "{}",
+        result.stderr
     );
 }

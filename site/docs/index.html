@@ -3431,7 +3431,7 @@ thirdshift review --author colleague merge
 <code>no-merge</code> (or <code>--no-merge</code>) turns it off. The command wins over <code>[review] merge</code>
 in the User config, which defaults to <code>false</code>. <code>merge.always</code> does not affect
 Review runs. Repeated or conflicting merge words are argument errors, as is
-<code>--recommend-only</code> with an effective merge request.</p>
+<code>--recommend-only</code> with <code>merge</code>. A recommend-only review ignores <code>[review] merge</code>.</p>
 <p>Self-merge uses the Fix run&#39;s Repair loop and ADR 0004&#39;s reviewed-code gate:
 it merges only the head reviewed by an agent and watched green, with
 <code>gh pr merge --merge --match-head-commit</code>. Merge-time conflicts, CI failures and
