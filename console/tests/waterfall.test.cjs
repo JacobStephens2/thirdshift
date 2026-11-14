@@ -89,6 +89,55 @@ before(async () => {
   browser = await chromium.launch({ headless: true });
 });
 
+test('running stripes tile seamlessly across the animation loop at both track heights', async t => {
+  const context = await browser.newContext({ reducedMotion: 'no-preference' });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const css = await (await context.request.get(`${origin}/assets/spans.css`)).text();
+  for (const height of [10, 6]) {
+    await page.setContent(`<style>${css}
+      :root { --working: #000; --bg: #fff; --panel-2: #fff; }
+      body { margin: 0; }
+      .span-track { width: 301px; height: ${height}px; }
+      .span-bar { width: 100%; }
+      </style><span class="span-track"><i class="span-bar span-running"></i></span>`);
+    const bar = page.locator('.span-bar');
+    await bar.evaluate(element => {
+      const animation = element.getAnimations()[0];
+      if (!animation) throw new Error('No stripe animation');
+      animation.pause(); animation.currentTime = 0;
+    });
+    const first = await bar.screenshot({ animations: 'allow' });
+    await bar.evaluate(element => {
+      const animation = element.getAnimations()[0];
+      animation.currentTime = animation.effect.getTiming().duration * 0.999999;
+    });
+    const last = await bar.screenshot({ animations: 'allow' });
+    const difference = await page.evaluate(async ([one, two]) => {
+      async function decode(encoded) {
+        const image = new Image(); image.src = `data:image/png;base64,${encoded}`; await image.decode();
+        const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+        const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+        return { width: image.width, height: image.height, pixels: context.getImageData(0, 0, image.width, image.height).data };
+      }
+      const a = await decode(one), b = await decode(two);
+      function mean(from, to) {
+        let total = 0;
+        for (let x = from; x < to; x++) for (let y = 0; y < a.height; y++) {
+          const index = (y * a.width + x) * 4;
+          total += Math.abs(a.pixels[index] - b.pixels[index]);
+        }
+        return total / ((to - from) * a.height);
+      }
+      return { edge: mean(0, 18), interior: mean(20, a.width) };
+    }, [first.toString('base64'), last.toString('base64')]);
+    // Rasterization may differ by a subpixel over the entire gradient. A
+    // wrapped tile edge must not add a separate jump near the bar's start.
+    assert.ok(difference.edge <= difference.interior + 30,
+      `${height}px stripe bar jumps at loop wrap: edge delta ${difference.edge}, interior delta ${difference.interior}`);
+  }
+});
+
 test('running Waterfall stripes animate in the tree and Peek with motion controls', { skip: process.platform !== 'linux' }, async t => {
   const context = await browser.newContext({ reducedMotion: 'no-preference' });
   t.after(() => context.close());
