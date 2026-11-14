@@ -483,8 +483,9 @@ Absolute targets, `..`, overlaps and nonregular tree entries are refused.
 The Arm's `runner` records the parsed manifest, frozen `directory`, SHA-256
 `files`, and source `provenance` (enclosing Git repository path, optional origin,
 relative source path, HEAD and dirty boolean). Dirty local sources are allowed.
-Hashes cover the original manifest and every mapped file. Each Trial verifies
-both frozen Arms and copies verified bytes into its private runner directory
+Hashes cover the original manifest and every mapped file. Directory entries
+end in `/` and hash their ordered subtree, preserving empty folders. Each Trial
+verifies both frozen Arms and copies verified bytes into its private runner directory
 and HOME. A frozen-input mismatch stops the Experiment before launch.
 
 Custom runners receive version-1 request.json with `repository`, `issue_file`,

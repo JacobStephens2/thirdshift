@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::frozen::{digest, hashes};
+use super::frozen::{digest, tree_hashes};
 use crate::git::Git;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -117,7 +117,7 @@ impl Runner {
             name: name.into(),
             directory: directory.to_path_buf(),
             manifest,
-            files: hashes(directory)?,
+            files: tree_hashes(directory)?,
             provenance,
         })
     }
@@ -133,7 +133,7 @@ impl Runner {
 
     pub fn verify(&self) -> Result<()> {
         ensure!(
-            hashes(&self.directory)? == self.files,
+            tree_hashes(&self.directory)? == self.files,
             "frozen Custom runner file changed"
         );
         let frozen: Manifest =
@@ -159,6 +159,10 @@ impl Runner {
             } else {
                 continue;
             };
+            if name.ends_with('/') {
+                fs::create_dir_all(target)?;
+                continue;
+            }
             let source = self.directory.join(name);
             let bytes = fs::read(&source)?;
             ensure!(

@@ -92,6 +92,41 @@ pathlib.Path('feature.txt').write_text('uncommitted regression\n')
 json.dump({'version':1, 'outcome':'delivered'}, open(output / 'result.json', 'w'))
 "#;
 
+#[test]
+fn custom_runner_preserves_empty_mapped_folders_in_bundle_and_home() {
+    let fixture = process::fixture();
+    runner(
+        &fixture,
+        &(String::from(
+            "assert pathlib.Path(request['runner_dir'], 'mapped-empty/nested').is_dir()\nassert pathlib.Path(os.environ['HOME'], '.agents/skills/empty/nested').is_dir()\n",
+        ) + DELIVER),
+    );
+    let source = fixture.scenario.path("home/.thirdshift/runners");
+    fs::create_dir_all(source.join("empty/nested")).unwrap();
+    let manifest = source.join("fixture.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(manifest, text + "\n\"empty\" = \"mapped-empty\"\n\"./empty\" = { home = \".agents/skills/empty\" }\n").unwrap();
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+    let files = &view["prepared"]["baseline"]["runner"]["files"];
+    assert_eq!(
+        files["home/.agents/skills/empty/nested/"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        files["bundle/mapped-empty/nested/"].as_str().unwrap().len(),
+        64
+    );
+}
+
 fn run(fixture: &Fixture, extra: &[&str]) -> support::RunResult {
     let mut args = vec![
         "experiment",
