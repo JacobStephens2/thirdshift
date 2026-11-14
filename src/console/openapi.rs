@@ -189,8 +189,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                         "pushed_at": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]},
                         "error": {"oneOf": [{"type": "null"}, text]}
                     }))),
-                    "harnesses": array(json!({"type": "object", "required": ["harness", "login", "machines", "observed_on", "active_on", "routes"], "properties": {
-                        "harness": text, "login": {"oneOf": [{"type": "null"}, text]},
+                    "harnesses": array(json!({"type": "object", "required": ["harness", "identity", "machines", "observed_on", "active_on", "routes"], "properties": {
+                        "harness": text, "identity": {"oneOf": [{"type": "null"}, text]},
                         "machines": array(text.clone()), "observed_on": text,
                         "active_on": array(text.clone()), "routes": array(record.clone())
                     }}))

@@ -441,7 +441,7 @@ impl fmt::Display for View {
 }
 
 /// What a view with no rows says.
-pub(super) const EMPTY: &str = "No Plan usage to show: no configured subscription Harness, no saved observation and no signed-in CLI";
+pub(crate) const EMPTY: &str = "No Plan usage to show: no configured subscription Harness, no saved observation and no signed-in CLI";
 
 #[cfg(test)]
 mod tests {

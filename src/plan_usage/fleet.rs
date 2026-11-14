@@ -105,7 +105,7 @@ pub struct Login {
     pub harness: Harness,
     /// The account identity the Harness reports, which machines share;
     /// missing for a Harness that names none, shown per machine.
-    pub login: Option<String>,
+    pub identity: Option<String>,
     /// Every machine using this login, in Fleet order.
     pub machines: Vec<String>,
     /// The machine whose observation shows: the freshest.
@@ -131,7 +131,7 @@ pub struct MachineRoute {
 /// The account identity that makes two machines' rows one login: Claude's
 /// organization and email, Codex's account id, Muse's account label. Agy
 /// and Grok name no account, so their rows stay per machine.
-fn login(row: &Row) -> Option<String> {
+fn identity(row: &Row) -> Option<String> {
     let account = row.state.account.as_ref()?;
     match row.harness {
         Harness::Claude => {
@@ -161,10 +161,10 @@ pub(crate) fn group(sources: &[(String, View)]) -> Vec<Login> {
     let mut logins: Vec<Login> = Vec::new();
     for (machine, view) in sources {
         for row in &view.harnesses {
-            let identity = login(row);
+            let identity = identity(row);
             let found = logins.iter().position(|kept| {
                 kept.harness == row.harness
-                    && match (&identity, &kept.login) {
+                    && match (&identity, &kept.identity) {
                         (Some(identity), Some(kept)) => identity == kept,
                         (None, None) => kept.machines == [machine.clone()],
                         _ => false,
@@ -175,7 +175,7 @@ pub(crate) fn group(sources: &[(String, View)]) -> Vec<Login> {
                 None => {
                     logins.push(Login {
                         harness: row.harness,
-                        login: identity,
+                        identity,
                         machines: Vec::new(),
                         observed_on: machine.clone(),
                         installed: row.installed,
@@ -302,7 +302,7 @@ fn save(logs_dir: &Path, name: &str, slot: Slot<'_>, view: View, at: DateTime<Ut
 /// Another machine's view, as it answered or pushed it. Its strings are
 /// shown in the terminal and on the page, so any that is long or holds a
 /// control character makes the whole view unreadable.
-pub(crate) fn foreign(value: Value) -> Result<View> {
+fn peer_view(value: Value) -> Result<View> {
     fn check(value: &Value) -> Result<()> {
         match value {
             Value::String(text) => {
@@ -330,110 +330,145 @@ pub(crate) fn foreign(value: Value) -> Result<View> {
     Ok(view)
 }
 
-/// Whether Fleet is the default Plan usage view: a machine is paired, or
-/// `person`'s saved snapshot of one or a reported one exists.
-pub(crate) fn default_view(config: &UserConfig, person: Option<&str>) -> bool {
-    let local = crate::console::fleet_control::local_name(config);
-    let credentials = Credentials::read().ok();
-    config.console.fleet.iter().any(|entry| {
-        credentials
-            .as_ref()
-            .is_some_and(|credentials| credentials.fleet_token(&entry.name).is_some())
-    }) || discovered(&config.logs_dir, person)
-        .iter()
-        .any(|saved| saved.machine != local)
+/// What one Plan usage operation knows of the Fleet before reading any
+/// machine: whether one is paired, and every saved view `person` may see.
+/// Taken once, so the default view, the machine choices and the view shown
+/// agree however reports land meanwhile.
+pub(crate) struct Capture<'a> {
+    config: &'a UserConfig,
+    person: Option<&'a str>,
+    local: String,
+    paired: bool,
+    discovered: Vec<Saved>,
 }
 
-/// Every machine Plan usage can be scoped to besides this one: the Fleet in
-/// config order, then retired or reporting machines with a snapshot
-/// `person` may see.
-pub(crate) fn others(config: &UserConfig, person: Option<&str>) -> Vec<String> {
-    let local = crate::console::fleet_control::local_name(config);
-    let mut names: Vec<String> = config
-        .console
-        .fleet
-        .iter()
-        .map(|entry| entry.name.clone())
-        .collect();
-    for saved in discovered(&config.logs_dir, person) {
-        if saved.machine != local && !names.contains(&saved.machine) {
-            names.push(saved.machine);
+/// Which Fleet view to load.
+pub(crate) enum Reach<'a> {
+    /// Every machine, led by this machine's own view.
+    Fleet(View),
+    /// One other machine, by its Fleet name.
+    Machine(&'a str),
+}
+
+impl<'a> Capture<'a> {
+    pub(crate) fn new(config: &'a UserConfig, person: Option<&'a str>) -> Self {
+        let credentials = Credentials::read().ok();
+        let paired = config.console.fleet.iter().any(|entry| {
+            credentials
+                .as_ref()
+                .is_some_and(|credentials| credentials.fleet_token(&entry.name).is_some())
+        });
+        Self {
+            config,
+            person,
+            local: crate::console::fleet_control::local_name(config),
+            paired,
+            discovered: discovered(&config.logs_dir, person),
         }
     }
-    names
-}
 
-/// Fleet Plan usage, or one Fleet machine's when `chosen` names one; this
-/// machine's own `local` view leads the whole Fleet. A caller handles this
-/// machine's own name as its plain view.
-pub(crate) fn load(
-    config: &UserConfig,
-    person: Option<&str>,
-    chosen: Option<&str>,
-    local: Option<View>,
-) -> Result<Fleet> {
-    let now = Utc::now();
-    let local_name = crate::console::fleet_control::local_name(config);
-    if let Some(name) = chosen
-        && !others(config, person).iter().any(|known| known == name)
-    {
-        bail!("unknown Fleet machine: {name}");
+    /// This machine's name, distinct from every Fleet entry's.
+    pub(crate) fn local(&self) -> &str {
+        &self.local
     }
-    let mut sources: Vec<(Machine, Option<View>)> = Vec::new();
-    if chosen.is_none()
-        && let Some(view) = local
-    {
-        let mut machine = Machine::new(&local_name, None, true);
-        machine.last_seen = Some(now);
-        sources.push((machine, Some(view)));
-    }
-    let entries: Vec<&Entry> = config
-        .console
-        .fleet
-        .iter()
-        .filter(|entry| chosen.is_none_or(|name| name == entry.name))
-        .collect();
-    // Independent requests, each bounded by the Fleet transport's three
-    // seconds, so one stalled peer cannot hold the view.
-    sources.extend(std::thread::scope(|threads| {
-        let handles: Vec<_> = entries
-            .iter()
-            .map(|entry| threads.spawn(|| remote(config, person, entry, now)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("Fleet Plan usage reader panicked"))
-            .collect::<Vec<_>>()
-    }));
-    for saved in discovered(&config.logs_dir, person) {
-        if saved.machine == local_name
-            || config
-                .console
-                .fleet
+
+    /// Whether Fleet is the default Plan usage view: a machine is paired,
+    /// or a saved view of another machine exists.
+    pub(crate) fn default_view(&self) -> bool {
+        self.paired
+            || self
+                .discovered
                 .iter()
-                .any(|entry| entry.name == saved.machine)
-            || chosen.is_some_and(|name| name != saved.machine)
-        {
-            continue;
-        }
-        let mut machine = Machine::new(&saved.machine, None, false);
-        machine.stands_in(&saved);
-        if machine.status == Status::Cached {
-            machine.note("no longer in this Console's Fleet");
-        }
-        sources.push((machine, Some(saved.view)));
+                .any(|saved| saved.machine != self.local)
     }
-    let views: Vec<(String, View)> = sources
-        .iter_mut()
-        .filter_map(|(machine, view)| Some((machine.name.clone(), view.take()?)))
-        .collect();
-    Ok(Fleet {
-        version: 1,
-        machine: chosen.map(str::to_owned),
-        machines: sources.into_iter().map(|(machine, _)| machine).collect(),
-        harnesses: group(&views),
-        now,
-    })
+
+    /// Every machine Plan usage can be scoped to besides this one: the
+    /// Fleet in config order, then retired or reporting machines with a
+    /// saved view.
+    pub(crate) fn others(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .config
+            .console
+            .fleet
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect();
+        for saved in &self.discovered {
+            if saved.machine != self.local && !names.contains(&saved.machine) {
+                names.push(saved.machine.clone());
+            }
+        }
+        names
+    }
+
+    /// Fleet Plan usage, or one Fleet machine's.
+    pub(crate) fn load(&self, reach: Reach<'_>) -> Result<Fleet> {
+        let config = self.config;
+        let person = self.person;
+        let now = Utc::now();
+        let mut sources: Vec<(Machine, Option<View>)> = Vec::new();
+        let chosen = match reach {
+            Reach::Fleet(view) => {
+                let mut machine = Machine::new(&self.local, None, true);
+                machine.last_seen = Some(now);
+                sources.push((machine, Some(view)));
+                None
+            }
+            Reach::Machine(name) => {
+                if !self.others().iter().any(|known| known == name) {
+                    bail!("unknown Fleet machine: {name}");
+                }
+                Some(name)
+            }
+        };
+        let entries: Vec<&Entry> = config
+            .console
+            .fleet
+            .iter()
+            .filter(|entry| chosen.is_none_or(|name| name == entry.name))
+            .collect();
+        // Independent requests, each bounded by the Fleet transport's three
+        // seconds, so one stalled peer cannot hold the view.
+        sources.extend(std::thread::scope(|threads| {
+            let handles: Vec<_> = entries
+                .iter()
+                .map(|entry| threads.spawn(|| remote(config, person, entry, now)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("Fleet Plan usage reader panicked"))
+                .collect::<Vec<_>>()
+        }));
+        for saved in &self.discovered {
+            if saved.machine == self.local
+                || config
+                    .console
+                    .fleet
+                    .iter()
+                    .any(|entry| entry.name == saved.machine)
+                || chosen.is_some_and(|name| name != saved.machine)
+            {
+                continue;
+            }
+            let mut machine = Machine::new(&saved.machine, None, false);
+            machine.stands_in(saved);
+            if machine.status == Status::Cached {
+                machine.note("no longer in this Console's Fleet");
+            }
+            sources.push((machine, Some(saved.view.clone())));
+        }
+        let views: Vec<(String, View)> = sources
+            .iter_mut()
+            .filter_map(|(machine, view)| Some((machine.name.clone(), view.take()?)))
+            .collect();
+        Ok(Fleet {
+            version: 1,
+            machine: chosen.map(str::to_owned),
+            machines: sources.into_iter().map(|(machine, _)| machine).collect(),
+            harnesses: group(&views),
+            now,
+        })
+    }
 }
 
 fn remote(
@@ -451,7 +486,7 @@ fn remote(
         }
         let remote = Remote::select(config, &entry.name, person.map(str::to_owned))?
             .context("expected a Fleet machine")?;
-        Ok(Some(foreign(remote.get(PEER_ROUTE)?)?))
+        Ok(Some(peer_view(remote.get(PEER_ROUTE)?)?))
     };
     match read() {
         // A link-only machine may still push its own view here.
@@ -575,7 +610,7 @@ impl Report {
         if self.version != 1 {
             return Err(Refusal::Invalid(format!("unsupported version {}", self.version)).into());
         }
-        let view = foreign(self.view).map_err(|error| Refusal::Invalid(format!("{error:#}")))?;
+        let view = peer_view(self.view).map_err(|error| Refusal::Invalid(format!("{error:#}")))?;
         save(logs_dir, holder, Slot::Reported, view, now)
     }
 }
@@ -617,7 +652,7 @@ impl fmt::Display for Fleet {
                 writeln!(f)?;
             }
             write!(f, "{}", login.harness.name())?;
-            if login.login.is_some() && login.machines.len() > 1 {
+            if login.identity.is_some() && login.machines.len() > 1 {
                 write!(f, ", shared by {}", login.machines.join(", "))?;
             } else {
                 write!(f, " on {}", login.machines.join(", "))?;
@@ -626,7 +661,7 @@ impl fmt::Display for Fleet {
                 write!(f, " (active on {})", login.active_on.join(", "))?;
             }
             writeln!(f)?;
-            if let Some(identity) = &login.login {
+            if let Some(identity) = &login.identity {
                 writeln!(f, "  login: {identity}")?;
             }
             for route in &login.routes {

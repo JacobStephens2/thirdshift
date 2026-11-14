@@ -401,7 +401,9 @@ fn plan_usage_clear_forgets_cooldowns_for_one_harness_or_all() {
     for args in [
         &["plan-usage", "--clear", "opencode"][..],
         &["plan-usage", "--clear", "agy", "grok"],
-        &["plan-usage", "--fleet"],
+        &["plan-usage", "--clear", "--fleet"],
+        &["plan-usage", "--fleet", "--local"],
+        &["plan-usage", "--push", "--json"],
     ] {
         let refused = scenario.run(args);
         assert_eq!(refused.code, Some(2), "{args:?}: {}", refused.stdout);

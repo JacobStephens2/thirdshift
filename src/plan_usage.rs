@@ -20,6 +20,7 @@ mod view;
 pub use observation::Observation;
 pub use route::Routing;
 use store::Store;
+pub(crate) use view::EMPTY;
 pub use view::View;
 
 use crate::config::UserConfig;
@@ -187,29 +188,22 @@ pub(crate) fn saved_view(config: &UserConfig) -> Result<View> {
     ))
 }
 
-/// The view `selection` asks for, read on behalf of `person` when a
-/// Console reads Fleet machines for someone signed in.
+/// The view `selection` asks for, from what `capture` took of the Fleet:
+/// read on behalf of its person when a Console reads for someone signed in.
 pub(crate) fn show(
     config: &UserConfig,
     selection: &Selection,
-    person: Option<&str>,
+    capture: &fleet::Capture<'_>,
 ) -> Result<Shown> {
-    let local = crate::console::fleet_control::local_name(config);
-    let chosen = match selection {
-        Selection::Local => return Ok(Shown::Local(local_view(config)?)),
-        Selection::Machine(name) if *name == local => {
+    let reach = match selection {
+        Selection::Machine(name) if name != capture.local() => fleet::Reach::Machine(name),
+        Selection::Fleet => fleet::Reach::Fleet(local_view(config)?),
+        Selection::Default if capture.default_view() => fleet::Reach::Fleet(local_view(config)?),
+        Selection::Local | Selection::Machine(_) | Selection::Default => {
             return Ok(Shown::Local(local_view(config)?));
         }
-        Selection::Machine(name) => Some(name.as_str()),
-        Selection::Fleet => None,
-        Selection::Default if fleet::default_view(config, person) => None,
-        Selection::Default => return Ok(Shown::Local(local_view(config)?)),
     };
-    let view = match chosen {
-        Some(_) => None,
-        None => Some(local_view(config)?),
-    };
-    Ok(Shown::Fleet(fleet::load(config, person, chosen, view)?))
+    Ok(Shown::Fleet(capture.load(reach)?))
 }
 
 /// Forget recorded cooldowns on this machine, and say which Harnesses'.
@@ -240,7 +234,8 @@ pub fn execute(action: Action) -> Result<String> {
             ))
         }
         Action::Show { selection, json } => {
-            let shown = show(&UserConfig::load()?, &selection, None)?;
+            let config = UserConfig::load()?;
+            let shown = show(&config, &selection, &fleet::Capture::new(&config, None))?;
             if json {
                 Ok(serde_json::to_string_pretty(&shown.json()?)?)
             } else {

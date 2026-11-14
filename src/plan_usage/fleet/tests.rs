@@ -90,7 +90,7 @@ fn a_shared_login_shows_once_with_its_freshest_observation_and_every_machine() {
     assert_eq!(login.state.windows[0].used_percent, Some(70.0));
     assert_eq!(login.active_on, ["laptop"]);
     assert_eq!(
-        login.login.as_deref(),
+        login.identity.as_deref(),
         Some("organization org-1 · me@example.test")
     );
 }
@@ -183,16 +183,16 @@ fn routes_keep_the_machine_they_are_configured_on() {
 fn another_machines_view_is_refused_when_it_holds_control_text_or_an_unknown_harness() {
     let good = json!({"version": 1, "harnesses": [{"harness": "claude", "installed": true,
         "active": false, "routes": [], "windows": [{"name": "five_hour", "used_percent": 5.0}]}]});
-    assert_eq!(foreign(good.clone()).unwrap().harnesses.len(), 1);
+    assert_eq!(peer_view(good.clone()).unwrap().harnesses.len(), 1);
     let mut forged = good.clone();
     forged["harnesses"][0]["windows"][0]["name"] = json!("five\u{1b}[2J");
-    assert!(foreign(forged).is_err());
+    assert!(peer_view(forged).is_err());
     let mut api_key = good.clone();
     api_key["harnesses"][0]["harness"] = json!("opencode");
-    assert!(foreign(api_key).is_err());
+    assert!(peer_view(api_key).is_err());
     let mut newer = good;
     newer["version"] = json!(2);
-    assert!(foreign(newer).is_err());
+    assert!(peer_view(newer).is_err());
 }
 
 #[test]

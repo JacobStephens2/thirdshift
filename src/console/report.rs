@@ -157,33 +157,31 @@ fn list(json: bool) -> Result<String> {
         .join("\n"))
 }
 
-/// One thing this machine reports, and where on a Console it goes.
-enum Outgoing {
-    Metrics(MetricsReport),
-    PlanUsage(PlanUsageReport),
+/// One thing this machine reports: the route on a Console it goes to, and
+/// its body, whose `machine` names the holder per destination.
+struct Outgoing {
+    route: &'static str,
+    body: serde_json::Value,
 }
 
 impl Outgoing {
+    fn metrics(report: &MetricsReport) -> Result<Self> {
+        Ok(Self {
+            route: "/api/v1/metrics/report",
+            body: serde_json::to_value(report)?,
+        })
+    }
+
+    fn plan_usage(report: &PlanUsageReport) -> Result<Self> {
+        Ok(Self {
+            route: "/api/v1/plan-usage/report",
+            body: serde_json::to_value(report)?,
+        })
+    }
+
     /// Name it for `holder`, the machine the destination issued its token to.
     fn name(&mut self, holder: &str) {
-        match self {
-            Self::Metrics(report) => report.machine = holder.to_owned(),
-            Self::PlanUsage(report) => report.machine = holder.to_owned(),
-        }
-    }
-
-    fn route(&self) -> &'static str {
-        match self {
-            Self::Metrics(_) => "/api/v1/metrics/report",
-            Self::PlanUsage(_) => "/api/v1/plan-usage/report",
-        }
-    }
-
-    fn body(&self) -> Result<serde_json::Value> {
-        Ok(match self {
-            Self::Metrics(report) => serde_json::to_value(report)?,
-            Self::PlanUsage(report) => serde_json::to_value(report)?,
-        })
+        self.body["machine"] = holder.into();
     }
 }
 
@@ -243,10 +241,10 @@ fn send(
         .post(format!(
             "{}{}",
             destination.address.trim_end_matches('/'),
-            report.route()
+            report.route
         ))
         .bearer_auth(token)
-        .json(&report.body()?)
+        .json(&report.body)
         .send()
         .map_err(|error| {
             anyhow::anyhow!(
@@ -305,7 +303,7 @@ pub(crate) fn push_by_hand(asked: &MetricsArgs) -> Result<String> {
     if destinations.is_empty() {
         return by_hand(Vec::new());
     }
-    let report = Outgoing::Metrics(MetricsReport::local(&config, asked)?);
+    let report = Outgoing::metrics(&MetricsReport::local(&config, asked)?)?;
     by_hand(push(destinations, vec![report], BY_HAND)?)
 }
 
@@ -317,7 +315,7 @@ pub(crate) fn push_plan_usage_by_hand(only: Option<&str>) -> Result<String> {
     if destinations.is_empty() {
         return by_hand(Vec::new());
     }
-    let report = Outgoing::PlanUsage(PlanUsageReport::local(&config)?);
+    let report = Outgoing::plan_usage(&PlanUsageReport::local(&config)?)?;
     by_hand(push(destinations, vec![report], BY_HAND)?)
 }
 
@@ -339,8 +337,8 @@ pub(crate) fn after_command() {
     };
     let reports = [daily, MetricsArgs::default()]
         .iter()
-        .map(|asked| MetricsReport::local(&config, asked).map(Outgoing::Metrics))
-        .chain([PlanUsageReport::local(&config).map(Outgoing::PlanUsage)])
+        .map(|asked| Outgoing::metrics(&MetricsReport::local(&config, asked)?))
+        .chain([PlanUsageReport::local(&config).and_then(|report| Outgoing::plan_usage(&report))])
         .collect::<Result<Vec<_>>>();
     let pushed =
         reports.and_then(|reports| push(destinations(&config, None)?, reports, AFTER_COMMAND));

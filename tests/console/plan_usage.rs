@@ -4,8 +4,8 @@
 //! offline; a machine that cannot be reached inbound pushes its own view;
 //! the header warns of a used-up route; and clearing cooldowns is an `act`
 //! action (#2182).
+use super::metrics_report::{machine, pair, post as post_json};
 use super::*;
-use std::io::Write;
 
 /// Not this host's name, which the receiving Console keeps for itself.
 const HOLDER: &str = "laptop-vm-fixture";
@@ -107,23 +107,6 @@ fn post_form(
         .unwrap()
 }
 
-fn post_json(
-    console: &Console,
-    token: &str,
-    path: &str,
-    body: &Value,
-) -> reqwest::blocking::Response {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap()
-        .post(format!("{}{path}", console.address))
-        .bearer_auth(token)
-        .json(body)
-        .send()
-        .unwrap()
-}
-
 fn availability<'a>(view: &'a Value, harness: &str) -> Vec<&'a str> {
     view["harnesses"]
         .as_array()
@@ -133,15 +116,6 @@ fn availability<'a>(view: &'a Value, harness: &str) -> Vec<&'a str> {
         .flat_map(|row| row["routes"].as_array().unwrap())
         .map(|route| route["availability"].as_str().unwrap())
         .collect()
-}
-
-fn machine<'a>(fleet: &'a Value, name: &str) -> &'a Value {
-    fleet["machines"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|machine| machine["name"] == name)
-        .unwrap_or_else(|| panic!("{name} missing: {fleet:#}"))
 }
 
 /// Each login row's Harness and machines, in order.
@@ -378,7 +352,7 @@ fn fleet_plan_usage_groups_shared_logins_and_keeps_an_offline_peer_cached() {
     ];
     assert_eq!(logins(&fleet), expected, "{fleet:#}");
     let shared = &fleet["harnesses"][0];
-    assert_eq!(shared["login"], "organization org-1 · me@example.test");
+    assert_eq!(shared["identity"], "organization org-1 · me@example.test");
     assert_eq!(shared["observed_on"], "remote");
     assert_eq!(shared["windows"][0]["used_percent"], 70.0);
     let routed: Vec<_> = shared["routes"]
@@ -453,20 +427,6 @@ fn fleet_plan_usage_groups_shared_logins_and_keeps_an_offline_peer_cached() {
     assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown Fleet machine"));
 }
 
-/// `console report add` on `home`, the token on stdin.
-fn pair_report(home: &Path, address: &str, token: &str) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
-        .args(["console", "report", "add", "hub", address])
-        .env("HOME", home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let _ = writeln!(child.stdin.take().unwrap(), "{token}");
-    child.wait_with_output().unwrap()
-}
-
 #[test]
 fn a_pushed_plan_usage_view_shows_the_worker_read_only_on_the_hub() {
     let hub_home = tempfile::tempdir().unwrap();
@@ -516,7 +476,7 @@ fn a_pushed_plan_usage_view_shows_the_worker_read_only_on_the_hub() {
             .is_none()
     );
 
-    let paired = pair_report(worker_home.path(), &hub.address, &token);
+    let paired = pair(worker_home.path(), "hub", &hub.address, &token);
     assert!(paired.status.success(), "{paired:?}");
     let pushed = thirdshift(worker_home.path(), &["plan-usage", "--push"]);
     assert!(pushed.status.success(), "{pushed:?}");
@@ -582,4 +542,19 @@ fn a_finished_command_pushes_its_machines_plan_usage() {
         .find(|login| login["harness"] == "claude" && login["machines"] == json!([HOLDER]))
         .unwrap_or_else(|| panic!("{fleet:#}"));
     assert_eq!(claude["windows"][0]["used_percent"], 42.0, "{claude:#}");
+}
+
+#[test]
+fn a_finished_command_without_report_destinations_builds_and_warns_nothing() {
+    let scenario = support::Scenario::new();
+    // Saved Plan usage that cannot be read: building a report would fail.
+    fs::create_dir_all(scenario.path("home/.thirdshift/plan-usage.json")).unwrap();
+    scenario.agent_does_for(
+        7,
+        "echo 7 > issue-7.txt\ngit add issue-7.txt\ngit commit -q -m 'Work on 7'\n\
+         gh pr create --base main --head issue-7 --title 'Work on 7' --body 'Closes #7'\n",
+    );
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(!result.stderr.contains("not reported"), "{}", result.stderr);
 }

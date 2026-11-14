@@ -79,6 +79,8 @@ struct Page {
     logins: Vec<Login>,
     selector: Machines,
     harnesses: [&'static str; 5],
+    /// What a view without rows says, as the CLI does.
+    empty: &'static str,
     /// The CLI twin of what is shown.
     cli: String,
     now: DateTime<Utc>,
@@ -143,13 +145,13 @@ pub(super) async fn show(
 ) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
-        let person = viewer.fleet_person();
+        let capture = fleet::Capture::new(&config, viewer.fleet_person());
         let selection = selection(&query)?;
-        let shown = crate::plan_usage::show(&config, &selection, person)?;
+        let shown = crate::plan_usage::show(&config, &selection, &capture)?;
         if format == super::api::Format::Json {
             return Ok(axum::Json(shown.json()?).into_response());
         }
-        let local = super::fleet_control::local_name(&config);
+        let local = capture.local().to_owned();
         let (chosen, machines, logins, now) = match shown {
             Shown::Local(view) => {
                 let now = view.now;
@@ -167,8 +169,8 @@ pub(super) async fn show(
         cli.push("--json".into());
         let selector = Machines {
             chosen,
-            fleet: fleet::default_view(&config, person),
-            others: fleet::others(&config, person),
+            fleet: capture.default_view(),
+            others: capture.others(),
             local,
         };
         Ok(axum::response::Html(
@@ -179,6 +181,7 @@ pub(super) async fn show(
                 logins,
                 selector,
                 harnesses: crate::plan_usage::observation::SUBSCRIPTION.map(|h| h.name()),
+                empty: crate::plan_usage::EMPTY,
                 cli: crate::args::shell_command(cli),
                 now,
             }
