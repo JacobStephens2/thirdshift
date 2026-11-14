@@ -408,6 +408,9 @@ fn unsupported_jq(jq: Option<&str>) -> ! {
 fn pr_create(state: &mut Json, flags: &Flags) {
     let n = prs(state).len() + 1;
     let url = format!("https://github.com/{}/pull/{n}", state.at("repo").str());
+    let body = flag(flags, "body-file")
+        .map(|path| fs::read_to_string(path).unwrap())
+        .unwrap_or_else(|| flag(flags, "body").unwrap_or("").to_owned());
     state.at_mut("prs").items_mut().push(object([
         ("number", number(n)),
         ("url", string(&url)),
@@ -428,7 +431,7 @@ fn pr_create(state: &mut Json, flags: &Flags) {
         ),
         ("isDraft", Bool(flags.contains_key("draft"))),
         ("title", string(flag(flags, "title").unwrap_or(""))),
-        ("body", string(flag(flags, "body").unwrap_or(""))),
+        ("body", string(body)),
     ]));
     save(state);
     println!("{url}");
@@ -527,6 +530,7 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
             pr.get("reviewDecision").cloned().unwrap_or(string("")),
         ),
         ("body", pr.get("body").cloned().unwrap_or(string(""))),
+        ("title", pr.get("title").cloned().unwrap_or(string(""))),
         (
             "mergeCommit",
             match pr.get("mergeCommit") {
@@ -2160,7 +2164,7 @@ fn pr_patch(state: &mut Json, args: &[&str]) {
 /// release workflow run on a commit.
 fn run_list(state: &mut Json, flags: &Flags) {
     let supported = [
-        "branch", "workflow", "event", "commit", "limit", "json", "jq",
+        "branch", "workflow", "event", "commit", "limit", "json", "jq", "repo",
     ];
     let unsupported: Vec<String> = flags
         .keys()
@@ -2177,6 +2181,12 @@ fn run_list(state: &mut Json, flags: &Flags) {
         );
     }
     let fields: &[&str] = match flag(flags, "jq") {
+        None if flag(flags, "json") == Some("databaseId,attempt,headSha,status,conclusion") => {
+            &["databaseId", "attempt", "headSha", "status", "conclusion"]
+        }
+        None if flag(flags, "json") == Some("headSha,status,conclusion") => {
+            &["headSha", "status", "conclusion"]
+        }
         Some(LATEST_RUN_LINE) => &["headSha", "status", "conclusion"],
         Some(RELEASE_RUN_LINE) => &["databaseId", "url", "status", "conclusion", "attempt"],
         jq => unsupported_jq(jq),
@@ -2219,6 +2229,21 @@ fn run_list(state: &mut Json, flags: &Flags) {
         listed.push(shown);
     }
     save(state);
+    if flag(flags, "jq").is_none() {
+        let records: Vec<Json> = listed
+            .iter()
+            .take(limit)
+            .map(|run| {
+                let mut record = object([]);
+                for field in fields {
+                    record.set(field, run.at(field).clone());
+                }
+                record
+            })
+            .collect();
+        println!("{}", Array(records).dump());
+        return;
+    }
     for run in listed.iter().take(limit) {
         let line: Vec<String> = fields.iter().map(|field| run.at(field).python()).collect();
         println!("{}", line.join(" "));
@@ -2248,7 +2273,8 @@ fn run_view(state: &Json, positional: &[String], flags: &Flags) {
 /// `gh release view <tag> --json url --jq .url`: the Release's URL, for a tag
 /// on origin.
 fn release_view(state: &Json, positional: &[String], flags: &Flags) {
-    if flag(flags, "json") != Some("url") || flag(flags, "jq") != Some(".url") {
+    let native = flag(flags, "json") == Some("url,isDraft");
+    if !native && (flag(flags, "json") != Some("url") || flag(flags, "jq") != Some(".url")) {
         die(
             &format!("fake gh: unsupported release view flags {flags:?}"),
             2,
@@ -2285,6 +2311,13 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
     );
     if !tagged.status.success() {
         die("release not found", 1);
+    }
+    if native {
+        println!(
+            "{{\"url\":\"https://github.com/{}/releases/tag/{tag}\",\"isDraft\":false}}",
+            state.at("repo").str()
+        );
+        return;
     }
     println!(
         "https://github.com/{}/releases/tag/{tag}",
@@ -3107,6 +3140,14 @@ pub fn main(args: Vec<String>) {
         ["pr", "edit", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             pr_edit(&mut state, &positional, &flags);
+        }
+        ["pr", "close", rest @ ..] => {
+            let (positional, _) = parsed(rest);
+            let at = selected_pr(&state, &positional[0]);
+            let pr = &mut state.at_mut("prs").items_mut()[at];
+            ensure_open(pr);
+            pr.set("state", string("CLOSED"));
+            save(&state);
         }
         ["pr", "merge", rest @ ..] => {
             let (positional, flags) = parsed(rest);

@@ -4,6 +4,187 @@ use std::time::Instant;
 const RECORDS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn release_start_requires_admin_including_the_named_person() {
+    let scenario = fixture();
+    scenario.user_config_is("[console]\nport = 0\nallowed_emails = ['owner@example.test']\n");
+    let console = server(&scenario);
+    let request = json!({"command":"release", "repository":"acme/unknown", "version":"1.2.3", "with_experiment":true,
+        "harness":"codex", "model":"model-1", "effort":"high", "email":{"mode":"never"}});
+    for path in ["/api/v1/runs", "/api/v1/start"] {
+        for scope in ["read", "run", "read,run"] {
+            let token = tokens::create(
+                &scenario.path("home"),
+                &format!("{path}-{scope}"),
+                &["--scopes", scope],
+            );
+            let response = reqwest::blocking::Client::new()
+                .post(format!("{}{path}", console.address))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                403,
+                "{path} {scope}: {}",
+                response.text().unwrap()
+            );
+        }
+    }
+    let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
+    for path in ["/api/v1/runs", "/api/v1/start"] {
+        let response = reqwest::blocking::Client::new()
+            .post(format!("{}{path}", console.address))
+            .bearer_auth(&admin)
+            .json(&request)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), 422, "{}", response.text().unwrap());
+        let error = response.json::<Value>().unwrap();
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("no known Launch directory for acme/unknown"),
+            "{error}"
+        );
+    }
+    api::cli(
+        &scenario.path("home"),
+        &[
+            "console",
+            "scopes",
+            "--email",
+            "owner@example.test",
+            "--scopes",
+            "read,run",
+            "--json",
+        ],
+    );
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/start", console.address))
+        .bearer_auth(admin)
+        .header("X-Thirdshift-Person", "owner@example.test")
+        .json(&request)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 403, "{}", response.text().unwrap());
+    assert!(!scenario.path("claude-calls.json").exists());
+}
+
+#[test]
+fn release_start_schema_exposes_pass_bumps_and_standard_options() {
+    let scenario = fixture();
+    let console = server(&scenario);
+    let document = api::json(console.get("/api/v1/openapi.json"));
+    for path in ["/api/v1/runs", "/api/v1/start"] {
+        let operation = &document["paths"][path]["post"];
+        assert_eq!(operation["x-command-scopes"]["release"], "admin");
+        assert_eq!(operation["x-command-scopes"]["ticket"], "run");
+        let release = operation["requestBody"]["content"]["application/json"]["schema"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| variant["properties"]["command"]["const"] == "release")
+            .unwrap();
+        assert_eq!(release["x-scope"], "admin");
+        assert_eq!(release["required"], json!(["repository", "command"]));
+        let fields: std::collections::BTreeSet<_> = release["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            fields,
+            std::collections::BTreeSet::from([
+                "command",
+                "repository",
+                "version",
+                "bump",
+                "with_experiment",
+                "email",
+                "harness",
+                "model",
+                "effort"
+            ])
+        );
+    }
+    let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
+    for request in [
+        json!({"command":"release", "repository":"acme/widgets", "version":"1.2.3", "bump":"patch"}),
+        json!({"command":"release", "repository":"acme/widgets", "bump":"invalid"}),
+        json!({"command":"release", "repository":"acme/widgets", "version":"--help"}),
+        json!({"command":"release", "repository":"acme/widgets", "version":"1.2.3", "merge":true}),
+        json!({"repository":"acme/widgets", "issue":7}),
+    ] {
+        let response = post(&console, &admin, &request);
+        let expected = if request["command"] == "release" {
+            422
+        } else {
+            403
+        };
+        assert_eq!(
+            response.status(),
+            expected,
+            "{request}: {}",
+            response.text().unwrap()
+        );
+    }
+}
+
+#[test]
+fn release_start_accepts_versionless_and_pinned_passes_with_admin_scope() {
+    let scenario = fixture();
+    let output = Command::new("git")
+        .current_dir(scenario.launch_dir())
+        .args([
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/JacobStephens2/thirdshift.git",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let mut state = scenario.gh_state();
+    state["rate_limits"] = json!({"core":{"remaining":0,"reset":(chrono::Utc::now() + chrono::Duration::hours(1)).timestamp()}});
+    scenario.write_gh_state(&state);
+    let console = server(&scenario);
+    let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
+    for path in ["/api/v1/start", "/api/v1/runs"] {
+        for bump in [None, Some("major"), Some("minor"), Some("patch")] {
+            let mut request = json!({"command":"release", "repository":"JacobStephens2/thirdshift", "with_experiment":true});
+            if let Some(bump) = bump {
+                request["bump"] = json!(bump);
+            }
+            let response = reqwest::blocking::Client::new()
+                .post(format!("{}{path}", console.address))
+                .bearer_auth(&admin)
+                .json(&request)
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let ended = response.json::<Value>().unwrap();
+            assert_eq!(ended["outcome"], "skipped", "{request}: {ended}");
+            assert!(
+                ended["reason"].as_str().unwrap().contains("Quota wait"),
+                "{ended}"
+            );
+        }
+    }
+    let cronjobs = api::json(console.get("/api/v1/cronjobs"));
+    assert!(
+        cronjobs["pass_starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pass| pass["kind"] == "Release run"),
+        "{cronjobs}"
+    );
+}
+
+#[test]
 fn targeted_fix_keeps_run_scope_csrf_and_launch_directory_checks() {
     let scenario = fixture();
     let console = server(&scenario);

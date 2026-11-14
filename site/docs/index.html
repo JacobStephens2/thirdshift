@@ -789,7 +789,7 @@ address&#39;s scopes, including the Security finding limits above.</p>
 </tr>
 <tr>
 <td><code>admin</code></td>
-<td>User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording</td>
+<td>Release starts; User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording</td>
 </tr>
 <tr>
 <td><code>report</code></td>
@@ -1098,7 +1098,14 @@ which also starts a Spec run when the issue has Tickets. Every request names
 <td><code>experiment</code></td>
 <td>Structured <code>experiment</code> options: <code>candidate</code>, <code>baseline</code>, per-arm Harness/Model/Effort, <code>suite</code> array, sampling and timeout settings, optional <code>release</code> and <code>yes</code></td>
 </tr>
+<tr>
+<td><code>release</code></td>
+<td>Requires <code>admin</code> scope; optional <code>version</code> (<code>X.Y.Z</code>) or <code>bump</code> (<code>major</code>, <code>minor</code>, <code>patch</code>), mutually exclusive; omit both for automatic minor/patch selection; optional <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>; repository must be <code>JacobStephens2/thirdshift</code></td>
+</tr>
 </tbody></table>
+<p><code>POST /api/v1/start</code> is an alias of this path. Release starts require <code>admin</code>
+scope; the other Commands require <code>run</code>. The Console shows a separate Release
+run form to administrators, including administrators whose scopes omit <code>run</code>.</p>
 <p>Booleans use <code>true</code> or <code>false</code>. All options and combinations are checked by
 the CLI argument parser; for example, Architect <code>plan_only</code> refuses options
 for a dispatched run. Issue and pull request URLs must belong to the named
@@ -4027,6 +4034,97 @@ cargo test
 </div></details>
 <details class="fold"><summary><h2>Releasing</h2></summary>
 <div class="manual-content" id="releasing">
+<details class="fold"><summary><h3>Release runs</h3></summary>
+<div class="manual-content" id="release-runs">
+<p>From a clone whose <code>origin</code> is <code>JacobStephens2/thirdshift</code>, run
+<code>thirdshift release [&lt;version&gt; | --major | --minor | --patch]</code> on Linux. An explicit version must be plain <code>X.Y.Z</code>,
+without leading zeros, and greater than the version on freshly fetched <code>main</code>.
+The running binary uses Git objects and temporary detached worktrees, leaving
+the Launch directory&#39;s checked-out branch and uncommitted work alone.</p>
+<p>It chooses the newest <code>main</code> commit descending from the last release tag whose
+push CI succeeded. It waits with periodic progress lines while candidates have
+pending CI. Explicit-version runs fail when none qualifies after CI completes. One tool-less
+summary Session runs in a fresh-home sandbox with its Session trace attached to
+the Release run. Failed or empty summaries fall back to GitHub generated notes
+outside the summary markers, so the post-release notes job does not repeat them.</p>
+<p>The Command pushes <code>release-&lt;version&gt;</code>, opens <code>Release &lt;version&gt;</code> into <code>main</code>,
+waits for checks and mergeability, pushes <code>v&lt;version&gt;</code> at that validated bump
+head, waits for the release workflow and merges the bump PR. It does not run
+<code>thirdshift update</code>. After taking both locks it discovers unfinished release
+branches, pull requests and unpublished tags. A Pass automatically resumes an
+exact-bump branch or ready PR, and recovers a completed failed release workflow
+only after verifying that its GitHub Release was never published. A draft PR,
+non-bump changes or an unverifiable publication lookup produces a quiet,
+deduplicated skip naming the blocked release. An explicit version resumes that
+version and refuses another live unfinished version with recovery instructions.
+Published GitHub Releases are final: their tags are never moved.</p>
+<p>While waiting on the bump PR, a Merge conflict or completed failing check can
+start one in-process targeted Fix run with <code>--no-merge --no-base-fix</code>. Every
+adopted head must still have the exact tree of its main merge-base plus the Cargo
+version bump. A draft, unresolved failure or conflict stops before tagging.
+When the content base changes, requested Experiments and release notes refresh.</p>
+<p>Experiments are off by default. <code>--with-experiment</code> pins the selected content
+commit across interruptions and runs or resumes the release Experiment from the
+running binary, on touched Eval suites against the last published release tag.
+Pending rechecks and leak decisions wait with progress lines. A failed or
+inconclusive Verdict requires <code>release anyway? [y/N]</code> on a terminal; unattended
+runs fail. Console Start&#39;s <strong>Run release Experiment</strong> checkbox and the admin-only
+start API&#39;s <code>with_experiment</code> boolean select the same behavior.</p>
+<p><code>--review</code> requires terminal stdin and is checked before Setup or network work.
+It prints the summary and offers accept, <code>$EDITOR</code> edit or cancel. It is a
+documented CLI-only flag because it needs the maintainer&#39;s local terminal.</p>
+<p>With no version, the command is a Release Pass. It skips quietly with exit <code>0</code>
+and no Run notification during a live Experiment or Quota wait, while either
+release lock is held, when nothing changed or only non-shipped paths changed,
+or when every eligible main push CI completed non-green. The Activity log keeps
+one skip entry until its reason changes; Cron jobs shows the latest Pass firing.
+Release Passes use their own locks and run outside the Command limit.</p>
+<p>Eligible commits must differ from the last release tag in compiled Rust source,
+embedded Factory skills or Processes, Cargo manifest/lockfile, dist or Rust
+toolchain configuration, <code>README.md</code>, <code>LICENSE</code>, release/publish workflows or
+release scripts. Documentation, website, Day shift agent skills and tests alone
+do not trigger a release. The newest eligible green commit is selected
+immediately, even when a newer candidate is still waiting for CI.</p>
+<p>Without a bump flag, the same fresh-home sandboxed, traced Session chooses
+<code>minor</code> or <code>patch</code> and writes the summary from merged pull requests and the two
+candidate versions. New CLI commands/flags, Console pages/actions, config keys
+and user-visible contract changes call for minor; fixes and internal refinements
+call for patch. Automatic selection never chooses major: invalid output or a
+failed Session falls back to patch, using generated notes when the summary is
+unusable. <code>--major</code>, <code>--minor</code> and <code>--patch</code> pin the bump and ask only for a summary.</p>
+<p>Use <code>--harness</code>, <code>--model</code>, <code>--effort</code>, <code>--email</code>, <code>--email-unless-merged</code> or
+<code>--no-email</code> as on other Commands. A machine-local release lock and atomic
+origin reservation serialize releases independently of the Command limit;
+the bump PR has <code>in-progress</code> while the run is live. Factory Sessions cannot
+start releases. <code>thirdshift stop</code> releases the locks and live label.</p>
+<p>Live Release runs appear in Working. Published and merged runs appear in Done
+and stay quiet under <code>email-unless-merged</code>. Failures, including publication
+without merging, appear in Needs you and email even under that policy. They
+settle when the bump PR merges or closes, a later Release run starts, or a
+Dismissal covers them. Cron jobs recognizes versioned and versionless releases.
+Console Start controls and <code>POST /api/v1/start</code> (also <code>/api/v1/runs</code>) require
+<code>admin</code> scope for releases; <code>run</code> scope and narrowed viewers are refused.</p>
+</div></details>
+<details class="fold"><summary><h3>Release safeguards</h3></summary>
+<div class="manual-content" id="release-safeguards">
+<p>The repository owner can run <code>bash scripts/setup-release-tags.sh</code> to provision
+or verify the <code>v*</code> tag rulesets on <code>JacobStephens2/thirdshift</code>. Creation and
+updates allow only Repository Admin; a separate rule with no bypass blocks
+deletion. The interactive wizard guides browser changes and verification;
+automated tests never modify live rulesets. See <a href="https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets">GitHub&#39;s ruleset rules</a>.</p>
+<p>Review Passes (<code>review --author</code>) and Fix Passes skip <code>release-*</code> pull requests
+targeting <code>main</code>, leaving their version-only heads to the Release run. Explicit
+<code>thirdshift fix &lt;pr-url&gt; --no-merge --no-base-fix</code> still repairs those PRs.
+Session destructive-command signals flag <code>thirdshift release</code> and tag pushes
+using <code>git push --tags</code> or <code>refs/tags/</code> refspecs.</p>
+<p>On tag pushes, the release workflow checks <code>github.actor</code> is <code>JacobStephens2</code>
+and the tagged Git tree is exactly a commit reachable on <code>origin/main</code> with
+only the root Cargo manifest and lockfile bumped to the tag&#39;s version.
+This gate precedes planning, artifact builds/hosting and crates.io publication.
+Embedded Process changes exercise the release workflow alongside skills and Rust source.</p>
+</div></details>
+<details class="fold"><summary><h3>Legacy release script</h3></summary>
+<div class="manual-content" id="legacy-release-script">
 <p>Run <code>scripts/release.sh</code> on Linux. It refuses other hosts before fetching,
 writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
 such as Lima; on Windows, use WSL2.</p>
@@ -4110,6 +4208,7 @@ moving the branch or changing the PR body. Tagged and merged releases keep
 their existing resume behavior.</p>
 <p>On resume after a completed failed release workflow with no GitHub Release yet, the script looks for the newest <code>main</code> commit newer than the bump commit&#39;s parent whose latest push <code>CI</code> run succeeded. When one exists, it re-cuts <code>release-&lt;version&gt;</code> from that commit: it runs the release Experiment when <code>--with-experiment</code> is passed, regenerates the summary and version diff (honoring <code>--review</code>), force-pushes the new bump commit to the branch, updates the open PR body, waits for its new checks, then force-pushes <code>v&lt;version&gt;</code> to the new bump commit. An old merged bump gets a new bump PR. The summary and Experiment exclude the unpublished tag and retain the prior release boundary; release Experiments accept <code>--baseline &lt;ref&gt;</code> for this recovery. It waits for the new release workflow before merging. A recovery stopped between pushing the branch and moving the tag resumes that checked version bump. If no newer green commit exists, it automatically runs <code>gh run rerun --failed &lt;run id&gt;</code>, prints a stamped progress line, and waits for the rerun before merging. A published GitHub Release is never re-cut: its branch and tag are never moved. If the publication check cannot be completed, the script refuses and moves nothing. A tag on an unrelated commit is still refused. You can stop either wait with Ctrl-C and run the script again to continue.</p>
 <p>The tag starts the release workflow, generated by <a href="https://github.com/axodotdev/cargo-dist"><code>dist</code></a> from <code>dist-workspace.toml</code>, with the event policy applied by <code>python3 scripts/generate-release.py</code> (<code>--check</code> verifies freshness). It builds the two Linux musl binaries and the installer, smoke-checks that the <code>x86_64</code> binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, checks the <code>aarch64</code> binary&#39;s static linking and version on Ubuntu, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release&#39;s body with the bump pull request&#39;s summary, then notes generated from the merged pull requests, then the install instructions. <a href="https://github.com/JacobStephens2/thirdshift/blob/main/scripts/release-notes.sh"><code>scripts/release-notes.sh</code></a> builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.</p>
+</div></details>
 </div></details>
 <details class="fold"><summary><h2>Credits and license</h2></summary>
 <div class="manual-content" id="credits-and-license">

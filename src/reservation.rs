@@ -17,6 +17,15 @@ pub struct Reservation {
 }
 
 impl Reservation {
+    /// Release runs arbitrate independently of issue work and Command limits.
+    pub(crate) fn release(launch: &Git) -> Result<Option<Self>> {
+        Self::take_ref(
+            launch,
+            "refs/thirdshift/reservations/release".into(),
+            "Release run",
+        )
+    }
+
     /// Observe an issue's reservation without acquiring or changing it. A
     /// linked issue in another repository must be read from that repository,
     /// never from a same-numbered ref on the Launch directory's origin.

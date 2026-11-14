@@ -128,6 +128,7 @@ pub enum CommandKind {
     Process,
     Review,
     Fix,
+    Release,
 }
 
 impl CommandKind {
@@ -143,6 +144,7 @@ impl CommandKind {
             Self::Process => "process",
             Self::Review => "review",
             Self::Fix => "fix",
+            Self::Release => "release",
         }
     }
 
@@ -158,6 +160,7 @@ impl CommandKind {
             "process" => Some(Self::Process),
             "review" => Some(Self::Review),
             "fix" => Some(Self::Fix),
+            "release" => Some(Self::Release),
             _ => None,
         }
     }
@@ -177,6 +180,9 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
+    ReleaseRun {
+        pass: bool,
+    },
     ReviewRun {
         pass: bool,
     },
@@ -220,6 +226,7 @@ pub enum Work<'a> {
     ScoringRun(&'a Repo),
     ReviewRun(&'a Repo),
     FixRun(&'a Repo),
+    ReleaseRun(&'a Repo),
     /// Triage on a Report, or on the retained explicit or Pass-selected issue.
     TriageRun {
         repo: &'a Repo,
@@ -242,16 +249,18 @@ pub enum Pass {
     Review,
     Fix,
     Triage,
+    Release,
 }
 
 impl Pass {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Architect,
         Self::Pickup,
         Self::Security,
         Self::Review,
         Self::Fix,
         Self::Triage,
+        Self::Release,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -262,6 +271,7 @@ impl Pass {
             Self::Review => "Review",
             Self::Fix => "Fix",
             Self::Triage => "Triage",
+            Self::Release => "Release",
         }
     }
 }
@@ -291,6 +301,24 @@ impl<'de> serde::Deserialize<'de> for Pass {
 /// The production command's complete record, shared with reader threads.
 static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
     LazyLock::new(|| Mutex::new(Record::new(OnMachine)));
+
+/// Temporarily record an in-process Command under its owning Command. Restores
+/// the parent's writer and quota attachment even when nested work fails.
+pub(crate) struct Nested(Option<Record<OnMachine>>);
+
+pub(crate) fn nested() -> Nested {
+    let mut current = record();
+    let mut child = Record::new(OnMachine);
+    child.child_of(current.record_path());
+    Nested(Some(std::mem::replace(&mut *current, child)))
+}
+
+impl Drop for Nested {
+    fn drop(&mut self) {
+        *record() = self.0.take().expect("nested recording restored once");
+        attach_quota_budget();
+    }
+}
 
 const PARENT_RECORD: &str = "THIRDSHIFT_PARENT_RECORD";
 const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
@@ -665,6 +693,7 @@ impl<'a> Work<'a> {
             Self::ScoringRun(_) => "scoring-run",
             Self::ReviewRun(_) => "review-run",
             Self::FixRun(_) => "fix-run",
+            Self::ReleaseRun(_) => "release-run",
             Self::TriageRun { .. } => "triage-run",
             Self::Experiment(_) => "experiment",
             Self::Process { name, .. } => return Identity::custom(name, None),
@@ -681,6 +710,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::ReviewRun(_) => Some(Stage::CodeReview),
             Work::FixRun(_) => Some(Stage::PullRequest),
+            Work::ReleaseRun(_) => Some(Stage::PullRequest),
             Work::TriageRun { .. } => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
@@ -698,6 +728,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(repo)
             | Work::ReviewRun(repo)
             | Work::FixRun(repo)
+            | Work::ReleaseRun(repo)
             | Work::TriageRun { repo, .. }
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
@@ -715,6 +746,7 @@ impl<'a> Work<'a> {
                 CommandKind::Scoring => Kind::ScoringRun,
                 CommandKind::Review => Kind::ReviewRun,
                 CommandKind::Fix => Kind::FixRun,
+                CommandKind::Release => Kind::ReleaseRun,
                 CommandKind::Triage => Kind::TriageRun,
                 CommandKind::Experiment => Kind::Experiment,
                 CommandKind::Process => Kind::Process,
@@ -727,6 +759,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Kind::ScoringRun,
             Work::ReviewRun(_) => Kind::ReviewRun,
             Work::FixRun(_) => Kind::FixRun,
+            Work::ReleaseRun(_) => Kind::ReleaseRun,
             Work::TriageRun { .. } => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
@@ -744,6 +777,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
+            | Work::ReleaseRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

@@ -484,7 +484,16 @@ const PAGES: &[PageRoute] = &[
             "thirdshift score",
             "thirdshift triage",
             "thirdshift experiment HEAD",
+            "thirdshift release 1.2.3",
         ],
+        method: Method::POST,
+        view: View::StartRun,
+    },
+    PageRoute {
+        path: "/api/v1/start",
+        api: "/api/v1/start",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift release 1.2.3"],
         method: Method::POST,
         view: View::StartRun,
     },
@@ -1183,7 +1192,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
                 "API route needs a scope"
             );
             let api_handler = handler.clone().layer(axum::Extension(api::Format::Json));
-            let api_handler = if let Some(scope) = page.scope {
+            let api_handler = if matches!(page.view, View::StartRun | View::StartOptions) {
+                // The request's Command chooses run or admin after this shared gate.
+                api_handler.layer(middleware::from_fn(auth::require_start_scope))
+            } else if let Some(scope) = page.scope {
                 api_handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
             } else {
                 api_handler

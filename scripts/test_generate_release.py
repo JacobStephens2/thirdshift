@@ -8,6 +8,7 @@ import unittest
 
 
 GENERATOR = Path(__file__).with_name("generate-release.py").resolve()
+TAG_GUARD = GENERATOR.with_name("release-tag-guard.py")
 
 
 class GenerateRelease(unittest.TestCase):
@@ -59,9 +60,15 @@ class GenerateRelease(unittest.TestCase):
             self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", expected)
             self.assertIn("    paths:\n", expected)
             self.assertIn("      - 'src/**'", expected)
+            self.assertIn("      - 'processes/**'", expected)
             self.assertIn("  push:\n    tags: ['v*']", expected)
+            self.assertIn("  release-tag-guard:\n", expected)
+            self.assertIn('run: test "$RELEASE_ACTOR" = JacobStephens2', expected)
+            self.assertIn("python3 scripts/release-tag-guard.py", expected)
+            self.assertIn("fetch-depth: 0", expected)
+            self.assertIn("  plan:\n    needs: [release-tag-guard]\n", expected)
             self.assertIn(
-                "  plan:\n    permissions:\n      \"actions\": \"write\"\n"
+                "  plan:\n    needs: [release-tag-guard]\n    permissions:\n      \"actions\": \"write\"\n"
                 "      \"contents\": \"read\"\n    timeout-minutes: 5\n"
                 "    runs-on: ubuntu-24.04",
                 expected,
@@ -73,7 +80,7 @@ class GenerateRelease(unittest.TestCase):
                 "      - name: Install dependencies\n",
                 expected,
             )
-            self.assertEqual(expected.count("    timeout-minutes: 5\n"), 2)
+            self.assertEqual(expected.count("    timeout-minutes: 5\n"), 3)
             self.assertIn(
                 "  build-local-artifacts:\n    permissions:\n"
                 "      \"actions\": \"write\"\n      \"contents\": \"read\"\n",
@@ -123,6 +130,111 @@ class HardenReleaseWorkflow(unittest.TestCase):
         )
         with self.assertRaises(RuntimeError):
             harden(upstream)
+
+
+class ReleaseTagGuard(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Release test")
+        (self.root / "Cargo.toml").write_text(
+            '[package]\nname = "thirdshift"\nversion = "0.2.0"\n'
+        )
+        (self.root / "Cargo.lock").write_text(
+            'version = 4\n\n[[package]]\nname = "thirdshift"\nversion = "0.2.0"\n'
+            '\n[[package]]\nname = "dependency"\nversion = "1.0.0"\n'
+        )
+        (self.root / "source.rs").write_text("reviewed code\n")
+        self.commit("Reviewed source")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        for name in ["Cargo.toml", "Cargo.lock"]:
+            file = self.root / name
+            file.write_text(file.read_text().replace('"0.2.0"', '"0.3.0"'))
+        self.commit("Release 0.3.0")
+        self.git("tag", "-a", "v0.3.0", "-m", "Release")
+        self.event_commit = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.root, text=True).strip()
+
+    def commit(self, message):
+        self.git("add", ".")
+        self.git("commit", "-qm", message)
+
+    def guard(self, actor="JacobStephens2", tag="v0.3.0", sha=None):
+        return subprocess.run(
+            ["python3", str(TAG_GUARD)], cwd=self.root,
+            env=dict(os.environ, GITHUB_ACTOR=actor, GITHUB_REF_NAME=tag,
+                     GITHUB_SHA=sha or self.event_commit),
+            capture_output=True, text=True,
+        )
+
+    def test_accepts_exact_bump_of_reachable_main_content(self):
+        # main can move after the release candidate was selected.
+        self.git("checkout", "-q", "main")
+        self.git("reset", "--hard", self.base)
+        (self.root / "later.rs").write_text("later reviewed code\n")
+        self.commit("Later main")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        result = self.guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("exact Cargo version bump", result.stdout)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_refuses_other_actors_and_non_release_tags(self):
+        for actor, tag, reason in [
+            ("colleague", "v0.3.0", "github.actor"),
+            ("JacobStephens2", "thirdshift/0.3.0", "expected vX.Y.Z"),
+            ("JacobStephens2", "v0.03.0", "expected vX.Y.Z"),
+        ]:
+            with self.subTest(actor=actor, tag=tag):
+                result = self.guard(actor, tag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(reason, result.stderr)
+
+    def retag(self):
+        self.commit("Changed candidate")
+        self.git("tag", "-f", "v0.3.0")
+        self.event_commit = self.git("rev-parse", "HEAD")
+
+    def test_refuses_a_tag_that_moved_since_the_push_event(self):
+        result = self.guard(sha=self.base)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("push event", result.stderr)
+
+    def test_refuses_source_changes_outside_main(self):
+        (self.root / "source.rs").write_text("unreviewed code\n")
+        self.retag()
+        result = self.guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not an exact Cargo version bump", result.stderr)
+
+    def test_refuses_dependency_changes_inside_cargo_files(self):
+        lock = self.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('"1.0.0"', '"2.0.0"'))
+        self.retag()
+        result = self.guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not an exact Cargo version bump", result.stderr)
+
+    def test_refuses_versions_that_disagree_with_the_tag(self):
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text().replace('"0.3.0"', '"0.4.0"'))
+        self.retag()
+        result = self.guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not an exact Cargo version bump", result.stderr)
+
+    def test_refuses_file_mode_changes(self):
+        (self.root / "Cargo.toml").chmod(0o755)
+        self.retag()
+        result = self.guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not an exact Cargo version bump", result.stderr)
 
 
 if __name__ == "__main__":

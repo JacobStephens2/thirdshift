@@ -440,6 +440,7 @@ fn every_command_kind_records_suspension_in_its_live_stage() {
             },
         ),
         (Begin::FixRun { pass: false }, Work::FixRun(&repo)),
+        (Begin::ReleaseRun { pass: false }, Work::ReleaseRun(&repo)),
         (Begin::ReviewRun { pass: false }, Work::ReviewRun(&repo)),
         (Begin::Experiment, Work::Experiment(&repo)),
         (
@@ -836,11 +837,12 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
 }
 
 #[test]
-fn review_triage_and_fix_runs_save_their_run_metrics_at_completion() {
+fn session_commands_save_their_run_metrics_at_completion() {
     let time = |value: &str| DateTime::parse_from_rfc3339(value).unwrap();
     let repo = issue().repo();
     let review = Path::new("/sessions/review.jsonl");
     let triage = Path::new("/sessions/triage.jsonl");
+    let release = Path::new("/sessions/release.jsonl");
     let repairs = [
         Path::new("/sessions/repair-1.jsonl"),
         Path::new("/sessions/repair-2.jsonl"),
@@ -898,6 +900,16 @@ fn review_triage_and_fix_runs_save_their_run_metrics_at_completion() {
             ci_rounds: 2,
             review_findings: serde_json::Value::Null,
         },
+        Case {
+            begin: Begin::ReleaseRun { pass: false },
+            work: Work::ReleaseRun(&repo),
+            kind: "Release run",
+            stages: vec![(StageName::ReleaseSummary, Some(release))],
+            observed: 1,
+            repairs: 0,
+            ci_rounds: 0,
+            review_findings: serde_json::Value::Null,
+        },
     ];
     for case in cases {
         // Moving these fields out leaves the expectations readable on `case`.
@@ -911,7 +923,7 @@ fn review_triage_and_fix_runs_save_their_run_metrics_at_completion() {
         let memory = Scripted::default();
         {
             let mut memory = memory.0.lock().unwrap();
-            memory.observed_sessions = [review, triage, repairs[0], repairs[1]]
+            memory.observed_sessions = [review, triage, release, repairs[0], repairs[1]]
                 .map(PathBuf::from)
                 .to_vec();
             memory.files.insert(
@@ -1442,6 +1454,7 @@ fn skip(memory: &Scripted, pass: Pass, reason: &str) {
         Pass::Review => Begin::ReviewRun { pass: true },
         Pass::Fix => Begin::FixRun { pass: true },
         Pass::Triage => Begin::TriageRun { pass: true },
+        Pass::Release => Begin::ReleaseRun { pass: true },
     });
     record.configured(&config(true));
     record.eprint(reason);

@@ -53,6 +53,18 @@ Pass-selected issue when the Command starts, so failures retain the link.
 Older records and Report-based Triage without a target keep the repository and
 Command fallback; links are never inferred from failure messages.
 
+The Inbox's **Start work** controls offer **Start Release run** to callers with
+`admin` scope when `JacobStephens2/thirdshift` has a known Launch directory.
+Leave Version and Bump empty for an automatic minor/patch Release Pass, choose
+a pinned Bump, or supply an explicit `X.Y.Z` version. Choose Harness, Model, Effort and email preference,
+optionally check **Run release Experiment**, then confirm the request.
+The API accepts the same choice as `with_experiment: true`; it defaults to false.
+Interactive `release --review` stays in the CLI because it needs a local terminal.
+Both `POST /api/v1/start` and `POST /api/v1/runs` use
+the same structured request; `release` requires `admin`, while other Commands
+require `run`. Fleet choices apply the owning machine's current scopes,
+including the signed-in person's narrowed scopes.
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
@@ -379,8 +391,9 @@ The page reads like a terminal crontab: one monospace line per entry, schedule
 then command, with schedules highlighted in the current Theme. Long lines scroll
 horizontally within the listing; focus it to scroll with the arrow keys.
 No matching entries or no crontab shows an empty view; an unavailable `crontab`
-command or a read failure reports an error. This view never changes the crontab
-or starts a Command.
+command or a read failure reports an error. Release commands with an explicit
+version are recognized as Release runs. Run now offers confirmed starts of
+supported cron Passes; the inventory leaves the crontab unchanged.
 
 Scores (`/scores`, or `g q`) lists the sample by week and each criterion's
 calibration, from the same retained records as `thirdshift scores --json`.

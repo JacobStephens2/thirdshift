@@ -98,6 +98,8 @@ mod ready;
 #[cfg(target_os = "linux")]
 mod recovery;
 #[cfg(target_os = "linux")]
+mod release;
+#[cfg(target_os = "linux")]
 mod resend_key;
 #[cfg(target_os = "linux")]
 mod reservation;
@@ -173,8 +175,7 @@ use run::StartedBy;
 const HELP: &str = "\
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
-       thirdshift merge <number>                      Run it, then merge the pull request
-       thirdshift merge <Issue URL>                   Run, then merge the pull request
+       thirdshift merge <number> or thirdshift merge <Issue URL>  Run, then merge the pull request
        thirdshift --email <Issue URL>                 Run, then email the outcome
        thirdshift architect [<focus>]                 Review architecture, publish a plan and run it
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
@@ -186,6 +187,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
+       thirdshift release [<version> | --major | --minor | --patch] [--with-experiment] [--review]  Release or resume green shipped changes; no version runs a Pass
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -235,7 +237,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode, kimi), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
+Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, release without version, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
@@ -473,6 +475,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Release(args)) => return release(args),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
         Ok(Command::Review(command)) => return printed(processes::review::run(command)),
         Ok(Command::Fix(command)) => return fix(command),
@@ -603,6 +606,47 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Outcome::Skipped(skipped) => Ending::Skipped(skipped.into()),
         Outcome::Ran { review, dispatched } => Ending::Architect { review, dispatched },
     })
+}
+
+#[cfg(target_os = "linux")]
+fn release(args: args::ReleaseArgs) -> ExitCode {
+    if args.review && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return failure(&anyhow::anyhow!(
+            "release --review requires a terminal on standard input"
+        ));
+    }
+    if let Err(error) = release::outside_session() {
+        return failure(&error);
+    }
+    let flags = asks::Flags {
+        email: args.email,
+        harness: args.harness,
+        ..Default::default()
+    };
+    let (config, mut started) = match command::start(
+        Begin::ReleaseRun {
+            pass: args.version.is_none(),
+        },
+        |config| flags.notification(config),
+        About::ReleaseRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = flags.harness(&config);
+    started.built_with(&harness);
+    match release::run(
+        release::Request {
+            version: args.version.as_deref(),
+            bump: args.bump,
+            with_experiment: args.with_experiment,
+            review: args.review,
+        },
+        &mut harness,
+    ) {
+        Ok(None) => ExitCode::SUCCESS,
+        result => started.finish(Ending::Release(result.map(Option::unwrap))),
+    }
 }
 
 #[cfg(target_os = "linux")]

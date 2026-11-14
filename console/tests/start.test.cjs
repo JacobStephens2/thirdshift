@@ -10,6 +10,95 @@ let fixture;
 before(async () => { fixture = await startFixture(); });
 after(async () => { await fixture?.close(); });
 
+test('Release start requires admin, confirms an explicit version and preserves release options', async t => {
+  const release = await startFixture({}, 'JacobStephens2/thirdshift');
+  t.after(() => release.close());
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await release.page({ viewport });
+    t.after(() => page.context().close());
+    await page.getByText('Start work', { exact: true }).click();
+    await page.getByText('Start Release run', { exact: true }).click();
+    const form = page.locator('[data-start-form="release"]');
+    await form.getByLabel('Version', { exact: true }).fill('1.2.3');
+    await form.getByLabel('Run release Experiment', { exact: true }).check();
+    await form.getByLabel('Harness', { exact: true }).selectOption('codex');
+    await form.getByLabel('Model', { exact: true }).fill('model-1');
+    await form.getByLabel('Effort', { exact: true }).fill('high');
+    await form.getByLabel('Email', { exact: true }).selectOption('unless_merged');
+    await form.getByLabel('Email address', { exact: true }).fill('owner@example.test');
+    const requests = [];
+    await page.route('**/api/v1/runs', async route => {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ json: { version: 1, name: 'JacobStephens2/thirdshift release 1.2.3' } });
+    });
+    await form.getByRole('button', { name: 'Review release', exact: true }).click();
+    const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
+    await confirm.waitFor();
+    const request = {
+      command: 'release', repository: 'JacobStephens2/thirdshift', version: '1.2.3',
+      with_experiment: true,
+      harness: 'codex', model: 'model-1', effort: 'high',
+      email: { mode: 'unless_merged', address: 'owner@example.test' }
+    };
+    assert.deepEqual(JSON.parse(await confirm.locator('pre').textContent()), request);
+    assert.match(await confirm.textContent(), /release 1\.2\.3/);
+    assert.deepEqual(requests, []);
+    await confirm.getByRole('button', { name: 'Start now', exact: true }).click();
+    await page.locator('[data-start-result]').filter({ hasText: 'Started Command JacobStephens2/thirdshift release 1.2.3.' }).waitFor();
+    assert.deepEqual(requests, [request]);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    release.scopes('read,run');
+    await page.getByText('Start Release run', { exact: true }).waitFor({ state: 'detached' });
+    const denied = await page.evaluate(async request => {
+      const response = await fetch('/api/v1/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': document.querySelector('[data-start-area]').dataset.csrf },
+        body: JSON.stringify(request)
+      });
+      return response.status;
+    }, request);
+    assert.equal(denied, 403);
+    release.scopes('read,admin');
+    await page.locator('[data-start-release="true"]').waitFor({ state: 'attached' });
+    await page.getByText('Start work', { exact: true }).click();
+    await page.getByText('Start Release run', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Issue number or URL', { exact: true }).count(), 0);
+    await page.context().close();
+    release.scopes('read,security,act,run,admin');
+  }
+});
+
+test('Release start confirms automatic and pinned Passes and rejects version plus bump', async t => {
+  const release = await startFixture({}, 'JacobStephens2/thirdshift');
+  t.after(() => release.close());
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await release.page({ viewport });
+    t.after(() => page.context().close());
+    await page.getByText('Start work', { exact: true }).click();
+    await page.getByText('Start Release run', { exact: true }).click();
+    const form = page.locator('[data-start-form="release"]');
+    for (const bump of ['', 'major', 'minor', 'patch']) {
+      await form.getByLabel('Bump', { exact: true }).selectOption(bump);
+      await form.getByRole('button', { name: 'Review release', exact: true }).click();
+      const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
+      await confirm.waitFor();
+      const request = JSON.parse(await confirm.locator('pre').textContent());
+      assert.equal(request.command, 'release');
+      assert.equal(request.version, undefined);
+      assert.equal(request.bump, bump || undefined);
+      assert.match(await confirm.textContent(), bump ? new RegExp(`--${bump}`) : /automatic/);
+      await page.keyboard.press('Escape');
+      await confirm.waitFor({ state: 'hidden' });
+    }
+    await form.getByLabel('Version', { exact: true }).fill('1.2.3');
+    await form.getByRole('button', { name: 'Review release', exact: true }).click();
+    await page.locator('[data-start-result]').filter({ hasText: 'Version and Bump are mutually exclusive.' }).waitFor();
+    assert.equal(await page.getByRole('dialog', { name: 'Confirm start' }).count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.context().close();
+  }
+});
+
 test('Start Fix run confirms the pull request and defaults, cancels, and submits once', async t => {
   await fixture.readyPullRequest();
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {

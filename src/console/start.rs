@@ -77,6 +77,9 @@ pub(super) struct Request {
     repository: String,
     #[serde(default)]
     command: Kind,
+    version: Option<String>,
+    bump: Option<crate::release::Bump>,
+    with_experiment: Option<bool>,
     issue: Option<Issue>,
     merge: Option<bool>,
     email: Option<Email>,
@@ -117,6 +120,7 @@ pub(super) enum Kind {
     Score,
     Triage,
     Experiment,
+    Release,
 }
 
 #[derive(Deserialize)]
@@ -128,7 +132,7 @@ enum Order {
 }
 
 impl Kind {
-    pub(super) const ALL: [Self; 11] = [
+    pub(super) const ALL: [Self; 12] = [
         Self::Ticket,
         Self::Architect,
         Self::Pickup,
@@ -140,6 +144,7 @@ impl Kind {
         Self::Score,
         Self::Triage,
         Self::Experiment,
+        Self::Release,
     ];
 
     pub(super) fn word(self) -> &'static str {
@@ -155,6 +160,15 @@ impl Kind {
             Self::Score => "score",
             Self::Triage => "triage",
             Self::Experiment => "experiment",
+            Self::Release => "release",
+        }
+    }
+
+    pub(super) fn scope(self) -> super::Scope {
+        if self == Self::Release {
+            super::Scope::Admin
+        } else {
+            super::Scope::Run
         }
     }
 
@@ -172,6 +186,7 @@ impl Kind {
             Self::Skill => &["name", "issue"],
             Self::Score => &[],
             Self::Experiment => &["experiment"],
+            Self::Release => &["version", "bump", "with_experiment"],
             Self::Triage => &[
                 "report",
                 "read_machine",
@@ -204,7 +219,7 @@ impl Kind {
                 "security_fix",
                 "security_close",
             ],
-            Self::Triage => &["email", "harness", "model", "effort"],
+            Self::Triage | Self::Release => &["email", "harness", "model", "effort"],
             Self::Skill | Self::Score | Self::Experiment => &[],
         };
         own.iter().chain(flags).copied()
@@ -222,6 +237,7 @@ impl Kind {
             | Self::Fix
             | Self::Score
             | Self::Experiment => &[],
+            Self::Release => &[],
         }
     }
 }
@@ -258,6 +274,17 @@ impl Request {
         }
         if self.command == Kind::Experiment {
             args.extend(experiment::arguments(self.experiment.as_ref())?);
+        }
+        if self.command == Kind::Release {
+            if let Some(version) = &self.version {
+                args.push(version.clone());
+            }
+            if let Some(bump) = self.bump {
+                args.push(bump.flag().into());
+            }
+            if self.with_experiment == Some(true) {
+                args.push("--with-experiment".into());
+            }
         }
         if let Some(url) = &self.pull_request {
             let pr = crate::review::PullRequestUrl::parse(url)?;
@@ -303,6 +330,15 @@ impl Request {
         // The CLI decides allowed options and combinations. Also verify positional
         // JSON values stayed positional rather than becoming a CLI flag/subcommand.
         let parsed = crate::args::parse(&args)?;
+        if self.command == Kind::Release {
+            let crate::args::Command::Release(release) = &parsed else {
+                bail!("version must be an explicit release version");
+            };
+            ensure!(
+                release.version == self.version && release.bump == self.bump,
+                "version must be an explicit release version"
+            );
+        }
         if let crate::args::Command::Architect(parsed) = &parsed {
             ensure!(
                 parsed.focus == self.focus,
@@ -326,6 +362,9 @@ impl Request {
     fn check_fields(&self) -> Result<()> {
         let kind = self.command;
         for (present, field) in [
+            (self.version.is_some(), "version"),
+            (self.bump.is_some(), "bump"),
+            (self.with_experiment.is_some(), "with_experiment"),
             (self.issue.is_some(), "issue"),
             (self.name.is_some(), "name"),
             (self.pull_request.is_some(), "pull_request"),
@@ -454,6 +493,13 @@ pub(super) async fn submit(
     Extension(viewer): Extension<Viewer>,
     Json(request): Json<Request>,
 ) -> Response {
+    let scope = request.command.scope();
+    if !viewer.scopes.contains(&scope) {
+        return api::error(
+            axum::http::StatusCode::FORBIDDEN,
+            format!("Missing scope: {}", scope.name()),
+        );
+    }
     api::action(api::Format::Json, "/", move || start(request, viewer)).await
 }
 
@@ -515,6 +561,7 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
             | Kind::Fix
             | Kind::Process
             | Kind::Skill
+            | Kind::Release
             | Kind::Triage => {
                 Repo::of_origin(&format!("https://github.com/{}", directory.repository))
                     .context("known Launch directory must name a GitHub repository")?
