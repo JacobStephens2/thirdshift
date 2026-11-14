@@ -3473,7 +3473,7 @@ checked-out branch, or `base <branch>` / `--base <branch>`, in ascending number
 order. Only Trusted accounts are eligible; `--author <login>` / `author <login>`
 restricts selection to that account, which must itself be trusted. It skips
 `release-*` pull requests targeting `main`, leaving those version bumps to
-`scripts/release.sh`; an explicit `thirdshift fix <pr-url>` still repairs them.
+`thirdshift release`; an explicit `thirdshift fix <pr-url>` still repairs them.
 Neither `base` nor `author` can be combined with a targeted PR.
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
@@ -3593,7 +3593,7 @@ open pull request by that author, one per invocation. The Pass form requires
 authors who are not Trusted accounts, pull requests labelled `in-progress`,
 and heads already named as `reviewed_head` or `pushed_head` in a Review run's
 marker posted by the GitHub account thirdshift acts as. It skips `release-*`
-pull requests targeting `main`, which `scripts/release.sh` delivers; explicit
+pull requests targeting `main`, which `thirdshift release` delivers; explicit
 `review <PR URL>` still reviews them. It also skips a pull
 request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
