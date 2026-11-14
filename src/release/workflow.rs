@@ -28,10 +28,8 @@ pub(super) fn finish(
             let body = notes.body(git, github, cut, request.review, automatic)?;
             fetch(git)?;
             recovery::ensure_previous(git, github, cut.previous.as_deref())?;
-            if !(merged
-                || cut.recut
-                    && cut.tagged.is_some()
-                    && Version::parse(&cut.version)? == main_version(git)?)
+            if !((merged || cut.recut && cut.tagged.is_some())
+                && Version::parse(&cut.version)? == main_version(git)?)
             {
                 validate_version(git, &Version::parse(&cut.version)?)?;
             }

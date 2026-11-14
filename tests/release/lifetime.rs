@@ -296,16 +296,7 @@ exec -a gh "$RELEASE_REAL_GH" "$@"
     );
     let prepared = native::command(&release, "");
     let mut command = release.command(Path::new("bash"), &release.maintainer());
-    for (key, value) in prepared.get_envs() {
-        match value {
-            Some(value) => {
-                command.env(key, value);
-            }
-            None => {
-                command.env_remove(key);
-            }
-        }
-    }
+    copy_environment(&prepared, &mut command);
     command
         .arg("-c")
         .arg(

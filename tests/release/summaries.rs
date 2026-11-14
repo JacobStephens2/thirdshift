@@ -78,7 +78,9 @@ elif name == 'opencode':
     emit({{'type':'step_start','sessionID':'sandbox-summary','part':{{}}}})
     emit({{'type':'text','sessionID':'sandbox-summary','part':{{'text':reply}}}})
     emit({{'type':'step_finish','sessionID':'sandbox-summary','part':{{'reason':'stop'}}}})
-elif name == 'kimi': emit({{'role':'assistant','content':reply}})
+elif name == 'kimi':
+    emit({{'role':'assistant','content':reply}})
+    emit({{'role':'meta','type':'session.resume_hint','session_id':'sandbox-summary'}})
 "#,
             name = json!(name),
             reply = json!(reply),

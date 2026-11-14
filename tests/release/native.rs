@@ -135,7 +135,7 @@ pub(super) fn command(release: &Release, version: &str) -> Command {
         .env_remove("THIRDSHIFT_SESSION")
         .env_remove("THIRDSHIFT_PARENT_RECORD")
         .env("THIRDSHIFT_POLL_MS", "1")
-        .env("THIRDSHIFT_CI_GRACE_MS", "100");
+        .env("THIRDSHIFT_CI_GRACE_MS", "5000");
     command
 }
 

@@ -261,7 +261,12 @@ fn identity_mutations_after_fix_or_external_updates_refuse_publication() {
             release.open_bump_pr("0.2.0");
             let mutation = format!("gh fake pr release-0.2.0 {field} '{value}'");
             if external {
-                release.gh(&["fake", "on-ci-read", "1", &mutation]);
+                release.gh(&[
+                    "fake",
+                    "on-ci-read",
+                    "1",
+                    &format!("{mutation}\ngh fake checks \"$FAKE_CI_SHA\" '{GREEN}'"),
+                ]);
             } else {
                 set_pr(&release, "mergeable", json!("CONFLICTING"));
                 simulate_fix(&release, &mutation);
@@ -277,7 +282,9 @@ fn identity_mutations_after_fix_or_external_updates_refuse_publication() {
             );
             assert_eq!(release.origin_tag("v0.2.0"), None, "{field}");
             // A draft names the ready step instead of a changed identity.
-            let refusal = if field == "state" && value == "MERGED" {
+            let refusal = if external && field == "url" {
+                "release PR disappeared"
+            } else if field == "state" && value == "MERGED" {
                 "merge"
             } else if !external {
                 "targeted Fix run failed"

@@ -22,6 +22,9 @@ mod native;
 #[path = "release/summaries.rs"]
 mod summaries;
 
+#[path = "release/experiments.rs"]
+mod experiments;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -507,14 +510,13 @@ fi
             &format!(
                 r#"#!/usr/bin/python3
 import json, os, sys
-if os.environ.get('HOME') == {home}:
+if '--tools' not in sys.argv:
     os.execv({original}, ['claude', *sys.argv[1:]])
 prompt = sys.stdin.read()
 print(json.dumps({{'type':'system','subtype':'init','session_id':'release-fixture',
     'release_test_input':{{'argv':sys.argv[1:],'prompt':prompt,'cwd':os.getcwd()}}}}))
 print(json.dumps({{'type':'result','subtype':'success','is_error':False,'result':{text}}}))
 "#,
-                home = json!(self.root().join("home").display().to_string()),
                 original = json!(original.display().to_string()),
                 text = json!(text)
             ),
@@ -639,16 +641,7 @@ print(json.dumps({{'type':'result','subtype':'success','is_error':False,'result'
     fn run_on_terminal(&self, args: &[&str], input: &str, env: &[(&str, &str)]) -> Output {
         let prepared = native::command(self, "");
         let mut terminal = self.command(Path::new("script"), &self.maintainer());
-        for (key, value) in prepared.get_envs() {
-            match value {
-                Some(value) => {
-                    terminal.env(key, value);
-                }
-                None => {
-                    terminal.env_remove(key);
-                }
-            }
-        }
+        copy_environment(&prepared, &mut terminal);
         let arguments = args
             .iter()
             .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
@@ -876,6 +869,19 @@ fn stamped(line: &str) -> Option<(chrono::NaiveTime, &str)> {
 
 fn with_input(command: &mut Command, input: &str) -> Output {
     support::child_lifetime::FixtureChild::spawn(command, input).wait(support::WAIT_BOUND)
+}
+
+fn copy_environment(source: &Command, destination: &mut Command) {
+    for (key, value) in source.get_envs() {
+        match value {
+            Some(value) => {
+                destination.env(key, value);
+            }
+            None => {
+                destination.env_remove(key);
+            }
+        }
+    }
 }
 
 fn stdout(output: &Output) -> String {
@@ -1908,7 +1914,6 @@ fn an_annotated_tag_on_the_bump_head_is_reported_as_already_tagged() {
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(err.contains("Release 0.2.0 published"), "{err}");
-    assert!(err.contains("Release 0.2.0 published"), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
 }
 
@@ -2078,4 +2083,46 @@ fn review_tagged_resumed_pr_with_extra_changes_is_refused() {
     release.merge_bump_pr("0.2.0", &head);
     release.origin(&["tag", "v0.2.0", &head]);
     assert_refused(&release, "0.2.0", &["exact version bump"]);
+}
+
+#[test]
+fn slow_release_workflow_listing_keeps_startup_room() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.release_workflow(json!({"hidden_polls": 1}));
+    let original = release.bin().join("gh-slow-original");
+    fs::rename(release.bin().join("gh"), &original).unwrap();
+    write_executable(
+        &release.bin().join("gh"),
+        r#"#!/bin/bash
+if [[ $1 == run && $2 == list && " $* " == *" --workflow release.yml "* ]]; then
+    sleep 0.2
+fi
+exec -a gh "$RELEASE_SLOW_GH" "$@"
+"#,
+    );
+    let output = release.run_with(
+        &["0.2.0"],
+        "",
+        &[("RELEASE_SLOW_GH", original.to_str().unwrap())],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn a_merged_untagged_release_overtaken_on_main_cannot_be_published() {
+    let release = Release::new();
+    let old = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.merge_bump_pr("0.2.0", &old);
+    let newer = release.push_bump("0.4.0");
+    release.open_bump_pr("0.4.0");
+    release.merge_bump_pr("0.4.0", &newer);
+    release.origin(&["branch", "-D", "release-0.4.0"]);
+    release.main_ci("completed", "success");
+    let before = release.origin_refs();
+    let output = release.run("0.2.0");
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+    assert_eq!(release.origin_refs(), before);
 }
