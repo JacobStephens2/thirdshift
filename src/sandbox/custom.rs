@@ -268,13 +268,14 @@ fn kimi(
 }
 
 fn wrapper_script(harness: Harness, binary: &Path) -> String {
-    let switches = match harness {
-        Harness::Claude => "'--disallowedTools=WebSearch,WebFetch'",
-        Harness::Codex => "'-c' 'web_search=\"disabled\"'",
-        Harness::Grok => "'--disable-web-search'",
-        Harness::Muse => "'--disable-web-tools'",
-        Harness::Agy | Harness::OpenCode | Harness::Kimi => "",
-    };
+    let switches = crate::args::shell_command(
+        harness
+            .adapter()
+            .trial_web_restrictions()
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect(),
+    );
     let binary = binary.as_os_str().to_string_lossy().replace('\'', "'\\''");
     format!("#!/bin/sh\nexec '{binary}' {switches} \"$@\"\n")
 }
