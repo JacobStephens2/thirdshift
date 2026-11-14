@@ -141,9 +141,10 @@ impl GitHub {
         )?;
         let mut candidates = Vec::new();
         for node in &nodes {
-            if node["user"]["login"]
-                .as_str()
-                .is_none_or(|login| !login.eq_ignore_ascii_case(author))
+            if is_release_bump(node)
+                || node["user"]["login"]
+                    .as_str()
+                    .is_none_or(|login| !login.eq_ignore_ascii_case(author))
                 || (!(reserved.is_some() && reserved == node["number"].as_u64())
                     && super::labels_of(node)?.has(crate::claim::IN_PROGRESS))
             {
@@ -478,6 +479,7 @@ fn fix_candidate(
 ) -> Result<bool> {
     Ok(node["state"] == "open"
         && node["base"]["ref"].as_str() == Some(base)
+        && !is_release_bump(node)
         && author.is_none_or(|author| {
             node["user"]["login"]
                 .as_str()
@@ -485,6 +487,15 @@ fn fix_candidate(
         })
         && ensure_reviewable(pr, node).is_ok()
         && (reserved || !super::labels_of(node)?.has(crate::claim::IN_PROGRESS)))
+}
+
+/// Background Passes leave version-only release branches to the Release run.
+/// Explicit PR targets do not use this admission rule.
+fn is_release_bump(node: &serde_json::Value) -> bool {
+    node["base"]["ref"] == "main"
+        && node["head"]["ref"]
+            .as_str()
+            .is_some_and(|branch| branch.starts_with("release-"))
 }
 
 fn ensure_owned_and_trusted(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
