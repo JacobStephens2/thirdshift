@@ -221,8 +221,8 @@ folding still works through live updates. Keyboard row navigation skips folded
 rows, and the same controls work in every Theme and on phones. Without
 JavaScript, groups start open and their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved.
-Rows show state, Command kind, subject, title, gist and age. The kind stays visible
-in compact Done headers on desktop and phone, with or without JavaScript, in
+Rows show state, subject, title, gist and age. Compact Done headers also identify
+their Command kind on desktop and phone, with or without JavaScript, in
 every Theme and across the Fleet. Stored `Run` kinds display as `Ticket run`;
 Custom processes show `Process` and their retained process name. Done outcomes
 remain visible on phones alongside the kind. A Spec with recorded Tickets also

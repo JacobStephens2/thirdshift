@@ -80,7 +80,7 @@ test('Done headers keep Command kinds and outcomes readable on desktop and phone
     ['Process', process, `Process ${process}`],
   ];
   const fixtures = cases.map(([kind, process_name], index) => ({ ...base, kind, process_name,
-    name: `done-kind-${index}`, tickets: [], cause: null, outcome: 'merged',
+    name: `done-kind-${index}`, tickets: index === 1 ? base.tickets : [], cause: null, outcome: 'merged',
     issue: { number: 42, url: 'https://github.com/acme/widgets/issues/42', title: 'Identify completed work' },
   }));
   try {
@@ -98,7 +98,9 @@ test('Done headers keep Command kinds and outcomes readable on desktop and phone
             for (const [index, [, , label]] of cases.entries()) {
               assert.equal(await heads[index].locator('.command-kind').textContent(), label);
               assert.equal(await heads[index].locator('.subject a').getAttribute('href'), fixtures[index].issue.url);
-              for (const field of ['.command-kind', '.state', '.subject-issue', '.issue-title', '.gist', '.age']) {
+              const fields = ['.command-kind', '.state', '.subject-issue', '.issue-title', '.gist', '.age'];
+              if (index === 1) fields.push('.ticket-progress');
+              for (const field of fields) {
                 const layout = await heads[index].locator(field).evaluate(node => {
                   const box = node.getBoundingClientRect();
                   const range = document.createRange();
@@ -1857,6 +1859,7 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
             assert.equal(await row.locator('script').count(), 0);
             assert.equal(await row.locator('.row-head > .issue-title').isVisible(), true);
             assert.equal(await row.locator('.merge-conflict').count(), mergeable === 'conflicting' ? 1 : 0);
+            assert.equal(await row.locator('.command-kind').isVisible(), false, 'the extra label belongs to Done');
             const badges = [[row.locator('.ci'), label, tag]];
             if (mergeable === 'conflicting') badges.push([row.locator('.merge-conflict'), 'Merge conflict', 'urgent']);
             for (const [badge, label, tag] of badges) {
