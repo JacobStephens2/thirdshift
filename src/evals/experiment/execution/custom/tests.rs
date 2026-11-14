@@ -73,6 +73,7 @@ fn timed_out_runner_after_provider_traffic_stays_failed() {
         &runner,
         &traffic,
         &mut output,
+        false,
         &root.path().join("signal"),
     )
     .unwrap();
@@ -96,6 +97,7 @@ fn undeclared_runner_sending_provider_traffic_without_sessions_is_an_accounting_
         &runner,
         &traffic,
         &mut output,
+        true,
         &root.path().join("signal"),
     )
     .unwrap();
@@ -122,6 +124,7 @@ fn harness_run_across_the_proxy_without_a_harness_session_is_an_accounting_gap()
         &runner,
         &traffic,
         &mut output,
+        true,
         &root.path().join("signal"),
     )
     .unwrap();

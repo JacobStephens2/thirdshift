@@ -20,11 +20,16 @@ pub(crate) mod sessions;
 mod tests;
 pub(super) use recording::Recorder;
 
+/// Quota stops and web searches apply to every outcome. Accounting gaps judge
+/// only an outcome the runner reported in a valid `result.json`: outer
+/// supervision (a timeout, a runner that could not start) and broken runner
+/// protocol keep their `failed` classification.
 pub(super) fn collect(
     recorder: &mut Recorder,
     runner: &arms::Runner,
     traffic: &crate::proxy::Accounting,
     output: &mut Output,
+    reported: bool,
     signal: &Path,
 ) -> Result<()> {
     match recorder.collect() {
@@ -38,7 +43,7 @@ pub(super) fn collect(
                 output.outcome = Outcome::Void;
                 output.void_cause = Some(VoidCause::WebSearch);
                 output.cause = Some("Session transcript contains a web-search tool call".into());
-            } else if output.outcome != Outcome::Void {
+            } else if reported && output.outcome != Outcome::Void {
                 let sessions = recorder.sessions + imported.sessions;
                 let harness_sessions = recorder.sessions + imported.harness_sessions;
                 let crossed: Vec<_> = traffic
@@ -72,7 +77,7 @@ pub(super) fn collect(
                 }
             }
         }
-        Err(error) if output.outcome != Outcome::Void => {
+        Err(error) if reported && output.outcome != Outcome::Void => {
             output.outcome = Outcome::Void;
             output.void_cause = Some(VoidCause::AccountingGap);
             output.cause = Some(format!(
@@ -106,13 +111,13 @@ pub(super) fn web_search(attempt: &Path) -> Result<bool> {
                         // Decode through Value, as the other trace readers do:
                         // arbitrary_precision numbers otherwise pass through
                         // serde's tagged-enum buffer as maps rather than f64.
-                        let events =
+                        // Skip events this build cannot decode: a native Arm's
+                        // traces come from its own, possibly newer, build.
+                        let events: Vec<crate::harness::interpretation::event::Event> =
                             serde_json::from_str::<Vec<serde_json::Value>>(&events)?
                                 .into_iter()
-                                .map(serde_json::from_value)
-                                .collect::<serde_json::Result<
-                                    Vec<crate::harness::interpretation::event::Event>,
-                                >>()?;
+                                .filter_map(|event| serde_json::from_value(event).ok())
+                                .collect();
                         if sessions::web_search(&events) {
                             return Ok(true);
                         }
@@ -238,7 +243,8 @@ struct ResultDocument {
 
 /// Runner mistakes fail one Trial. Outer supervision classifies its own
 /// evidence before this function, and may override it after collection.
-pub(super) fn result(process: &ProcessOutput, attempt: &Path, elapsed: u128) -> Output {
+/// Also returns whether the outcome is the runner's own valid report.
+pub(super) fn result(process: &ProcessOutput, attempt: &Path, elapsed: u128) -> (Output, bool) {
     let result = (|| -> Result<Output> {
         let document: ResultDocument = serde_json::from_slice(
             &fs::read(attempt.join("output/result.json"))
@@ -286,9 +292,13 @@ pub(super) fn result(process: &ProcessOutput, attempt: &Path, elapsed: u128) -> 
         }
         Ok(output)
     })();
-    result.unwrap_or_else(|error| {
-        Output::failed(elapsed, &diagnostic(process, &format!("{error:#}")))
-    })
+    match result {
+        Ok(output) => (output, true),
+        Err(error) => (
+            Output::failed(elapsed, &diagnostic(process, &format!("{error:#}"))),
+            false,
+        ),
+    }
 }
 
 fn diagnostic(process: &ProcessOutput, cause: &str) -> String {

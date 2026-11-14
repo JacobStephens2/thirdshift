@@ -309,6 +309,7 @@ impl<'a> Execution<'a> {
         // agent's own out-of-memory error leaves no kernel kill behind.
         let cap_killed = || launched.oom_killed();
         let mut runner_result = false;
+        let mut reported = false;
         let mut protocol = if let Some(error) = interruption {
             void_interrupted(started.elapsed().as_millis(), &error)
         } else {
@@ -327,7 +328,10 @@ impl<'a> Execution<'a> {
                         void_memory_cap(started.elapsed().as_millis())
                     } else if arm.runner.is_some() {
                         runner_result = true;
-                        custom::result(&output, &attempt, started.elapsed().as_millis())
+                        let (classified, valid) =
+                            custom::result(&output, &attempt, started.elapsed().as_millis());
+                        reported = valid;
+                        classified
                     } else if sigkilled {
                         Output::failed(
                             started.elapsed().as_millis(),
@@ -381,6 +385,7 @@ impl<'a> Execution<'a> {
                 arm.runner.as_ref().unwrap(),
                 &traffic,
                 &mut protocol,
+                reported,
                 self.signal,
             )?;
         }

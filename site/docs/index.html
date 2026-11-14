@@ -1403,7 +1403,8 @@ from frozen Experiment prices and available in Trial Peek and Waterfall.
 Live 85% quota warnings pause the Experiment. Web-search tool calls void a
 Trial as <code>web_search</code>; provider traffic without recorded sessions, missing
 Harness sessions, or a declared provider/Harness runner delivering without
-sessions voids it as <code>accounting_gap</code>.</p>
+sessions voids it as <code>accounting_gap</code>; a timed-out or crashed runner stays
+failed.</p>
 <p>Console clients can start the same Experiment with <code>POST /api/v1/start</code> (also
 served at <code>/api/v1/runs</code>), putting <code>baseline_runner</code>, <code>candidate_runner</code> and
 <code>suite</code> in the request&#39;s <code>experiment</code> object. The CLI&#39;s per-Arm conflicts and

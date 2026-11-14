@@ -569,6 +569,9 @@ Harness invocations. Provider traffic with no sessions, or fewer Harness
 sessions than Harness runs that contacted a provider, voids the Trial as
 `accounting_gap`. A runner with declared `harnesses` or `providers` that ends
 `delivered` or `stopped_to_ask` with no sessions also has an accounting gap.
+These checks judge only an outcome the runner reports in a valid
+`result.json`: a timeout, a runner that cannot start, a crash or a missing or
+invalid `result.json` stays `failed`, as outer supervision keeps precedence.
 
 Before its first Trial, an Experiment prepares both Arms together:
 

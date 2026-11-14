@@ -281,7 +281,9 @@ them. Custom runner roles come from `record_command --role` or the session's
 Harness/SDK records become the same OTLP Session traces. Their costs use frozen
 prices, ignoring runner-reported USD. Provider traffic without Session evidence,
 unrecorded Harness runs across the proxy and declared provider/Harness runners
-finishing `delivered` or `stopped_to_ask` without sessions are accounting gaps.
+finishing `delivered` or `stopped_to_ask` without sessions are accounting gaps,
+judged only for an outcome the runner reported in a valid `result.json`;
+timeouts and broken runner protocol stay failed.
 Normalized web-search tool calls void a Trial as `web_search`.
 Resumes and fallback sessions belong to that same Step. Arm totals and
 `roles` include all spent attempts, including Voids. A missing session usage
