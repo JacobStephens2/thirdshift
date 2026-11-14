@@ -119,8 +119,10 @@ impl Fixture {
             setup: Setup {
                 process: None,
                 process_digest: None,
-                commit: base,
-                harness: "opencode".into(),
+                runner: None,
+                runner_digest: None,
+                commit: Some(base),
+                harness: Some("opencode".into()),
                 model: None,
                 effort: None,
             },
@@ -320,7 +322,7 @@ report.write_text('Review complete.\n')
 print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause=None, cause=None, session_id=None, log=None, model_evidence=None)))
 "#,
     );
-    fixture.setup.harness = "muse".into();
+    fixture.setup.harness = Some("muse".into());
     fixture
         .execution(5)
         .run(fixture.request(), |attempt, _, _| {
@@ -943,9 +945,9 @@ sys.exit(99)
 "#,
                 trace = trace.to_string()
             ));
-            fixture.setup.harness = "codex".into();
-            fixture.prepared.baseline.harness.name = "codex".into();
-            fixture.prepared.candidate.harness.name = "codex".into();
+            fixture.setup.harness = Some("codex".into());
+            fixture.prepared.baseline.harness.as_mut().unwrap().name = "codex".into();
+            fixture.prepared.candidate.harness.as_mut().unwrap().name = "codex".into();
             if session == "spec-review" {
                 fixture.task.manifest.session = crate::evals::format::Session::SpecReview;
             }

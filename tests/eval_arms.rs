@@ -147,6 +147,24 @@ cp "$TEST_BINARY" "$CARGO_TARGET_DIR/release/thirdshift"
 "#,
         );
     }
+
+    fn custom_command(&self, manifest: &Path, record: &str) -> Command {
+        let suite = self.home.join(".thirdshift/evals/suites/process");
+        fs::create_dir_all(&suite).unwrap();
+        fs::write(suite.join("suite.toml"), "format = 1\ntrials_per_arm = 1\n[dependencies]\nfactory_skills = []\nsession_prompts = []\nharness_defaults = []\nmodel_defaults = []\neffort_defaults = []\n").unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["evals", "prepare-arms"])
+            .arg(self.root.path())
+            .arg(self.root.path().join(record))
+            .arg("--baseline-runner")
+            .arg(manifest)
+            .arg("--candidate-runner")
+            .arg(manifest)
+            .args(["--suite", "process"])
+            .env("HOME", &self.home);
+        command
+    }
 }
 
 fn success(output: Output) -> Value {
@@ -156,6 +174,93 @@ fn success(output: Output) -> Value {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn custom_runners_freeze_dirty_sources_and_home_trees_without_building() {
+    let fixture = Fixture::new();
+    fs::write(fixture.source.join("runner.py"), "print('frozen')\n").unwrap();
+    fs::create_dir_all(fixture.source.join("skill/scripts")).unwrap();
+    fs::write(fixture.source.join("skill/SKILL.md"), "Frozen skill\n").unwrap();
+    fs::write(fixture.source.join("skill/scripts/check"), "echo frozen\n").unwrap();
+    let manifest = fixture.source.join("runner.toml");
+    fs::write(
+        &manifest,
+        r#"
+command = ["python3", "{runner_dir}/runner.py"]
+git_exclude = [".scratch/"]
+[files]
+"runner.py" = "runner.py"
+"skill" = { home = ".agents/skills/frozen" }
+[roles.implement]
+model = "fixture-model"
+effort = "high"
+"#,
+    )
+    .unwrap();
+    // The repository argument is outside a thirdshift checkout.
+    let arms = success(
+        fixture
+            .custom_command(&manifest, "custom.json")
+            .output()
+            .unwrap(),
+    );
+    let runner = &arms["baseline"]["runner"];
+    assert!(arms["baseline"]["commit"].is_null());
+    assert!(arms["baseline"]["harness"].is_null());
+    assert_eq!(runner["provenance"]["runner.py"]["dirty"], true);
+    assert_eq!(
+        runner["provenance"]["runner.py"]["commit"],
+        fixture.candidate
+    );
+    assert_eq!(
+        runner["manifest"]["roles"]["implement"]["model"],
+        "fixture-model"
+    );
+    let directory = Path::new(runner["directory"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(directory.join("bundle/runner.py")).unwrap(),
+        "print('frozen')\n"
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("home/.agents/skills/frozen/scripts/check")).unwrap(),
+        "echo frozen\n"
+    );
+    assert_eq!(
+        runner["files"]["bundle/runner.py"].as_str().unwrap().len(),
+        64
+    );
+}
+
+#[test]
+fn custom_runner_targets_are_confined_to_bundle_or_fresh_home() {
+    let fixture = Fixture::new();
+    let manifest = fixture.source.join("runner.toml");
+    for home in [false, true] {
+        for target in ["../escape", "/tmp/escape", "safe/../escape", ".git/config"] {
+            let target = if home {
+                format!("{{ home = {target:?} }}")
+            } else {
+                format!("{target:?}")
+            };
+            fs::write(
+                &manifest,
+                format!("command = [\"true\"]\n[files]\n\"arm.txt\" = {target}\n"),
+            )
+            .unwrap();
+            let output = fixture
+                .custom_command(&manifest, "invalid.json")
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "{target}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("confined relative Eval path"),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!fixture.root.path().join("invalid.json").exists());
+        }
+    }
 }
 
 #[test]

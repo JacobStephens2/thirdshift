@@ -30,10 +30,23 @@ pub(super) struct ArmOptions {
     model: Option<String>,
     effort: Option<String>,
     process: Option<String>,
+    pub(super) runner: Option<String>,
 }
 
 impl ArmOptions {
     pub(super) fn resolve(&self, commit: String, config: &UserConfig) -> Setup {
+        if let Some(runner) = &self.runner {
+            return Setup {
+                commit: None,
+                harness: None,
+                model: None,
+                effort: None,
+                process: None,
+                process_digest: None,
+                runner: Some(runner.clone()),
+                runner_digest: None,
+            };
+        }
         let choice = Choice::of(
             &Asked {
                 harness: self.harness,
@@ -45,12 +58,14 @@ impl ArmOptions {
             &config.harness,
         );
         Setup {
-            commit,
-            harness: choice.harness.name().into(),
+            commit: Some(commit),
+            harness: Some(choice.harness.name().into()),
             model: choice.model,
             effort: choice.effort,
             process: self.process.clone(),
             process_digest: None,
+            runner: None,
+            runner_digest: None,
         }
     }
 }
@@ -180,6 +195,9 @@ pub fn parse(args: &[String]) -> Result<Options> {
             .transpose()?;
         Ok(ArmOptions {
             harness,
+            runner: flags
+                .remove(format!("--{prefix}-runner").as_str())
+                .map(String::from),
             process: flags
                 .remove(format!("--{prefix}-process").as_str())
                 .map(String::from),
@@ -194,6 +212,24 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let baseline_setup = arm("baseline")?;
     let candidate_setup = arm("candidate")?;
     let baseline = flags.remove("--baseline").map(String::from);
+    for (prefix, setup, commit) in [
+        ("baseline", &baseline_setup, &baseline),
+        ("candidate", &candidate_setup, &candidate),
+    ] {
+        ensure!(
+            setup.runner.is_none()
+                || (setup.process.is_none()
+                    && setup.harness.is_none()
+                    && setup.model.is_none()
+                    && setup.effort.is_none()
+                    && commit.is_none()),
+            "--{prefix}-runner conflicts with a commit, --{prefix}-process, --{prefix}-harness, --{prefix}-model or --{prefix}-effort"
+        );
+    }
+    if baseline_setup.runner.is_some() || candidate_setup.runner.is_some() {
+        ensure!(!release, "Custom runners cannot use --release");
+        ensure!(!suites.is_empty(), "Custom runners require --suite");
+    }
     let prices = flags.remove("--prices").map(std::path::PathBuf::from);
     let name = flags
         .remove("--name")
@@ -270,9 +306,13 @@ pub fn parse(args: &[String]) -> Result<Options> {
         bail!("unknown Experiment flag: {flag}");
     }
     Ok(Options {
-        candidate: candidate.context(
+        candidate: if candidate_setup.runner.is_some() {
+            String::new()
+        } else {
+            candidate.context(
             "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json] [--yes] [--no-wait]",
-        )?,
+        )?
+        },
         baseline,
         baseline_setup,
         candidate_setup,

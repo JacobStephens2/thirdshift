@@ -30,7 +30,7 @@ pub(super) fn default(description: &Description, details: &Details) -> String {
         details
             .candidate_ref
             .clone()
-            .unwrap_or_else(|| short(&candidate.commit))
+            .unwrap_or_else(|| short(candidate.reference()))
     };
     let changes = setup_changes(description);
     if baseline.commit == candidate.commit && changes.is_empty() {
@@ -51,7 +51,11 @@ pub(super) fn default(description: &Description, details: &Details) -> String {
     match (&details.baseline_ref, &details.candidate_ref) {
         (Some(b), Some(c)) if b != c => format!("{b} → {c}"),
         (_, Some(c)) => c.clone(),
-        _ => format!("{} → {}", short(&baseline.commit), short(&candidate.commit)),
+        _ => format!(
+            "{} → {}",
+            short(baseline.reference()),
+            short(candidate.reference())
+        ),
     }
 }
 
@@ -61,11 +65,29 @@ pub(crate) fn setup_changes(description: &Description) -> Vec<String> {
     let (baseline, candidate) = (&description.baseline, &description.candidate);
     let versions = description.prepared.as_ref().map(|prepared| {
         (
-            prepared.baseline.harness.version.as_str(),
-            prepared.candidate.harness.version.as_str(),
+            prepared
+                .baseline
+                .harness
+                .as_ref()
+                .map_or("", |h| h.version.as_str()),
+            prepared
+                .candidate
+                .harness
+                .as_ref()
+                .map_or("", |h| h.version.as_str()),
         )
     });
     [
+        (
+            "Runner",
+            baseline.runner.as_deref().unwrap_or("thirdshift"),
+            candidate.runner.as_deref().unwrap_or("thirdshift"),
+        ),
+        (
+            "Runner digest",
+            baseline.runner_digest.as_deref().unwrap_or(""),
+            candidate.runner_digest.as_deref().unwrap_or(""),
+        ),
         (
             "Process",
             baseline.process.as_deref().unwrap_or("ticket-run"),
@@ -73,8 +95,8 @@ pub(crate) fn setup_changes(description: &Description) -> Vec<String> {
         ),
         (
             "Harness",
-            baseline.harness.as_str(),
-            candidate.harness.as_str(),
+            baseline.harness.as_deref().unwrap_or(""),
+            candidate.harness.as_deref().unwrap_or(""),
         ),
         (
             "Model",

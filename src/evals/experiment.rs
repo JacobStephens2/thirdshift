@@ -159,34 +159,61 @@ impl Bar {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Setup {
-    pub commit: String,
-    pub harness: String,
+    pub commit: Option<String>,
+    pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_digest: Option<String>,
 }
 
 impl Setup {
     fn requested(&self) -> Result<arms::Requested> {
-        Ok(
-            arms::Requested::new(&self.commit, &self.harness)?.with_process(
-                self.process.as_deref(),
-                self.model.as_deref(),
-                self.effort.as_deref(),
-            ),
-        )
+        if let Some(runner) = &self.runner {
+            return Ok(arms::Requested::runner(runner));
+        }
+        Ok(arms::Requested::new(
+            self.commit.as_deref().context("missing Arm commit")?,
+            self.harness.as_deref().context("missing Arm Harness")?,
+        )?
+        .with_process(
+            self.process.as_deref(),
+            self.model.as_deref(),
+            self.effort.as_deref(),
+        ))
     }
 
     fn choice(&self) -> Choice {
         Choice {
-            harness: Harness::named(&self.harness).expect("validated Arm Harness"),
+            harness: self
+                .harness
+                .as_deref()
+                .and_then(Harness::named)
+                .unwrap_or(Harness::Claude),
             model: self.model.clone(),
             effort: self.effort.clone(),
             chosen_by: ChosenBy::Command,
         }
+    }
+
+    pub(crate) fn reference(&self) -> &str {
+        self.runner
+            .as_deref()
+            .or(self.commit.as_deref())
+            .unwrap_or("unknown")
+    }
+
+    pub(crate) fn executor(&self) -> &str {
+        self.runner
+            .as_deref()
+            .or(self.harness.as_deref())
+            .unwrap_or("unknown")
     }
 }
 
@@ -218,11 +245,77 @@ struct Task {
     manifest: format::Task,
 }
 
+fn validate_runner_suites(options: &Options, root: &Path) -> Result<()> {
+    if options.baseline_setup.runner.is_none() && options.candidate_setup.runner.is_none() {
+        return Ok(());
+    }
+    for name in &options.suites {
+        ensure!(
+            !matches!(name.as_str(), "code-review" | "spec-review"),
+            "Custom runners require process suites: {name}"
+        );
+        suite::Manifest::load(&root.join(name))?;
+        for (_, directory) in suite::directories(&root.join(name).join("tasks"))? {
+            ensure!(
+                format::Task::load(&directory)?.session == format::Session::Process,
+                "Custom runners require process suites: {name}"
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn prepare_arms(
+    repository: &Path,
+    options: Options,
+    record: &Path,
+) -> Result<arms::Prepared> {
+    let root = crate::config::home()?.join(".thirdshift/evals/suites");
+    validate_runner_suites(&options, &root)?;
+    let git = Git::new(repository);
+    let config = UserConfig::load()?;
+    let baseline_commit = if options.baseline_setup.runner.is_some() {
+        String::new()
+    } else {
+        resolve(&git, options.baseline.as_deref().unwrap_or("HEAD"))?
+    };
+    let candidate_commit = if options.candidate_setup.runner.is_some() {
+        String::new()
+    } else {
+        resolve(&git, &options.candidate)?
+    };
+    let mut baseline = options.baseline_setup.resolve(baseline_commit, &config);
+    let mut candidate = options.candidate_setup.resolve(candidate_commit, &config);
+    if baseline.process.is_some()
+        || candidate.process.is_some()
+        || options.baseline_setup.runner.is_some()
+        || options.candidate_setup.runner.is_some()
+    {
+        for setup in [&mut baseline, &mut candidate] {
+            if setup.runner.is_none() {
+                setup.process.get_or_insert_with(|| "ticket-run".into());
+            }
+        }
+    }
+    arms::prepare(
+        repository,
+        [baseline.requested()?, candidate.requested()?],
+        record,
+    )
+}
+
 pub fn run(options: Options) -> Result<()> {
     interrupt::install()?;
     let repository = std::env::current_dir()?;
     let git = Git::new(&repository);
-    let candidate = resolve(&git, &options.candidate)?;
+    let root = crate::config::home()?.join(".thirdshift/evals");
+    let suites_root = root.join("suites");
+    validate_runner_suites(&options, &suites_root)?;
+    let candidate = if options.candidate_setup.runner.is_some() {
+        String::new()
+    } else {
+        resolve(&git, &options.candidate)?
+    };
     let baseline_reference = if options.release && options.baseline.is_none() {
         Some(git.run(&[
             "--no-replace-objects",
@@ -234,14 +327,19 @@ pub fn run(options: Options) -> Result<()> {
             &candidate,
         ])?)
     } else {
-        options.baseline.clone()
+        options.baseline.clone().or_else(|| {
+            (options.candidate_setup.runner.is_some() && options.baseline_setup.runner.is_none())
+                .then(|| "HEAD".into())
+        })
     };
-    let baseline = match &baseline_reference {
-        Some(reference) => resolve(&git, reference)?,
-        None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
+    let baseline = if options.baseline_setup.runner.is_some() {
+        String::new()
+    } else {
+        match &baseline_reference {
+            Some(reference) => resolve(&git, reference)?,
+            None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
+        }
     };
-    let root = crate::config::home()?.join(".thirdshift/evals");
-    let suites_root = root.join("suites");
     let suites = if options.suites.is_empty() {
         let paths = git.run(&[
             "--no-replace-objects",
@@ -294,7 +392,9 @@ pub fn run(options: Options) -> Result<()> {
             let task = format::Task::load(&directory)?;
             if task.state == format::State::Approved && task.session == format::Session::Process {
                 for setup in [&mut baseline, &mut candidate] {
-                    setup.process.get_or_insert_with(|| "ticket-run".into());
+                    if setup.runner.is_none() {
+                        setup.process.get_or_insert_with(|| "ticket-run".into());
+                    }
                 }
             }
             if task.state == format::State::Approved
@@ -314,7 +414,11 @@ pub fn run(options: Options) -> Result<()> {
         "Trials per Eval task must be one or three"
     );
     for setup in [&mut baseline, &mut candidate] {
-        setup.process_digest = arms::Process::source_digest(&setup.requested()?)?;
+        if let Some(runner) = &setup.runner {
+            setup.runner_digest = Some(arms::Runner::source_digest(runner)?);
+        } else {
+            setup.process_digest = arms::Process::source_digest(&setup.requested()?)?;
+        }
     }
     let identity = serde_json::to_vec(&(&baseline, &candidate, &suites))?;
     let id = format!("{:x}", Sha256::digest(identity));
@@ -339,7 +443,15 @@ pub fn run(options: Options) -> Result<()> {
             let tasks = tasks(&suites_root, &description.suites)?;
             deciders::check(&description.bar, &tasks)?;
             if options.release
-                && !release::supports_trials(&repository, &root, &description.baseline.commit)?
+                && !release::supports_trials(
+                    &repository,
+                    &root,
+                    description
+                        .baseline
+                        .commit
+                        .as_deref()
+                        .context("release Baseline has no commit")?,
+                )?
             {
                 return Ok(None);
             }
@@ -386,13 +498,16 @@ pub fn run(options: Options) -> Result<()> {
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
             Some(baseline_reference.unwrap_or_else(|| "main (merge base)".into()));
-        experiment.details.candidate_ref = Some(options.candidate.clone());
-        experiment.details.title = Some(git.run(&[
-            "log",
-            "-1",
-            "--format=%s",
-            &experiment.description.candidate.commit,
-        ])?);
+        experiment.details.candidate_ref =
+            Some(experiment.description.candidate.reference().into());
+        experiment.details.title = if let Some(commit) = &experiment.description.candidate.commit {
+            Some(git.run(&["log", "-1", "--format=%s", commit])?)
+        } else {
+            Some(format!(
+                "Custom runner {}",
+                experiment.description.candidate.reference()
+            ))
+        };
     }
     experiment.details.release |= options.release;
     experiment.details.resume_command = Some(
@@ -448,6 +563,16 @@ pub fn run(options: Options) -> Result<()> {
                 (&experiment.description.baseline, &prepared.baseline),
                 (&experiment.description.candidate, &prepared.candidate),
             ] {
+                if let Some(expected) = &setup.runner_digest {
+                    ensure!(
+                        arm.runner
+                            .as_ref()
+                            .context("missing frozen Custom runner")?
+                            .digest()?
+                            == *expected,
+                        "Custom runner inputs changed during Arm preparation; start the Experiment again"
+                    );
+                }
                 if let Some(expected) = &setup.process_digest {
                     ensure!(
                         arm.process

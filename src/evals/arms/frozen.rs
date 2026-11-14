@@ -174,11 +174,11 @@ impl Process {
     }
 }
 
-fn digest(bytes: &[u8]) -> String {
+pub(super) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn hashes(directory: &Path) -> Result<BTreeMap<String, String>> {
+pub(super) fn hashes(directory: &Path) -> Result<BTreeMap<String, String>> {
     let mut hashes = BTreeMap::new();
     collect(directory, directory, 0, &mut hashes)?;
     Ok(hashes)

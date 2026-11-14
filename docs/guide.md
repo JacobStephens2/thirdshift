@@ -1285,6 +1285,28 @@ grading index to prepare on that host; private material stays outside the reposi
 
 ### Experiments
 
+Either Arm can use a **Custom runner** on explicitly selected process suites:
+
+```sh
+thirdshift experiment --candidate-runner workflow --suite process --baseline HEAD
+thirdshift experiment candidate --baseline-runner workflow --suite process
+thirdshift experiment --baseline-runner old --candidate-runner new --suite process
+```
+
+Runner names resolve `~/.thirdshift/runners/<name>.toml`; an explicit `.toml`
+path also works. Omit the candidate commit with `--candidate-runner`. A native
+Baseline then defaults to HEAD; two Custom runners need no thirdshift checkout
+or build. Runner selection conflicts with commit, Process, Harness, Model or
+Effort flags on that Arm, and requires `--suite` on process suites; review suites
+and `--release` are refused. Use `evals prepare-arms <repository> <record.json>`
+with the same runner and suite flags to freeze inputs without starting Trials.
+The manifest's argv command, mapped files and skill trees are frozen by SHA-256,
+including dirty local edits with Git provenance. The runner works unattended,
+commits HEAD and writes result.json; stopping to ask fails its Score. Code
+Graders ignore uncommitted scratch, and committing a manifest `git_exclude`
+path fails the Trial. See the [Custom runner contract](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation).
+Provider sandbox adapters and session recording follow in #2189 and #2191.
+
 From a local thirdshift clone, `thirdshift experiment <candidate>` compares a
 branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
 another Baseline. Suites default to those touched by the change, using their
@@ -1839,7 +1861,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 12`.
+[Experiment results format](experiment-results.md), identified by `format: 13`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

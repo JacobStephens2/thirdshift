@@ -40,6 +40,11 @@ pub enum Action {
         arms: [arms::Requested; 2],
         record: PathBuf,
     },
+    PrepareSelectedArms {
+        repository: PathBuf,
+        options: Box<experiment::Options>,
+        record: PathBuf,
+    },
 }
 
 pub fn parse(args: &[String]) -> Result<Action> {
@@ -92,6 +97,18 @@ pub fn parse(args: &[String]) -> Result<Action> {
             Ok(Action::Verify {
                 repository: repository.into(),
                 base: base.clone(),
+            })
+        }
+        [action, repository, record, options @ ..]
+            if action == "prepare-arms"
+                && options.iter().any(|flag| {
+                    matches!(flag.as_str(), "--baseline-runner" | "--candidate-runner")
+                }) =>
+        {
+            Ok(Action::PrepareSelectedArms {
+                repository: repository.into(),
+                record: record.into(),
+                options: Box::new(experiment::parse(options)?),
             })
         }
         [
@@ -163,6 +180,15 @@ pub fn execute(action: Action) -> Result<String> {
         } => Ok(serde_json::to_string_pretty(&arms::prepare(
             &repository,
             arms,
+            &record,
+        )?)?),
+        Action::PrepareSelectedArms {
+            repository,
+            options,
+            record,
+        } => Ok(serde_json::to_string_pretty(&experiment::prepare_arms(
+            &repository,
+            *options,
             &record,
         )?)?),
     }

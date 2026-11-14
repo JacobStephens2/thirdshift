@@ -2,6 +2,7 @@
 //!
 //! Trace and active evidence remain private and alive through publication.
 
+mod custom;
 mod monitor;
 mod toolchains;
 
@@ -54,7 +55,7 @@ impl<'a> Execution<'a> {
         ] {
             let harness = directory.join("harnesses").join(name);
             fs::create_dir_all(&harness)?;
-            let harnesses = std::iter::once(&arm.harness).chain(
+            let harnesses = arm.harness.iter().chain(
                 arm.process
                     .iter()
                     .flat_map(|process| process.steps.iter().map(|step| &step.harness)),
@@ -98,6 +99,9 @@ impl<'a> Execution<'a> {
             if let Some(process) = &arm.process {
                 process.verify()?;
             }
+            if let Some(runner) = &arm.runner {
+                runner.verify()?;
+            }
         }
         let key = request.identity.key();
         let directory = self.directory.join("trials").join(&key);
@@ -133,11 +137,13 @@ impl<'a> Execution<'a> {
         };
         // Establish the Harness's idempotent instruction fallback before the
         // comparison and the private repository captured for mechanical checks.
-        setup
-            .choice()
-            .harness
-            .adapter()
-            .link_instruction_fallback(&prepared_repo.repository)?;
+        if setup.runner.is_none() {
+            setup
+                .choice()
+                .harness
+                .adapter()
+                .link_instruction_fallback(&prepared_repo.repository)?;
+        }
         let before = integrity::Snapshot::capture(&prepared_repo.repository, &task.manifest)?;
         // This directory is outside the Trial's sandbox. Graders must see
         // the prepared state even when the review fixes and commits code.
@@ -178,7 +184,7 @@ impl<'a> Execution<'a> {
             "inputs": inputs, "harness": setup.harness, "model": setup.model, "effort": setup.effort,
             "output_dir": attempt.join("session")
         });
-        if task.manifest.session == crate::evals::format::Session::Process {
+        if arm.runner.is_none() && task.manifest.session == crate::evals::format::Session::Process {
             document["process"] = match &arm.process {
                 Some(process) => {
                     let file = process.install(&attempt.join("home"))?;
@@ -193,7 +199,11 @@ impl<'a> Execution<'a> {
                 None => json!(setup.process.as_deref().unwrap_or("ticket-run")),
             };
         }
-        store::write(&request_path, &document)?;
+        if let Some(runner) = &arm.runner {
+            custom::prepare(runner, task, &prepared_repo.repository, &attempt)?;
+        } else {
+            store::write(&request_path, &document)?;
+        }
         fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -257,11 +267,18 @@ impl<'a> Execution<'a> {
                 Ok(output) => {
                     fs::write(attempt.join("stdout"), &output.stdout)?;
                     fs::write(attempt.join("stderr"), &output.stderr)?;
+                    if arm.runner.is_some() {
+                        fs::write(attempt.join("exit-status"), output.status.to_string())?;
+                    }
                     // systemd-run reports its scope's signal death as an exit
                     // code, so a scoped SIGKILL arrives as 137, not as a signal.
                     let sigkilled = output.status.signal() == Some(libc::SIGKILL)
                         || output.status.code() == Some(128 + libc::SIGKILL);
-                    if sigkilled {
+                    if cap_killed() {
+                        void_memory_cap(started.elapsed().as_millis())
+                    } else if arm.runner.is_some() {
+                        custom::result(&output, &attempt, started.elapsed().as_millis())
+                    } else if sigkilled {
                         Output::failed(
                             started.elapsed().as_millis(),
                             "Trial process killed (SIGKILL); external cause unknown",
@@ -298,6 +315,12 @@ impl<'a> Execution<'a> {
                 Err(error) if error.is::<limits::Reached>() => monitor
                     .into_inner()
                     .cut_short(started.elapsed().as_millis()),
+                Err(error) if arm.runner.is_some() => Output::failed(
+                    started.elapsed().as_millis(),
+                    &format!(
+                        "Custom runner could not run; exit status: unavailable; stderr: {error:#}"
+                    ),
+                ),
                 Err(error) => return Err(error),
             }
         };
@@ -307,12 +330,45 @@ impl<'a> Execution<'a> {
             protocol.void_cause = Some(VoidCause::MemoryCap);
             protocol.cause = Some(crate::scope::OOM_KILL_CAUSE.into());
         }
-        if task.manifest.session == crate::evals::format::Session::Process
+        if arm.runner.is_none()
+            && task.manifest.session == crate::evals::format::Session::Process
             && protocol.steps.is_empty()
         {
             let path = attempt.join("session/steps.json");
             if path.is_file() {
                 protocol.steps = serde_json::from_slice(&fs::read(path)?)?;
+            }
+        }
+        if let Some(runner) = &arm.runner
+            && protocol.outcome != Outcome::Void
+        {
+            match custom::inspect(
+                runner,
+                &prepared_repo.repository,
+                &attempt,
+                Instant::now() + self.timeout,
+            ) {
+                Ok(Some(diagnostic)) => {
+                    protocol.cause = Some(match protocol.cause.take() {
+                        Some(cause) => format!("{cause}; {diagnostic}"),
+                        None => diagnostic,
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    protocol.outcome = Outcome::Failed;
+                    protocol.void_cause = None;
+                    let stderr = fs::read_to_string(attempt.join("stderr")).unwrap_or_default();
+                    let status = fs::read_to_string(attempt.join("exit-status"))
+                        .unwrap_or_else(|_| "unavailable".into());
+                    protocol.cause = Some(format!(
+                        "{error:#}; {}; exit status: {status}; stderr: {stderr}",
+                        protocol
+                            .cause
+                            .as_deref()
+                            .unwrap_or("runner exited successfully")
+                    ));
+                }
             }
         }
         // A successful protocol can also claim interruption. Only an attempt
@@ -409,6 +465,32 @@ impl<'a> Execution<'a> {
         caps: &crate::scope::Caps,
         toolchains: Option<&Path>,
     ) -> Result<crate::scope::Launch> {
+        if let Some(runner) = &arm.runner {
+            let attempt = path.parent().context("Trial request has no directory")?;
+            let argv = custom::command(runner, attempt)?;
+            let args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
+            let mut launched = crate::scope::trial_command(
+                Path::new(&argv[0]),
+                &args,
+                &request.identity.key(),
+                request.attempt,
+                caps,
+            )?;
+            launched
+                .command()
+                .current_dir(attempt.join("repository"))
+                .env("HOME", attempt.join("home"))
+                .env_remove("CODEX_HOME")
+                .env_remove("CLAUDE_CONFIG_DIR")
+                .env_remove(crate::skills::TRIAL_HOME)
+                .stdin(std::process::Stdio::null());
+            for (name, relative) in crate::harness::PRIVATE_HOME_XDG {
+                launched
+                    .command()
+                    .env(name, attempt.join("home").join(relative));
+            }
+            return Ok(launched);
+        }
         let directory = self
             .directory
             .join("harnesses")

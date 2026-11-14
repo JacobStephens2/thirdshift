@@ -63,6 +63,9 @@ mod sandbox;
 #[path = "experiments/process.rs"]
 mod process;
 
+#[path = "experiments/custom_runner.rs"]
+mod custom_runner;
+
 #[path = "experiments/pairs.rs"]
 mod pairs;
 
