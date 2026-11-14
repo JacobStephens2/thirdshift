@@ -83,10 +83,12 @@ impl Delivery<'_> {
         // Retain the failing-check evidence in both the posted result and the
         // error used by the Command record and Run notification.
         let delivered_head = pushed.as_deref().unwrap_or(&snapshot.head);
-        let readiness = if mode == Mode::Address {
-            self.unchanged_head(delivered_head).and(readiness)
-        } else {
-            readiness
+        // A merge request reports a moved head as its hold, ahead of the
+        // readiness failure that the move may also have caused.
+        let readiness = match mode {
+            Mode::Address if self.merge => self.unchanged_head(delivered_head).and(readiness),
+            Mode::Address => readiness.and_then(|()| self.unchanged_head(delivered_head)),
+            Mode::RecommendOnly => readiness,
         };
         let readiness = if ci_report.is_empty() {
             readiness
