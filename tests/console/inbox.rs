@@ -3,6 +3,89 @@ use serde_json::Value;
 use std::path::Path;
 use std::{fs, process::Command};
 
+#[test]
+fn done_headers_identify_command_kinds_locally_and_across_fleet() {
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    let owner = tempfile::tempdir().unwrap();
+    let caller = tempfile::tempdir().unwrap();
+    configure(owner.path());
+    configure(caller.path());
+    let cases = [
+        ("Run", None, "Ticket run"),
+        ("Spec run", None, "Spec run"),
+        ("Triage run", None, "Triage run"),
+        ("Review run", None, "Review run"),
+        ("Pickup run", None, "Pickup run"),
+        (
+            "Process",
+            Some("nightly <checks>"),
+            "Process nightly &#60;checks&#62;",
+        ),
+        ("Process", None, "Process legacy-process"),
+    ];
+    for (index, (kind, process, _)) in cases.iter().enumerate() {
+        let number = index as u64 + 1;
+        let mut fixture = record(owner.path(), number, Some("merged"), 0);
+        fixture["kind"] = json!(kind);
+        fixture["name"] = json!("legacy-process");
+        fixture["process_name"] = json!(process);
+        fixture["issue"]["number"] = json!(42);
+        fixture["issue"]["url"] = json!("https://github.com/acme/widgets/issues/42");
+        fixture["tickets"] = json!([]);
+        if *kind == "Pickup run" {
+            let mut child = fixture.clone();
+            child["kind"] = json!("Run");
+            fixture["dispatched"] = json!([child]);
+        }
+        super::write_record(owner.path(), number, &fixture);
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let local = Console::start(binary, owner.path());
+    let token = super::tokens::create(owner.path(), "caller", &["--scopes", "read"]);
+    assert!(
+        super::fleet::add(caller.path(), "owner", &local.address, &token)
+            .status
+            .success()
+    );
+    let fleet = Console::start(binary, caller.path());
+    for console in [&local, &fleet] {
+        let _events = console.get("/events");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let html = loop {
+            let html = console.get("/?section=done").text().unwrap();
+            if html.contains("legacy-process") {
+                break html;
+            }
+            assert!(Instant::now() < deadline, "Fleet rows never arrived");
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        for (index, (_, _, label)) in cases.iter().enumerate() {
+            let selector = format!("{}-fixture.command.json", index + 1);
+            let head = section(&html, "done")
+                .split("<li class=\"command")
+                .find(|row| row.contains(&selector))
+                .unwrap()
+                .split("<div class=\"row-head\">")
+                .nth(1)
+                .unwrap()
+                .split("</div>")
+                .next()
+                .unwrap();
+            assert!(
+                head.contains(&format!("<span class=\"command-kind\">{label}</span>")),
+                "{label} missing: {head}"
+            );
+            assert!(
+                head.contains("href=\"https://github.com/acme/widgets/issues/42\""),
+                "{head}"
+            );
+            assert!(head.contains(">merged</span>"), "{head}");
+        }
+    }
+}
+
 /// A Triage URL that fails the origin check is still recorded. The compact
 /// header must not lend the launch repository's name to that other issue.
 #[test]
