@@ -73,7 +73,7 @@ fn release_start_requires_admin_including_the_named_person() {
 }
 
 #[test]
-fn release_start_schema_exposes_only_explicit_version_and_standard_options() {
+fn release_start_schema_exposes_pass_bumps_and_standard_options() {
     let scenario = fixture();
     let console = server(&scenario);
     let document = api::json(console.get("/api/v1/openapi.json"));
@@ -88,10 +88,7 @@ fn release_start_schema_exposes_only_explicit_version_and_standard_options() {
             .find(|variant| variant["properties"]["command"]["const"] == "release")
             .unwrap();
         assert_eq!(release["x-scope"], "admin");
-        assert_eq!(
-            release["required"],
-            json!(["version", "repository", "command"])
-        );
+        assert_eq!(release["required"], json!(["repository", "command"]));
         let fields: std::collections::BTreeSet<_> = release["properties"]
             .as_object()
             .unwrap()
@@ -104,6 +101,7 @@ fn release_start_schema_exposes_only_explicit_version_and_standard_options() {
                 "command",
                 "repository",
                 "version",
+                "bump",
                 "email",
                 "harness",
                 "model",
@@ -113,7 +111,8 @@ fn release_start_schema_exposes_only_explicit_version_and_standard_options() {
     }
     let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
     for request in [
-        json!({"command":"release", "repository":"acme/widgets"}),
+        json!({"command":"release", "repository":"acme/widgets", "version":"1.2.3", "bump":"patch"}),
+        json!({"command":"release", "repository":"acme/widgets", "bump":"invalid"}),
         json!({"command":"release", "repository":"acme/widgets", "version":"--help"}),
         json!({"command":"release", "repository":"acme/widgets", "version":"1.2.3", "merge":true}),
         json!({"repository":"acme/widgets", "issue":7}),
@@ -131,6 +130,58 @@ fn release_start_schema_exposes_only_explicit_version_and_standard_options() {
             response.text().unwrap()
         );
     }
+}
+
+#[test]
+fn release_start_accepts_versionless_and_pinned_passes_with_admin_scope() {
+    let scenario = fixture();
+    let output = Command::new("git")
+        .current_dir(scenario.launch_dir())
+        .args([
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/JacobStephens2/thirdshift.git",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let mut state = scenario.gh_state();
+    state["rate_limits"] = json!({"core":{"remaining":0,"reset":(chrono::Utc::now() + chrono::Duration::hours(1)).timestamp()}});
+    scenario.write_gh_state(&state);
+    let console = server(&scenario);
+    let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
+    for path in ["/api/v1/start", "/api/v1/runs"] {
+        for bump in [None, Some("major"), Some("minor"), Some("patch")] {
+            let mut request =
+                json!({"command":"release", "repository":"JacobStephens2/thirdshift"});
+            if let Some(bump) = bump {
+                request["bump"] = json!(bump);
+            }
+            let response = reqwest::blocking::Client::new()
+                .post(format!("{}{path}", console.address))
+                .bearer_auth(&admin)
+                .json(&request)
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let ended = response.json::<Value>().unwrap();
+            assert_eq!(ended["outcome"], "skipped", "{request}: {ended}");
+            assert!(
+                ended["reason"].as_str().unwrap().contains("Quota wait"),
+                "{ended}"
+            );
+        }
+    }
+    let cronjobs = api::json(console.get("/api/v1/cronjobs"));
+    assert!(
+        cronjobs["pass_starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pass| pass["kind"] == "Release run"),
+        "{cronjobs}"
+    );
 }
 
 #[test]

@@ -180,7 +180,9 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
-    ReleaseRun,
+    ReleaseRun {
+        pass: bool,
+    },
     ReviewRun {
         pass: bool,
     },
@@ -247,16 +249,18 @@ pub enum Pass {
     Review,
     Fix,
     Triage,
+    Release,
 }
 
 impl Pass {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Architect,
         Self::Pickup,
         Self::Security,
         Self::Review,
         Self::Fix,
         Self::Triage,
+        Self::Release,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -267,6 +271,7 @@ impl Pass {
             Self::Review => "Review",
             Self::Fix => "Fix",
             Self::Triage => "Triage",
+            Self::Release => "Release",
         }
     }
 }

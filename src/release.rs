@@ -1,7 +1,7 @@
-//! Explicit-version Release runs. Source comes only from fetched Git objects;
+//! Release runs and scheduled Passes. Source comes only from fetched Git objects;
 //! the Launch directory supplies origin and object storage, never executable code.
 
-use std::fs::{self, File};
+use std::fs::{self, File, TryLockError};
 use std::path::Path;
 use std::time::Instant;
 
@@ -14,9 +14,37 @@ use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::{interrupt, logs, poll, progress};
 
+mod selection;
 mod summary;
 
 pub const REPOSITORY: &str = "JacobStephens2/thirdshift";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bump {
+    Major,
+    Minor,
+    Patch,
+}
+
+impl Bump {
+    pub fn from_flag(flag: &str) -> Option<Self> {
+        match flag {
+            "--major" => Some(Self::Major),
+            "--minor" => Some(Self::Minor),
+            "--patch" => Some(Self::Patch),
+            _ => None,
+        }
+    }
+
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Major => "--major",
+            Self::Minor => "--minor",
+            Self::Patch => "--patch",
+        }
+    }
+}
 
 /// Success requires both publication and the bump pull request's merge.
 pub struct Ended {
@@ -38,6 +66,16 @@ pub fn outside_session() -> Result<()> {
 struct Version([u64; 3]);
 
 impl Version {
+    fn bumped(&self, bump: Bump) -> Result<String> {
+        let [major, minor, patch] = self.0;
+        let next = |value: u64| value.checked_add(1).context("release version overflow");
+        Ok(match bump {
+            Bump::Major => format!("{}.0.0", next(major)?),
+            Bump::Minor => format!("{major}.{}.0", next(minor)?),
+            Bump::Patch => format!("{major}.{minor}.{}", next(patch)?),
+        })
+    }
+
     fn parse(text: &str) -> Result<Self> {
         let mut parts = Vec::new();
         for part in text.split('.') {
@@ -59,12 +97,17 @@ impl Version {
 }
 
 /// Own the locks, worktree and live PR label through interruption cleanup.
-pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
+pub fn run(
+    version: Option<&str>,
+    pinned: Option<Bump>,
+    choice: &mut Choice,
+) -> Result<Option<Ended>, FailedRun> {
     let mut pr_url = None;
     let mut trace = None;
-    let result = (|| -> Result<Ended> {
+    let result = (|| -> Result<Option<Ended>> {
         outside_session()?;
-        let wanted = Version::parse(version)?;
+        let explicit = version.map(Version::parse).transpose()?;
+        let pass = version.is_none();
         let launch = Git::new(std::env::current_dir()?);
         let repo = Repo::of_origin(&git_run(&launch, &["config", "remote.origin.url"])?)
             .context("release requires a GitHub origin")?;
@@ -72,12 +115,76 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
             repo.slug().eq_ignore_ascii_case(REPOSITORY),
             "release requires origin {REPOSITORY}"
         );
-        logs::started(logs::Work::ReleaseRun(&repo), choice);
-        let _local = local_lock()?;
+        if pass {
+            logs::pass_fired(&repo);
+            if let Some(reason) =
+                crate::command_limit::early_skip(&repo, std::num::NonZeroUsize::MIN)
+            {
+                return skipped(&repo, reason);
+            }
+        } else {
+            logs::started(logs::Work::ReleaseRun(&repo), choice);
+        }
+        let Some(_local) = local_lock()? else {
+            if pass {
+                return skipped(
+                    &repo,
+                    "another Release run holds the machine-local release lock",
+                );
+            }
+            anyhow::bail!("another Release run holds the machine-local release lock");
+        };
         // Declared before the reservation so Drop pushes its delete first.
         let isolated = Isolated::open(&launch)?;
         let git = &isolated.git;
         fetch(git)?;
+        let _reservation = match crate::reservation::Reservation::release(git)? {
+            Some(reservation) => reservation,
+            None if pass => {
+                return skipped(
+                    &repo,
+                    "another Release run holds the origin release reservation",
+                );
+            }
+            None => anyhow::bail!("another Release run holds the origin release reservation"),
+        };
+        let github = GitHub::new();
+        let (base, previous) = match selection::candidate(git, &github, explicit.as_ref())? {
+            selection::Candidate::Ready { base, previous } => (base, previous),
+            selection::Candidate::Skipped(reason) => return skipped(&repo, reason),
+        };
+        if pass {
+            logs::started(logs::Work::ReleaseRun(&repo), choice);
+        }
+        let mut automatic_summary = None;
+        let version = if let Some(version) = version {
+            version.to_owned()
+        } else {
+            let current = main_version(git)?;
+            if let Some(bump) = pinned {
+                current.bumped(bump)?
+            } else {
+                let minor = current.bumped(Bump::Minor)?;
+                let patch = current.bumped(Bump::Patch)?;
+                let input = summary::selection_input(
+                    git,
+                    &github,
+                    &base,
+                    previous.as_deref(),
+                    &minor,
+                    &patch,
+                )?;
+                let selected = summary::select(choice, &repo, &input, &mut trace)?;
+                automatic_summary = Some(selected.summary);
+                if selected.bump == Bump::Minor {
+                    minor
+                } else {
+                    patch
+                }
+            }
+        };
+        let version = version.as_str();
+        let wanted = Version::parse(version)?;
         validate_version(git, &wanted)?;
         let branch = format!("release-{version}");
         let tag = format!("v{version}");
@@ -99,10 +206,6 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
             git_run(&launch, &["tag", "--list", &tag])?.is_empty(),
             "{tag} already exists locally"
         );
-        let _reservation = crate::reservation::Reservation::release(git)?
-            .context("another Release run holds the origin release reservation")?;
-        let github = GitHub::new();
-        let (base, previous) = candidate(git, &github, &wanted)?;
         checkout(git, &base)?;
         bump(git.dir(), version)?;
         git_run(git, &["add", "--", "Cargo.toml", "Cargo.lock"])?;
@@ -132,16 +235,20 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
                 "Cargo.lock",
             ],
         )?;
-        let input = summary::input(git, &github, &base, previous.as_deref(), version, &diff)?;
-        let summary = match summary::write(choice, &repo, &input, &mut trace) {
-            Ok(text) => Some(text),
-            Err(error) => {
-                interrupt::check()?;
-                progress::warn(
-                    &error,
-                    format_args!("release summary unavailable; using GitHub generated notes"),
-                );
-                None
+        let summary = if let Some(summary) = automatic_summary {
+            summary
+        } else {
+            let input = summary::input(git, &github, &base, previous.as_deref(), version, &diff)?;
+            match summary::write(choice, &repo, &input, &mut trace) {
+                Ok(text) => Some(text),
+                Err(error) => {
+                    interrupt::check()?;
+                    progress::warn(
+                        &error,
+                        format_args!("release summary unavailable; using GitHub generated notes"),
+                    );
+                    None
+                }
             }
         };
         let notes = if summary.is_none() {
@@ -203,10 +310,10 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
             github.pr_state(&pr.issue, &url)? == PrState::Merged,
             "GitHub Release was published, but the bump pull request has not merged"
         );
-        Ok(Ended {
+        Ok(Some(Ended {
             pr_url: url,
             version: version.into(),
-        })
+        }))
     })();
     result.map_err(|error| FailedRun {
         pr_url,
@@ -215,7 +322,12 @@ pub fn run(version: &str, choice: &mut Choice) -> Result<Ended, FailedRun> {
     })
 }
 
-fn local_lock() -> Result<File> {
+fn skipped(repo: &Repo, reason: impl std::fmt::Display) -> Result<Option<Ended>> {
+    logs::skipped(logs::Pass::Release, repo, reason);
+    Ok(None)
+}
+
+fn local_lock() -> Result<Option<File>> {
     let directory = crate::config::home()?.join(".thirdshift");
     fs::create_dir_all(&directory)?;
     let file = File::options()
@@ -223,9 +335,11 @@ fn local_lock() -> Result<File> {
         .create(true)
         .truncate(false)
         .open(directory.join("release.lock"))?;
-    file.try_lock()
-        .context("another Release run holds the machine-local release lock")?;
-    Ok(file)
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn fetch(git: &Git) -> Result<()> {
@@ -243,16 +357,24 @@ fn fetch(git: &Git) -> Result<()> {
 }
 
 fn validate_version(git: &Git, wanted: &Version) -> Result<()> {
+    let current = main_version(git)?;
+    ensure!(
+        *wanted > current,
+        "release version must be strictly greater than {}.{}.{} on main",
+        current.0[0],
+        current.0[1],
+        current.0[2]
+    );
+    Ok(())
+}
+
+fn main_version(git: &Git) -> Result<Version> {
     let manifest = git_run(git, &["show", "origin/main:Cargo.toml"])?;
     let manifest: toml::Value = toml::from_str(&manifest)?;
     let current = manifest["package"]["version"]
         .as_str()
         .context("main has no package version")?;
-    ensure!(
-        *wanted > Version::parse(current)?,
-        "release version must be strictly greater than {current} on main"
-    );
-    Ok(())
+    Version::parse(current)
 }
 
 fn last_tag(git: &Git) -> Result<Option<String>> {
@@ -276,52 +398,6 @@ fn last_tag(git: &Git) -> Result<Option<String>> {
         ],
     )
     .map(Some)
-}
-
-fn candidate(git: &Git, github: &GitHub, wanted: &Version) -> Result<(String, Option<String>)> {
-    let mut progress_line = poll::WaitingLine::new();
-    let started = Instant::now();
-    loop {
-        fetch(git)?;
-        validate_version(git, wanted)?;
-        let previous = last_tag(git)?;
-        let boundary = previous.as_ref().map(|tag| format!("^{tag}"));
-        let mut args = vec!["rev-list", "--first-parent", "origin/main"];
-        if let Some(boundary) = &boundary {
-            args.push(boundary);
-        }
-        let commits = git_run(git, &args)?;
-        let mut pending = false;
-        for sha in commits.lines() {
-            if let Some(previous) = &previous {
-                // main can contain a release tag on a merged side branch.
-                if git_run(git, &["merge-base", previous, sha])?
-                    != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
-                {
-                    continue;
-                }
-            }
-            match github.release_push_run("ci.yml", "main", sha)? {
-                Some(run)
-                    if run.status == "completed"
-                        && run.conclusion.as_deref() == Some("success") =>
-                {
-                    return Ok((sha.into(), previous));
-                }
-                Some(run) if run.status != "completed" => pending = true,
-                None if started.elapsed() < poll::grace_period() => pending = true,
-                _ => {}
-            }
-        }
-        ensure!(
-            pending,
-            "no candidate main commit has successful push CI; all candidates completed non-green or have no CI"
-        );
-        if progress_line.should_report(()) {
-            progress::step("waiting for main push CI before releasing");
-        }
-        poll::pause()?;
-    }
 }
 
 fn check_bump(

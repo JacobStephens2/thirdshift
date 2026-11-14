@@ -22,6 +22,20 @@ pub(super) fn input(
     version: &str,
     diff: &str,
 ) -> Result<String> {
+    let pull_requests = pull_requests(git, github, base, previous)?;
+    Ok(crate::prompt::release_summary(
+        version,
+        diff,
+        &pull_requests,
+    ))
+}
+
+fn pull_requests(
+    git: &Git,
+    github: &GitHub,
+    base: &str,
+    previous: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
     let range = previous.map_or_else(|| base.to_owned(), |previous| format!("{previous}..{base}"));
     let subjects = super::git_run(
         git,
@@ -45,11 +59,66 @@ pub(super) fn input(
             pull_requests.push(github.release_pr_input(number)?);
         }
     }
-    Ok(crate::prompt::release_summary(
-        version,
-        diff,
-        &pull_requests,
+    Ok(pull_requests)
+}
+
+pub(super) fn selection_input(
+    git: &Git,
+    github: &GitHub,
+    base: &str,
+    previous: Option<&str>,
+    minor: &str,
+    patch: &str,
+) -> Result<String> {
+    Ok(crate::prompt::release_selection(
+        minor,
+        patch,
+        &pull_requests(git, github, base, previous)?,
     ))
+}
+
+pub(super) struct Selected {
+    pub bump: super::Bump,
+    pub summary: Option<String>,
+}
+
+pub(super) fn select(
+    choice: &mut Choice,
+    repo: &Repo,
+    prompt: &str,
+    trace: &mut Option<PathBuf>,
+) -> Result<Selected> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Output {
+        bump: String,
+        summary: String,
+    }
+    let result = write(choice, repo, prompt, trace)
+        .and_then(|text| Ok(serde_json::from_str::<Output>(&text)?));
+    match result {
+        Ok(output) => Ok(Selected {
+            bump: if output.bump == "minor" {
+                super::Bump::Minor
+            } else {
+                super::Bump::Patch
+            },
+            summary: (!output.summary.trim().is_empty()).then_some(output.summary),
+        }),
+        Err(error) => {
+            crate::interrupt::check()?;
+            crate::progress::warn(
+                &error,
+                format_args!(
+                    "release selection unavailable; using patch and GitHub generated notes"
+                ),
+            );
+            Ok(Selected {
+                bump: super::Bump::Patch,
+                summary: None,
+            })
+        }
+    }
 }
 
 pub(super) fn write(

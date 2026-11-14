@@ -1099,7 +1099,7 @@ which also starts a Spec run when the issue has Tickets. Every request names
 </tr>
 <tr>
 <td><code>release</code></td>
-<td>Requires <code>admin</code> scope and explicit <code>version</code> (<code>X.Y.Z</code>); optional <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>; repository must be <code>JacobStephens2/thirdshift</code></td>
+<td>Requires <code>admin</code> scope; optional <code>version</code> (<code>X.Y.Z</code>) or <code>bump</code> (<code>major</code>, <code>minor</code>, <code>patch</code>), mutually exclusive; omit both for automatic minor/patch selection; optional <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>; repository must be <code>JacobStephens2/thirdshift</code></td>
 </tr>
 </tbody></table>
 <p><code>POST /api/v1/start</code> is an alias of this path. Release starts require <code>admin</code>
@@ -4032,13 +4032,13 @@ cargo test
 <details class="fold"><summary><h3>Release runs</h3></summary>
 <div class="manual-content" id="release-runs">
 <p>From a clone whose <code>origin</code> is <code>JacobStephens2/thirdshift</code>, run
-<code>thirdshift release &lt;version&gt;</code> on Linux. The version must be plain <code>X.Y.Z</code>,
+<code>thirdshift release [&lt;version&gt; | --major | --minor | --patch]</code> on Linux. An explicit version must be plain <code>X.Y.Z</code>,
 without leading zeros, and greater than the version on freshly fetched <code>main</code>.
 The running binary uses Git objects and temporary detached worktrees, leaving
 the Launch directory&#39;s checked-out branch and uncommitted work alone.</p>
 <p>It chooses the newest <code>main</code> commit descending from the last release tag whose
 push CI succeeded. It waits with periodic progress lines while candidates have
-pending CI, and fails when none qualifies after CI completes. One tool-less
+pending CI. Explicit-version runs fail when none qualifies after CI completes. One tool-less
 summary Session runs in a fresh-home sandbox with its Session trace attached to
 the Release run. Failed or empty summaries fall back to GitHub generated notes
 outside the summary markers, so the post-release notes job does not repeat them.</p>
@@ -4046,7 +4046,26 @@ outside the summary markers, so the post-release notes job does not repeat them.
 waits for checks and mergeability, pushes <code>v&lt;version&gt;</code> at that validated bump
 head, waits for the release workflow and merges the bump PR. It does not run
 <code>thirdshift update</code>. Existing branches or tags require the Day shift; this
-explicit-version flow does not yet resume releases or select versions itself.</p>
+flow does not yet resume unfinished releases.</p>
+<p>With no version, the command is a Release Pass. It skips quietly with exit <code>0</code>
+and no Run notification during a live Experiment or Quota wait, while either
+release lock is held, when nothing changed or only non-shipped paths changed,
+or when every eligible main push CI completed non-green. The Activity log keeps
+one skip entry until its reason changes; Cron jobs shows the latest Pass firing.
+Release Passes use their own locks and run outside the Command limit.</p>
+<p>Eligible commits must differ from the last release tag in compiled Rust source,
+embedded Factory skills or Processes, Cargo manifest/lockfile, dist or Rust
+toolchain configuration, <code>README.md</code>, <code>LICENSE</code>, release/publish workflows or
+release scripts. Documentation, website, Day shift agent skills and tests alone
+do not trigger a release. The newest eligible green commit is selected
+immediately, even when a newer candidate is still waiting for CI.</p>
+<p>Without a bump flag, the same fresh-home sandboxed, traced Session chooses
+<code>minor</code> or <code>patch</code> and writes the summary from merged pull requests and the two
+candidate versions. New CLI commands/flags, Console pages/actions, config keys
+and user-visible contract changes call for minor; fixes and internal refinements
+call for patch. Automatic selection never chooses major: invalid output or a
+failed Session falls back to patch, using generated notes when the summary is
+unusable. <code>--major</code>, <code>--minor</code> and <code>--patch</code> pin the bump and ask only for a summary.</p>
 <p>Use <code>--harness</code>, <code>--model</code>, <code>--effort</code>, <code>--email</code>, <code>--email-unless-merged</code> or
 <code>--no-email</code> as on other Commands. A machine-local release lock and atomic
 origin reservation serialize releases independently of the Command limit;
@@ -4056,7 +4075,7 @@ start releases. <code>thirdshift stop</code> releases the locks and live label.<
 and stay quiet under <code>email-unless-merged</code>. Failures, including publication
 without merging, appear in Needs you and email even under that policy. They
 settle when the bump PR merges or closes, a later Release run starts, or a
-Dismissal covers them. Cron jobs recognizes <code>thirdshift release &lt;version&gt;</code>.
+Dismissal covers them. Cron jobs recognizes versioned and versionless releases.
 Console Start controls and <code>POST /api/v1/start</code> (also <code>/api/v1/runs</code>) require
 <code>admin</code> scope for releases; <code>run</code> scope and narrowed viewers are refused.</p>
 </div></details>

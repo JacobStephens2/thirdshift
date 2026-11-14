@@ -66,6 +66,37 @@ test('Release start requires admin, confirms an explicit version and preserves r
   }
 });
 
+test('Release start confirms automatic and pinned Passes and rejects version plus bump', async t => {
+  const release = await startFixture({}, 'JacobStephens2/thirdshift');
+  t.after(() => release.close());
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await release.page({ viewport });
+    t.after(() => page.context().close());
+    await page.getByText('Start work', { exact: true }).click();
+    await page.getByText('Start Release run', { exact: true }).click();
+    const form = page.locator('[data-start-form="release"]');
+    for (const bump of ['', 'major', 'minor', 'patch']) {
+      await form.getByLabel('Bump', { exact: true }).selectOption(bump);
+      await form.getByRole('button', { name: 'Review release', exact: true }).click();
+      const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
+      await confirm.waitFor();
+      const request = JSON.parse(await confirm.locator('pre').textContent());
+      assert.equal(request.command, 'release');
+      assert.equal(request.version, undefined);
+      assert.equal(request.bump, bump || undefined);
+      assert.match(await confirm.textContent(), bump ? new RegExp(`--${bump}`) : /automatic/);
+      await page.keyboard.press('Escape');
+      await confirm.waitFor({ state: 'hidden' });
+    }
+    await form.getByLabel('Version', { exact: true }).fill('1.2.3');
+    await form.getByRole('button', { name: 'Review release', exact: true }).click();
+    await page.locator('[data-start-result]').filter({ hasText: 'Version and Bump are mutually exclusive.' }).waitFor();
+    assert.equal(await page.getByRole('dialog', { name: 'Confirm start' }).count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.context().close();
+  }
+});
+
 test('Start Fix run confirms the pull request and defaults, cancels, and submits once', async t => {
   await fixture.readyPullRequest();
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {

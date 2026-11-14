@@ -1552,13 +1552,15 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 }
 
 pub struct ReleaseArgs {
-    pub version: String,
+    pub version: Option<String>,
+    pub bump: Option<crate::release::Bump>,
     pub harness: harness::Asked,
     pub email: Option<NotificationAsk>,
 }
 
 fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
     let mut version = None;
+    let mut bump = None;
     let mut harness = harness::Asked::default();
     let mut email = None;
     let mut rest = args.iter().peekable();
@@ -1568,6 +1570,18 @@ fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
         {
             continue;
         }
+        if let Some(level) = crate::release::Bump::from_flag(arg) {
+            ensure!(
+                bump.is_none() && version.is_none(),
+                "release version and bump flags are mutually exclusive"
+            );
+            bump = Some(level);
+            continue;
+        }
+        ensure!(
+            bump.is_none() || arg.starts_with('-'),
+            "release version and bump flags are mutually exclusive"
+        );
         ensure!(
             version.is_none() && !arg.starts_with('-'),
             "unexpected argument after release: {arg}"
@@ -1575,7 +1589,8 @@ fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
         version = Some(arg.clone());
     }
     Ok(ReleaseArgs {
-        version: version.context("release requires <version> (X.Y.Z)")?,
+        version,
+        bump,
         harness,
         email,
     })

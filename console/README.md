@@ -55,7 +55,8 @@ Command fallback; links are never inferred from failure messages.
 
 The Inbox's **Start work** controls offer **Start Release run** to callers with
 `admin` scope when `JacobStephens2/thirdshift` has a known Launch directory.
-Choose an explicit `X.Y.Z` version, Harness, Model, Effort and email preference,
+Leave Version and Bump empty for an automatic minor/patch Release Pass, choose
+a pinned Bump, or supply an explicit `X.Y.Z` version. Choose Harness, Model, Effort and email preference,
 then confirm the request. Both `POST /api/v1/start` and `POST /api/v1/runs` use
 the same structured request; `release` requires `admin`, while other Commands
 require `run`. Fleet choices apply the owning machine's current scopes,
