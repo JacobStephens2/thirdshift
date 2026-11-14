@@ -10,6 +10,51 @@ let fixture;
 before(async () => { fixture = await startFixture(); });
 after(async () => { await fixture?.close(); });
 
+test('closed Start work is one line across Themes and keeps native keyboard and pointer operation', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await fixture.page({ viewport });
+    t.after(() => page.context().close());
+    const panel = page.getByRole('region', { name: 'Start work', exact: true });
+    const summary = panel.getByText('Start work', { exact: true });
+    const issue = panel.getByLabel('Issue number or URL', { exact: true });
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['light', 'dark']) {
+        await t.test(`${family}-${mode} at ${viewport.width}px`, async () => {
+          await page.evaluate(async theme => {
+            document.documentElement.dataset.theme = theme;
+            await document.fonts.ready;
+          }, `${family}-${mode}`);
+          const closed = await panel.boundingBox();
+          assert.ok(closed.height <= 50, `closed Start work height ${closed.height}px exceeds one line`);
+          assert.ok((await summary.boundingBox()).height >= 44, 'summary retains a comfortable hit area');
+          assert.equal(await issue.isVisible(), false);
+          await summary.focus();
+          await summary.press('Enter');
+          await issue.waitFor();
+          assert.equal(await summary.evaluate(element => {
+            const style = getComputedStyle(element);
+            return element === document.activeElement && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+          }), true, 'keyboard focus stays visible');
+          const expanded = await panel.boundingBox();
+          const input = await issue.boundingBox();
+          const submit = await panel.getByRole('button', { name: 'Review start', exact: true }).boundingBox();
+          assert.ok(input.x - expanded.x >= 12 && expanded.x + expanded.width - input.x - input.width >= 12);
+          assert.ok(expanded.y + expanded.height - submit.y - submit.height >= 12, 'expanded controls keep bottom spacing');
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+          await summary.press('Space');
+          await issue.waitFor({ state: 'hidden' });
+          await summary.click();
+          await issue.waitFor();
+          await summary.click();
+          await issue.waitFor({ state: 'hidden' });
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        });
+      }
+    }
+    await page.context().close();
+  }
+});
+
 test('Start Fix run confirms the pull request and defaults, cancels, and submits once', async t => {
   await fixture.readyPullRequest();
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
