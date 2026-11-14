@@ -79,7 +79,12 @@
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}
-    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass.line()|linkify }}</p>{% endfor %}</aside>{% endif %}
+    {% if !self.idle() && !inbox.idle_passes.is_empty() %}
+    <aside aria-label="Idle Passes"><details id="idle-passes">
+      <summary>Last recorded skipped Passes:</summary>
+      {% for pass in inbox.idle_passes %}<p>{{ pass.line()|linkify }}</p>{% endfor %}
+    </details></aside>
+    {% endif %}
     {% if !self.idle() && !inbox.pass_starts.is_empty() %}<aside aria-label="Last fired Passes">{% for pass in inbox.pass_starts %}<p>{% include "console/pass_start.html" %}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>
