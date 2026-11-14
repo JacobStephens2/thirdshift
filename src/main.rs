@@ -187,7 +187,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
-       thirdshift release <version>                  Publish and merge a thirdshift release from green origin/main
+       thirdshift release [<version> | --major | --minor | --patch]  Release green shipped changes; no version runs a Pass
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -237,7 +237,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode, kimi), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
+Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, release without version, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
@@ -619,7 +619,9 @@ fn release(args: args::ReleaseArgs) -> ExitCode {
         ..Default::default()
     };
     let (config, mut started) = match command::start(
-        Begin::ReleaseRun,
+        Begin::ReleaseRun {
+            pass: args.version.is_none(),
+        },
         |config| flags.notification(config),
         About::ReleaseRun,
     ) {
@@ -628,7 +630,10 @@ fn release(args: args::ReleaseArgs) -> ExitCode {
     };
     let mut harness = flags.harness(&config);
     started.built_with(&harness);
-    started.finish(Ending::Release(release::run(&args.version, &mut harness)))
+    match release::run(args.version.as_deref(), args.bump, &mut harness) {
+        Ok(None) => ExitCode::SUCCESS,
+        result => started.finish(Ending::Release(result.map(Option::unwrap))),
+    }
 }
 
 #[cfg(target_os = "linux")]

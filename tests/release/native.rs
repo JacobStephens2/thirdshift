@@ -29,13 +29,289 @@ fn command(release: &Release, version: &str) -> Command {
     )
     .unwrap();
     let mut command = release.command(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &launch);
+    command.arg("release");
+    if !version.is_empty() {
+        command.arg(version);
+    }
     command
-        .args(["release", version])
         .env_remove("THIRDSHIFT_SESSION")
         .env_remove("THIRDSHIFT_PARENT_RECORD")
         .env("THIRDSHIFT_POLL_MS", "1")
         .env("THIRDSHIFT_CI_GRACE_MS", "100");
     command
+}
+
+#[test]
+fn release_pass_skips_non_shipped_changes_quietly_and_records_each_firing() {
+    let release = Release::new();
+    let before = release.origin_refs();
+    for _ in 0..2 {
+        let output = command(&release, "").output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(release.origin_refs(), before);
+        assert!(
+            release
+                .root()
+                .join("home/.thirdshift/logs/JacobStephens2/thirdshift/release.last-fired")
+                .exists()
+        );
+    }
+    let root = release
+        .root()
+        .join("home/.thirdshift/logs/JacobStephens2/thirdshift");
+    let activity = fs::read_to_string(root.join("activity.log")).unwrap();
+    assert_eq!(
+        activity.matches("Release run skipped:").count(),
+        1,
+        "{activity}"
+    );
+    assert!(activity.contains("no shipped changes"), "{activity}");
+    assert!(!root.join("commands/release").exists());
+}
+
+#[test]
+fn release_version_and_bump_flags_are_mutually_exclusive_before_startup() {
+    for arguments in [
+        vec!["1.2.3", "--patch"],
+        vec!["--minor", "--patch"],
+        vec!["--major", "1.2.3"],
+    ] {
+        let release = Release::new();
+        let mut run = command(&release, "");
+        let output = run.args(arguments).output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output).contains("mutually exclusive"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(!release.root().join("home/.thirdshift/logs").exists());
+    }
+}
+
+#[test]
+fn release_pass_admission_gates_skip_quietly_before_any_cut() {
+    for gate in ["local", "origin", "quota", "experiment"] {
+        let release = Release::new();
+        let mut run = command(&release, "");
+        let lock = fs::File::create(release.root().join("home/.thirdshift/release.lock")).unwrap();
+        let reason = match gate {
+            "local" => {
+                lock.lock().unwrap();
+                "machine-local release lock"
+            }
+            "origin" => {
+                let token = release.origin(&["rev-parse", "main"]);
+                release.origin(&["update-ref", "refs/thirdshift/reservations/release", &token]);
+                "origin release reservation"
+            }
+            "quota" => {
+                let path = release.root().join("gh-state.json");
+                let mut state: Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                state["rate_limits"] = json!({"core":{"remaining":0,"reset":(chrono::Utc::now() + chrono::Duration::hours(1)).timestamp()}});
+                fs::write(path, state.to_string()).unwrap();
+                "Quota wait"
+            }
+            "experiment" => {
+                let pid = std::process::id();
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+                let ticks = stat
+                    .rsplit_once(") ")
+                    .unwrap()
+                    .1
+                    .split_whitespace()
+                    .nth(19)
+                    .unwrap();
+                let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+                let hostname =
+                    String::from_utf8(Command::new("hostname").output().unwrap().stdout).unwrap();
+                let directory = release
+                    .root()
+                    .join("home/.thirdshift/logs/acme/other/commands/experiment");
+                fs::create_dir_all(&directory).unwrap();
+                fs::write(directory.join("live.command.json"), json!({
+                    "version":1, "kind":"Experiment", "repository":"acme/other", "hostname":hostname.trim(),
+                    "name":"live", "process_id":pid, "process_start":format!("{}:{ticks}", boot.trim()),
+                    "harness":"claude", "started_at":chrono::Utc::now().to_rfc3339(), "stages":[]
+                }).to_string()).unwrap();
+                "Experiment live is live"
+            }
+            _ => unreachable!(),
+        };
+        let before = release.origin_refs();
+        for _ in 0..2 {
+            let output = run.output().unwrap();
+            assert!(output.status.success(), "{gate}: {}", stderr(&output));
+            assert!(
+                output.stdout.is_empty() && output.stderr.is_empty(),
+                "{gate}: {output:?}"
+            );
+        }
+        assert_eq!(release.origin_refs(), before);
+        let root = release
+            .root()
+            .join("home/.thirdshift/logs/JacobStephens2/thirdshift");
+        let activity = fs::read_to_string(root.join("activity.log")).unwrap();
+        assert_eq!(
+            activity.matches("Release run skipped:").count(),
+            1,
+            "{activity}"
+        );
+        assert!(activity.contains(reason), "{activity}");
+        assert!(root.join("release.last-fired").exists());
+        assert!(!root.join("commands/release").exists());
+    }
+}
+
+#[test]
+fn release_pass_nothing_changed_and_red_shipped_ci_are_quiet_skips() {
+    for nothing_changed in [true, false] {
+        let release = Release::new();
+        let mut run = command(&release, "");
+        let reason = if nothing_changed {
+            let tag = release.origin(&["rev-parse", "v0.1.0"]);
+            release.origin(&["update-ref", "refs/heads/main", &tag]);
+            "nothing changed"
+        } else {
+            shipped(&release);
+            release.main_ci("completed", "failure");
+            "main push CI (ci.yml)"
+        };
+        let before = release.origin_refs();
+        let output = run.output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            output.stdout.is_empty() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+        assert_eq!(release.origin_refs(), before);
+        let activity = fs::read_to_string(
+            release
+                .root()
+                .join("home/.thirdshift/logs/JacobStephens2/thirdshift/activity.log"),
+        )
+        .unwrap();
+        assert!(activity.contains(reason), "{activity}");
+    }
+}
+
+#[test]
+fn release_pass_selects_older_green_shipped_content_or_waits_for_pending_ci() {
+    for older_green in [true, false] {
+        let release = Release::new();
+        let green = shipped(&release);
+        release.merge_pr("pending-pass", "Pending content", "");
+        let tip = release.origin(&["rev-parse", "main"]);
+        release.main_ci_on(
+            &tip,
+            "completed",
+            "success",
+            if older_green { 100 } else { 2 },
+        );
+        if !older_green {
+            release.main_ci_on(&green, "completed", "failure", 0);
+        }
+        let output = command(&release, "").arg("--patch").output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let head = release.pr_head("release-0.1.1");
+        assert_eq!(
+            release.origin(&["rev-parse", &format!("{head}^")]),
+            if older_green { green } else { tip }
+        );
+        assert_eq!(
+            stderr(&output).contains("waiting for main push CI"),
+            !older_green
+        );
+    }
+}
+
+#[test]
+fn release_pass_reports_pending_main_ci_before_it_finishes() {
+    use std::time::{Duration, Instant};
+    let release = Release::new();
+    shipped(&release);
+    release.main_ci_on(
+        &release.origin(&["rev-parse", "main"]),
+        "completed",
+        "success",
+        100000,
+    );
+    let mut run = command(&release, "");
+    run.arg("--patch");
+    let path = release.root().join("pending-main-output");
+    let output = fs::File::create(&path).unwrap();
+    run.stdout(output.try_clone().unwrap()).stderr(output);
+    let owned = support::child_lifetime::OwnedRuns::new();
+    let mut child = owned.spawn(&mut run);
+    // This covers binary startup, isolated Git preparation and the first CI read.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !fs::read_to_string(&path)
+        .unwrap()
+        .contains("waiting for main push CI")
+    {
+        assert!(
+            child.try_wait().is_none(),
+            "{}",
+            fs::read_to_string(&path).unwrap()
+        );
+        assert!(
+            Instant::now() < deadline,
+            "no progress was visible while main CI was pending"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    release.main_ci("completed", "success");
+    let deadline = Instant::now() + support::WAIT_BOUND;
+    loop {
+        if let Some(status) = child.try_wait() {
+            assert!(status.success(), "{}", fs::read_to_string(&path).unwrap());
+            break;
+        }
+        assert!(Instant::now() < deadline, "Release Pass did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn release_pass_filters_shipped_sources_assets_skills_and_pipeline_paths() {
+    for (path, eligible) in [
+        ("src/main.rs", true),
+        ("src/console/start_form.html", true),
+        ("src/console/assets/start.js", true),
+        ("skills/notes/SKILL.md", true),
+        ("processes/notes.toml", true),
+        (".github/workflows/release.yml", true),
+        (".github/workflows/publish-crates.yml", true),
+        ("scripts/release-notes.sh", true),
+        ("dist-workspace.toml", true),
+        ("rust-toolchain.toml", true),
+        ("docs/guide.md", false),
+        ("site/index.html", false),
+        (".agents/skills/notes/SKILL.md", false),
+        ("tests/release.rs", false),
+    ] {
+        let release = Release::new();
+        let contributor = release.contributor();
+        let file = contributor.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, "Changed\n").unwrap();
+        git(&contributor, &["add", "--", path]);
+        git(&contributor, &["commit", "-qm", "Change a path"]);
+        git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
+        release.main_ci("completed", "success");
+        release.ci_reports(GREEN);
+        let output = command(&release, "").arg("--patch").output().unwrap();
+        assert!(output.status.success(), "{path}: {}", stderr(&output));
+        assert_eq!(
+            release.origin_tag("v0.1.1").is_some(),
+            eligible,
+            "{path}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 fn record(release: &Release) -> Value {
@@ -51,6 +327,10 @@ fn record(release: &Release) -> Value {
 }
 
 fn sandbox_summary(release: &Release) {
+    sandbox_reply(release, "A sandboxed release summary (#2).", false);
+}
+
+fn sandbox_reply(release: &Release, reply: &str, automatic: bool) {
     let binary = release.bin().join("claude");
     fs::remove_file(&binary).unwrap();
     fs::write(
@@ -66,13 +346,157 @@ if [ "$1 $2" = 'auth status' ]; then exit 0; fi
 test ! -r '{}/home/private-release-secret' || exit 81
 test -z "${{HOST_RELEASE_SECRET-}}" || exit 82
 test "$HOME" != '{}/home' || exit 83
-cat >/dev/null
+prompt=$(cat)
+{}
 printf '%s\n' '{{"type":"system","subtype":"init","session_id":"release-summary-test"}}'
-printf '%s\n' '{{"type":"result","subtype":"success","is_error":false,"result":"A sandboxed release summary (#2)."}}'
+printf '%s\n' '{}'
 "#,
             release.root().display(),
-            release.root().display()
+            release.root().display(),
+            if automatic {
+                r#"case "$prompt" in *'"minor":"0.2.0"'*) ;; *) exit 84;; esac
+case "$prompt" in *'"patch":"0.1.1"'*) ;; *) exit 85;; esac
+case "$prompt" in *'"number":2'*'"number":3'*) ;; *) exit 86;; esac
+case "$prompt" in *'Old news.'*) exit 87;; esac"#
+            } else {
+                r#"case "$prompt" in *'Choose the bump'*) exit 88;; esac"#
+            },
+            json!({"type":"result", "subtype":"success", "is_error": false, "result": reply})
         ),
+    );
+}
+
+fn shipped(release: &Release) -> String {
+    let contributor = release.contributor();
+    git(&contributor, &["checkout", "-q", "--detach", "origin/main"]);
+    fs::write(contributor.join("README.md"), "Shipped change\n").unwrap();
+    git(&contributor, &["add", "README.md"]);
+    git(&contributor, &["commit", "-qm", "Shipped change"]);
+    git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
+    let sha = release.origin(&["rev-parse", "main"]);
+    release.main_ci("completed", "success");
+    release.ci_reports(GREEN);
+    sha
+}
+
+#[test]
+fn release_pass_selects_minor_or_patch_and_summary_in_one_sandboxed_session() {
+    for (choice, version) in [("minor", "0.2.0"), ("patch", "0.1.1")] {
+        let release = Release::new();
+        let base = shipped(&release);
+        sandbox_reply(
+            &release,
+            &json!({"bump":choice,"summary":"Automatic summary (#2)."}).to_string(),
+            true,
+        );
+        let output = command(&release, "")
+            .env("HOST_RELEASE_SECRET", "stay outside")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let pr = release.pr(&format!("release-{version}"));
+        assert!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .contains("Automatic summary (#2).")
+        );
+        assert_eq!(
+            release.origin(&[
+                "rev-parse",
+                &format!("{}^", release.pr_head(&format!("release-{version}")))
+            ]),
+            base
+        );
+        let record = record(&release);
+        let directory = release
+            .root()
+            .join("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/release");
+        let traces: Vec<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.to_string_lossy()
+                    .ends_with("release-summary.logs.jsonl")
+            })
+            .collect();
+        assert_eq!(traces.len(), 1, "{traces:?}");
+        assert!(
+            fs::read_to_string(&traces[0])
+                .unwrap()
+                .contains("release-summary-test")
+        );
+        assert_eq!(record["outcome"], "merged");
+    }
+}
+
+#[test]
+fn release_pass_automatic_selection_never_chooses_major_and_falls_back_once() {
+    for reply in [
+        Some(r#"{"bump":"major","summary":"A usable summary (#2)."}"#),
+        Some("not JSON"),
+        Some(r#"{"bump":"patch","summary":" "}"#),
+        None,
+    ] {
+        let release = Release::new();
+        shipped(&release);
+        if let Some(reply) = reply {
+            sandbox_reply(&release, reply, true);
+        }
+        let output = command(&release, "").output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let pr = release.pr("release-0.1.1");
+        let body = pr["body"].as_str().unwrap();
+        if reply.is_some_and(|reply| reply.contains("usable")) {
+            assert!(body.contains("A usable summary"), "{body}");
+        } else {
+            assert_eq!(body.matches("## What's Changed").count(), 1, "{body}");
+            assert!(
+                !body
+                    .split("<!-- release-summary:end -->")
+                    .next()
+                    .unwrap()
+                    .contains("## What's Changed")
+            );
+        }
+        assert!(release.origin_tag("v1.0.0").is_none());
+    }
+}
+
+#[test]
+fn release_pass_pinned_bumps_write_only_a_summary() {
+    for (flag, version) in [
+        ("--major", "1.0.0"),
+        ("--minor", "0.2.0"),
+        ("--patch", "0.1.1"),
+    ] {
+        let release = Release::new();
+        shipped(&release);
+        sandbox_summary(&release);
+        let output = command(&release, "").arg(flag).output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let pr = release.pr(&format!("release-{version}"));
+        assert!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .contains("A sandboxed release summary")
+        );
+        assert!(release.origin_tag(&format!("v{version}")).is_some());
+    }
+}
+
+#[test]
+fn review_blank_minor_summary_falls_back_to_patch() {
+    let release = Release::new();
+    shipped(&release);
+    sandbox_reply(&release, r#"{"bump":"minor","summary":" "}"#, true);
+    let output = command(&release, "").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        release.origin_tag("v0.1.1").is_some(),
+        "invalid summary must fall back to patch; minor tag = {:?}",
+        release.origin_tag("v0.2.0")
     );
 }
 

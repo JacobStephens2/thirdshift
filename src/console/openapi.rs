@@ -541,6 +541,7 @@ fn start_schema() -> Value {
         "repository": text, "issue": {"oneOf":[{"type":"integer","minimum":1},text]},
         "pull_request": text, "author": text, "name": text,
         "version": {"type":"string", "pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "bump": {"enum":["major","minor","patch"]},
         "base": text, "focus": text, "report": {"type":"string","minLength":1},
         "order": {"enum":["lowest-first","highest-first"]},
         "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
@@ -576,6 +577,9 @@ fn start_schema() -> Value {
         }
         let mut variant = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
         variant["x-scope"] = json!(kind.scope().name());
+        if command == "release" {
+            variant["not"] = json!({"required":["version", "bump"]});
+        }
         if command == "review" {
             variant["oneOf"] = json!([
                 {"required":["pull_request"],"not":{"required":["author"]}},

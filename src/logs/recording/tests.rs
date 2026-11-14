@@ -440,7 +440,7 @@ fn every_command_kind_records_suspension_in_its_live_stage() {
             },
         ),
         (Begin::FixRun { pass: false }, Work::FixRun(&repo)),
-        (Begin::ReleaseRun, Work::ReleaseRun(&repo)),
+        (Begin::ReleaseRun { pass: false }, Work::ReleaseRun(&repo)),
         (Begin::ReviewRun { pass: false }, Work::ReviewRun(&repo)),
         (Begin::Experiment, Work::Experiment(&repo)),
         (
@@ -901,7 +901,7 @@ fn session_commands_save_their_run_metrics_at_completion() {
             review_findings: serde_json::Value::Null,
         },
         Case {
-            begin: Begin::ReleaseRun,
+            begin: Begin::ReleaseRun { pass: false },
             work: Work::ReleaseRun(&repo),
             kind: "Release run",
             stages: vec![(StageName::ReleaseSummary, Some(release))],
@@ -1454,6 +1454,7 @@ fn skip(memory: &Scripted, pass: Pass, reason: &str) {
         Pass::Review => Begin::ReviewRun { pass: true },
         Pass::Fix => Begin::FixRun { pass: true },
         Pass::Triage => Begin::TriageRun { pass: true },
+        Pass::Release => Begin::ReleaseRun { pass: true },
     });
     record.configured(&config(true));
     record.eprint(reason);

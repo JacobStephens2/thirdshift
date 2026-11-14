@@ -202,7 +202,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => CommandKind::Scoring,
             Begin::ReviewRun { .. } => CommandKind::Review,
             Begin::FixRun { .. } => CommandKind::Fix,
-            Begin::ReleaseRun => CommandKind::Release,
+            Begin::ReleaseRun { .. } => CommandKind::Release,
             Begin::TriageRun { .. } => CommandKind::Triage,
             Begin::Experiment => CommandKind::Experiment,
             Begin::Process { .. } => CommandKind::Process,
@@ -220,7 +220,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::ReviewRun { pass } => ("Review run starting".into(), pass),
             Begin::FixRun { pass } => ("Fix run starting".into(), pass),
-            Begin::ReleaseRun => ("Release run starting".into(), false),
+            Begin::ReleaseRun { pass } => ("Release run starting".into(), pass),
             Begin::TriageRun { pass } => ("Triage run starting".into(), pass),
             Begin::Experiment => ("Experiment starting".into(), false),
             Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
@@ -239,7 +239,7 @@ impl<O: Outside> Record<O> {
     pub(super) fn configured(&mut self, config: &UserConfig) {
         self.logs_dir = Some(config.logs_dir.clone());
         self.otlp_endpoint = config.otlp_endpoint.clone();
-        if !config.quiet_skips {
+        if !config.quiet_skips && self.command != CommandKind::Release {
             self.show_held();
         }
         if !self.child {
@@ -310,9 +310,9 @@ impl<O: Outside> Record<O> {
             CommandKind::Review => Pass::Review,
             CommandKind::Fix => Pass::Fix,
             CommandKind::Triage => Pass::Triage,
+            CommandKind::Release => Pass::Release,
             CommandKind::Issue
             | CommandKind::Scoring
-            | CommandKind::Release
             | CommandKind::Experiment
             | CommandKind::Process => return,
         };

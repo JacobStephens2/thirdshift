@@ -78,6 +78,7 @@ pub(super) struct Request {
     #[serde(default)]
     command: Kind,
     version: Option<String>,
+    bump: Option<crate::release::Bump>,
     issue: Option<Issue>,
     merge: Option<bool>,
     email: Option<Email>,
@@ -184,7 +185,7 @@ impl Kind {
             Self::Skill => &["name", "issue"],
             Self::Score => &[],
             Self::Experiment => &["experiment"],
-            Self::Release => &["version"],
+            Self::Release => &["version", "bump"],
             Self::Triage => &[
                 "report",
                 "read_machine",
@@ -228,7 +229,6 @@ impl Kind {
             Self::Ticket => &["issue"],
             Self::Process | Self::Skill => &["name"],
             Self::Triage => &["report"],
-            Self::Release => &["version"],
             Self::Architect
             | Self::Pickup
             | Self::Secure
@@ -236,6 +236,7 @@ impl Kind {
             | Self::Fix
             | Self::Score
             | Self::Experiment => &[],
+            Self::Release => &[],
         }
     }
 }
@@ -274,7 +275,12 @@ impl Request {
             args.extend(experiment::arguments(self.experiment.as_ref())?);
         }
         if self.command == Kind::Release {
-            args.push(self.version.clone().context("version is required")?);
+            if let Some(version) = &self.version {
+                args.push(version.clone());
+            }
+            if let Some(bump) = self.bump {
+                args.push(bump.flag().into());
+            }
         }
         if let Some(url) = &self.pull_request {
             let pr = crate::review::PullRequestUrl::parse(url)?;
@@ -325,7 +331,7 @@ impl Request {
                 bail!("version must be an explicit release version");
             };
             ensure!(
-                Some(&release.version) == self.version.as_ref(),
+                release.version == self.version && release.bump == self.bump,
                 "version must be an explicit release version"
             );
         }
@@ -353,6 +359,7 @@ impl Request {
         let kind = self.command;
         for (present, field) in [
             (self.version.is_some(), "version"),
+            (self.bump.is_some(), "bump"),
             (self.issue.is_some(), "issue"),
             (self.name.is_some(), "name"),
             (self.pull_request.is_some(), "pull_request"),

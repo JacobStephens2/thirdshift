@@ -29,11 +29,12 @@
     {% endif %}
     {% if !start.release_repositories.is_empty() %}
     <details><summary>Start Release run</summary>
-      <p>Publish and merge an explicit thirdshift version from green <code>origin/main</code>.</p>
+      <p>Run a Release Pass from green shipped changes on <code>origin/main</code>. Leave Version and Bump empty to choose minor or patch automatically, or supply one of them.</p>
       <form data-start-form="release" class="start-form">
         <input type="hidden" name="command" value="release">
         <div class="start-field"><label for="release-repository">Repository</label><select id="release-repository" name="repository" required>{% for repository in start.release_repositories %}<option value="{{ repository.repository }}" data-machine="{{ repository.machine }}">{{ repository.label }}</option>{% endfor %}</select></div>
-        <label>Version <input name="version" required pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" placeholder="1.2.3"></label>
+        <label>Version <input name="version" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" placeholder="Automatic Pass"></label>
+        <div class="start-field"><label for="release-bump">Bump</label><select id="release-bump" name="bump"><option value="">Automatic minor or patch</option><option value="major">Major</option><option value="minor">Minor</option><option value="patch">Patch</option></select></div>
         <div class="start-field"><label for="release-harness">Harness</label><select id="release-harness" name="harness">{% for name in start.harnesses %}<option{% if name.as_str() == start.harness %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></div>
         <label>Model <input name="model" placeholder="User config / Harness default"></label>
         <label>Effort <input name="effort" placeholder="User config / Harness default"></label>

@@ -272,6 +272,17 @@ fn prompts() -> Vec<Prompt> {
             ),
         },
         Prompt {
+            id: "prompt-release-selection",
+            title: "Release bump selection and summary",
+            when: "A versionless Release Pass without a bump flag asks one tool-less, fresh-home sandboxed Session to choose minor or patch and write the summary from fetched merged pull requests and candidate versions. Invalid output falls back to patch, with GitHub generated notes when the summary is unusable.",
+            sender: ReleaseRun,
+            text: prompt::release_selection(
+                "<minor version>",
+                "<patch version>",
+                &[serde_json::json!({"number": "<number>", "title": "<title>", "body": "<body>"})],
+            ),
+        },
+        Prompt {
             id: "prompt-release-summary",
             title: "Release summary",
             when: "A Release run summarizes the fetched release evidence in one tool-less Session inside a fresh-home sandbox, retaining its Session trace under the Command. A failed or empty summary falls back to GitHub generated notes outside the summary markers.",
