@@ -154,9 +154,50 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             ]},
             "scopes": array(json!({"type": "string", "enum": super::Scope::TOKEN}))
         })),
-        View::ReportMetrics => object(json!({
+        View::ReportMetrics | View::ReportPlanUsage => object(json!({
             "machine": text, "pushed_at": {"type": "string", "format": "date-time"}
         })),
+        View::PlanUsage => {
+            query(
+                "fleet",
+                false,
+                json!({"type": "string", "enum": ["true"], "description": "Every Fleet machine, grouping shared logins: --fleet. The default once a Fleet machine is paired or saved."}),
+            );
+            query(
+                "machine",
+                false,
+                json!({"type": "string", "description": "One machine by its Fleet name, or this machine's own: --machine."}),
+            );
+            query(
+                "local",
+                false,
+                json!({"type": "string", "enum": ["true"], "description": "This machine alone, as Fleet machines are asked: --local."}),
+            );
+            let harness = json!({"type": "object", "required": ["harness", "routes"], "properties": {
+                "harness": text, "routes": array(record.clone())
+            }});
+            json!({"oneOf": [
+                object(json!({"version": version, "harnesses": array(harness.clone())})),
+                object(json!({
+                    "version": version,
+                    "machine": {"oneOf": [{"type": "null"}, text]},
+                    "machines": array(object(json!({
+                        "name": text, "address": {"oneOf": [{"type": "null"}, text]},
+                        "local": {"type": "boolean"},
+                        "status": {"type": "string", "enum": ["ok", "cached", "reported", "unavailable", "refused", "incompatible", "link-only"]},
+                        "last_seen": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]},
+                        "pushed_at": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]},
+                        "error": {"oneOf": [{"type": "null"}, text]}
+                    }))),
+                    "harnesses": array(json!({"type": "object", "required": ["harness", "login", "machines", "observed_on", "active_on", "routes"], "properties": {
+                        "harness": text, "login": {"oneOf": [{"type": "null"}, text]},
+                        "machines": array(text.clone()), "observed_on": text,
+                        "active_on": array(text.clone()), "routes": array(record.clone())
+                    }}))
+                }))
+            ]})
+        }
+        View::ClearPlanUsage => object(json!({"version": version, "cleared": array(text)})),
         View::OpenApi => object(json!({
             "openapi": {"type": "string", "const": "3.1.1"},
             "info": record, "paths": record, "components": record, "security": array(record.clone())
@@ -465,6 +506,21 @@ fn action_body(view: View) -> Value {
                 }
             }}}});
         }
+        View::ReportPlanUsage => {
+            return json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "additionalProperties": false,
+                "required": ["version", "machine", "view"],
+                "properties": {
+                    "version": {"type": "integer", "const": 1},
+                    "machine": {"type": "string", "description": "The report token's holder; any other name is refused with 403."},
+                    "view": {"type": "object", "description": "The machine's own plan-usage --local --json view.", "required": ["version", "harnesses"]}
+                }
+            }}}});
+        }
+        View::ClearPlanUsage => (
+            json!({"harness": {"type": "string", "description": "One subscription Harness; every one when missing or empty."}}),
+            vec![],
+        ),
         View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),
         View::Help
         | View::Version
@@ -491,6 +547,7 @@ fn action_body(view: View) -> Value {
         | View::Resources
         | View::ResourceStatus
         | View::Metrics
+        | View::PlanUsage
         | View::Inbox
         | View::Inspect
         | View::Spans

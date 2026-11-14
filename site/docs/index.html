@@ -401,7 +401,7 @@ thirdshift metrics --window 12w --version 0.30.0 --json
 <p>On the Console, <strong>Metrics</strong> opens on the Fleet when a Fleet machine is paired, the viewer has a saved summary, or a machine has reported. Its Machine selector picks <strong>Fleet</strong>, <strong>This machine</strong> (with the signal groups) or one Fleet machine (<code>/metrics?machine=&lt;name&gt;</code>, any name, <code>fleet</code> included); without <code>machine</code> the page opens on the Fleet. The API&#39;s <code>/api/v1/metrics</code> always answers with this machine&#39;s own trends. A Failed Command&#39;s name opens its details on the machine that holds it while that machine answers; a cached or reported machine&#39;s Failed Commands are named without a link to their details, with their repository and a link to their pull request or issue on GitHub.</p>
 <details class="fold"><summary><h4>Reporting outward</h4></summary>
 <div class="manual-content" id="reporting-outward">
-<p>A machine the watching Console cannot reach, such as a laptop VM that sleeps or sits behind NAT, can push its own summary instead. On the watching Console, issue a <code>report</code> token to the machine&#39;s Fleet name; on the reporting machine, save it as a report destination:</p>
+<p>A machine the watching Console cannot reach, such as a laptop VM that sleeps or sits behind NAT, can push its own summary, and its own <strong>Plan usage</strong>, instead. On the watching Console, issue a <code>report</code> token to the machine&#39;s Fleet name; on the reporting machine, save it as a report destination:</p>
 <pre><code class="language-sh"># On the always-on Console (prints the token once):
 thirdshift console token create lima-thirdshift --scopes report
 # On the reporting machine (paste the token at the hidden prompt):
@@ -411,10 +411,11 @@ thirdshift console report list --json
 thirdshift console report remove hub
 thirdshift metrics --push
 thirdshift metrics --push hub --window 30d
+thirdshift plan-usage --push
 </code></pre>
-<p>A <code>report</code> token is bound to its holder, which must be a Fleet name, and carries no other scope. It can call only <code>POST /api/v1/metrics/report</code>, over HTTPS or 127.0.0.1, and that endpoint saves the summary only in its holder&#39;s own reported slot under <code>~/.thirdshift/logs/fleet-metrics/</code>; a report naming another machine is refused with 403, one under the Console&#39;s own name with 422, and every <code>read</code>, <code>security</code>, <code>act</code>, <code>run</code> and <code>admin</code> endpoint answers it with 403. A person&#39;s <code>console scopes</code> never include <code>report</code>.</p>
-<p><code>console report add</code> checks the token with <code>/api/v1/whoami</code>, refuses one that carries anything but <code>report</code>, and saves the destination&#39;s name, address and the holder the Console named under <code>console.report</code> in the User config; the token goes to <code>[report]</code> in the Credentials. <code>metrics --push [&lt;destination&gt;]</code> sends this machine&#39;s summary of the view its window and filters name (the default view without them) to every report destination, or to the one named, and fails unless each accepts it. After every Command that finishes (not a skipped Pass, nor a child Run), a configured machine pushes its whole history by day, which stands in for every window&#39;s view, then its default view, to each destination too, waiting at most five seconds on each send; an offline or refusing Console only prints <code>warning: metrics not reported to &lt;name&gt;: …</code> and never changes the Command&#39;s exit code. These commands are CLI-only.</p>
-<p>On the watching Console, a reporting machine appears in <strong>Metrics</strong> and its Machine selector with status <code>reported</code> and <code>pushed_at</code>, shown as read-only with how long ago it pushed. Any viewer who can read that Console sees it, since the Console&#39;s owner issued the token. When the machine is also a paired Fleet entry, its reported summary stands in while it cannot be reached, or the newer of it and the viewer&#39;s own cached read. Its Failed Commands are named without links to their details, which are not reachable from here, but with their repository and pull request or issue.</p>
+<p>A <code>report</code> token is bound to its holder, which must be a Fleet name, and carries no other scope. It can call only <code>POST /api/v1/metrics/report</code> and <code>POST /api/v1/plan-usage/report</code>, over HTTPS or 127.0.0.1, and those endpoints save the summary or view only in its holder&#39;s own reported slot under <code>~/.thirdshift/logs/fleet-metrics/</code> or <code>~/.thirdshift/logs/fleet-plan-usage/</code>; a report naming another machine is refused with 403, one under the Console&#39;s own name or with unreadable contents with 422, and every <code>read</code>, <code>security</code>, <code>act</code>, <code>run</code> and <code>admin</code> endpoint answers it with 403. A person&#39;s <code>console scopes</code> never include <code>report</code>.</p>
+<p><code>console report add</code> checks the token with <code>/api/v1/whoami</code>, refuses one that carries anything but <code>report</code>, and saves the destination&#39;s name, address and the holder the Console named under <code>console.report</code> in the User config; the token goes to <code>[report]</code> in the Credentials. <code>metrics --push [&lt;destination&gt;]</code> sends this machine&#39;s summary of the view its window and filters name (the default view without them) to every report destination, or to the one named, and fails unless each accepts it. <code>plan-usage --push [&lt;destination&gt;]</code> sends this machine&#39;s saved Plan usage, as <code>plan-usage --local --json</code> shows it but without running any non-billed read, the same way. After every Command that finishes (not a skipped Pass, nor a child Run), a configured machine pushes its whole history by day, which stands in for every window&#39;s view, then its default view, then its saved Plan usage, to each destination too, waiting at most five seconds on each send; an offline or refusing Console only prints <code>warning: metrics and Plan usage not reported to &lt;name&gt;: …</code> and never changes the Command&#39;s exit code. Nothing is pushed between Commands. These commands are CLI-only.</p>
+<p>On the watching Console, a reporting machine appears in <strong>Metrics</strong>, <strong>Plan usage</strong> and their Machine selectors with status <code>reported</code> and <code>pushed_at</code>, shown as read-only with how long ago it pushed. Any viewer who can read that Console sees it, since the Console&#39;s owner issued the token. When the machine is also a paired Fleet entry, its reported summary stands in while it cannot be reached, or the newer of it and the viewer&#39;s own cached read. Its Failed Commands are named without links to their details, which are not reachable from here, but with their repository and pull request or issue.</p>
 </div></details>
 </div></details>
 </div></details>
@@ -589,7 +590,7 @@ Holders are unique on this machine. The default scope is <code>read</code>. The 
 viewer scopes are <code>read</code> (views), <code>security</code> (Security run details and findings),
 <code>act</code> (actions), <code>run</code> (starting Commands) and <code>admin</code> (administration). A sixth,
 <code>report</code>, is given alone to a Fleet machine that pushes its own Run metrics
-summary here (see <a href="#reporting-outward">Reporting outward</a>).
+summary and Plan usage here (see <a href="#reporting-outward">Reporting outward</a>).
 A token without <code>security</code> still receives the other fields of a read route, but
 not Security finding records: <code>security_findings</code>, <code>security_fix_findings</code>, and
 a true <code>security_findings_waiting</code> flag are omitted or cleared. It also cannot
@@ -736,6 +737,11 @@ by later Console API tickets appear when they are served.</p>
 <td><code>experiments [&lt;id&gt;] [--session &lt;session&gt; | --pair &lt;pair&gt;]</code></td>
 </tr>
 <tr>
+<td>Plan usage</td>
+<td><code>/api/v1/plan-usage</code> (<code>fleet=true</code>, <code>machine=&lt;name&gt;</code> or <code>local=true</code>); the Fleet by default once a Fleet machine is paired, saved or reported</td>
+<td><code>plan-usage</code> (<code>--fleet</code>, <code>--machine &lt;name&gt;</code>, <code>--local</code>)</td>
+</tr>
+<tr>
 <td>Cron jobs, Resources, Console log, Theme export</td>
 <td><code>/api/v1/cronjobs</code>, <code>/api/v1/resources</code>, <code>/api/v1/console-log</code>, <code>/api/v1/themes/&lt;name&gt;</code></td>
 <td><code>cronjobs</code>, <code>resources</code>, <code>console log</code>, <code>console theme export &lt;name&gt;</code> (already JSON)</td>
@@ -780,7 +786,7 @@ address&#39;s scopes, including the Security finding limits above.</p>
 </tr>
 <tr>
 <td><code>act</code></td>
-<td>Stop, Dismissal, judgments, selecting a Theme and hidden sections</td>
+<td>Stop, Dismissal, judgments, clearing this machine&#39;s Plan usage cooldowns, selecting a Theme and hidden sections</td>
 </tr>
 <tr>
 <td><code>run</code></td>
@@ -792,7 +798,7 @@ address&#39;s scopes, including the Security finding limits above.</p>
 </tr>
 <tr>
 <td><code>report</code></td>
-<td>Only <code>POST /api/v1/metrics/report</code>: a JSON body with <code>version</code>, <code>machine</code> (the token&#39;s holder), <code>view</code> and <code>summary</code>, sent by <code>metrics --push</code></td>
+<td>Only <code>POST /api/v1/metrics/report</code>: a JSON body with <code>version</code>, <code>machine</code> (the token&#39;s holder), <code>view</code> and <code>summary</code>, sent by <code>metrics --push</code>; and <code>POST /api/v1/plan-usage/report</code>: a JSON body with <code>version</code>, <code>machine</code> and <code>view</code> (its <code>plan-usage --local --json</code>), sent by <code>plan-usage --push</code></td>
 </tr>
 </tbody></table>
 <p>The actions in the following table take <code>application/x-www-form-urlencoded</code>
@@ -818,6 +824,11 @@ The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <td><code>/dismiss</code>, <code>/dismiss/undo</code></td>
 <td><code>command</code></td>
 <td><code>dismiss &lt;command&gt; [--undo]</code></td>
+</tr>
+<tr>
+<td><code>/plan-usage/clear</code></td>
+<td>optional <code>harness</code> (one subscription Harness; every one without it)</td>
+<td><code>plan-usage --clear [&lt;harness&gt;]</code></td>
 </tr>
 <tr>
 <td><code>/scores/mine</code></td>
@@ -2013,6 +2024,23 @@ min_available_disk_mb = 5120
 <p>Before every session, including a Resume, Repair, Security review or a preflight Model test call, thirdshift checks the host. If available RAM is below the minimum, load per CPU exceeds the maximum, or free disk space is below its minimum, it reports every failing limit and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.</p>
 <p>Free disk space is the space an ordinary user may still write on the filesystem that holds the worktrees: the parent of the repository holding the directory thirdshift runs in, or that directory itself outside a repository. When the system temporary directory is on another filesystem, the lower of the two counts. For the Console and <code>thirdshift resources</code>, that is the directory they were started in.</p>
 <p>These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. <code>spec.parallel</code> still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.</p>
+</div></details>
+<details class="fold"><summary><h3>Plan usage</h3></summary>
+<div class="manual-content" id="plan-usage">
+<p><code>thirdshift plan-usage</code> shows how much of each subscription Harness&#39;s allowance is used: each <strong>Plan window</strong>&#39;s utilization, status and reset time, credits, spend controls, cooldowns and the account it is signed in to, with every <code>harness</code> and <code>security</code> route of the User config that names the Harness and whether that route could take a session now. Running sessions keep it up to date; viewing it runs each installed <code>claude</code>, <code>codex</code> and <code>muse</code> CLI&#39;s non-billed read when the last one is more than a minute old. Factory sessions route on this machine&#39;s own Plan usage alone and never ask another machine.</p>
+<pre><code class="language-sh">thirdshift plan-usage
+thirdshift plan-usage --json
+thirdshift plan-usage --fleet
+thirdshift plan-usage --machine laptop
+thirdshift plan-usage --local --json
+thirdshift plan-usage --clear
+thirdshift plan-usage --clear codex --json
+thirdshift plan-usage --push
+</code></pre>
+<p>Once a <strong>Fleet</strong> machine is paired, or a saved or reported view of one exists, <code>plan-usage</code> shows the Fleet unless <code>--local</code> or <code>--machine</code> names one machine; <code>--fleet</code> asks for it explicitly, and <code>--machine</code> with this machine&#39;s own name is <code>--local</code>. It reads <code>/api/v1/plan-usage?local=true</code> from each paired machine, so no machine relays another&#39;s, and lists each machine with its <code>status</code>: <code>ok</code>, <code>cached</code> when it cannot be reached and the view this machine last read from it stands in, <code>reported</code> when it pushed its own view (see <a href="#reporting-outward">Reporting outward</a>), or <code>unavailable</code>, <code>refused</code>, <code>incompatible</code> or <code>link-only</code>. A cached or reported view carries <code>last_seen</code> or <code>pushed_at</code>; a retired machine&#39;s last view stays until its saved file under <code>~/.thirdshift/logs/fleet-plan-usage/</code> is removed.</p>
+<p>The Fleet view shows each subscription login once. Machines whose <code>claude</code> reports the same organization and email, whose <code>codex</code> reports the same account id, or whose <code>muse</code> reports the same account label share a row, which names every machine on it, shows the freshest observation and on which machine it was made, and lists each machine&#39;s routes to it. <code>agy</code> and <code>grok</code> report no account, so each machine&#39;s row stays its own, as does any login whose account is unknown or differs. The version 1 Fleet JSON has <code>machine</code> (null for the whole Fleet), <code>machines</code> and <code>harnesses</code>, each with <code>harness</code>, <code>login</code>, <code>machines</code>, <code>observed_on</code>, <code>active_on</code> and <code>routes</code>, each route naming its <code>machine</code>, beside the observation&#39;s own fields.</p>
+<p><code>--clear [&lt;harness&gt;]</code> forgets the cooldowns and revalidation backoff recorded on this machine, for one subscription Harness or all, so the next factory session tries those routes again. It acts on this machine only; clear another machine&#39;s on that machine or its Console.</p>
+<p>The Console&#39;s <strong>Plan usage</strong> page (<code>/plan-usage</code>, <code>g</code> then <code>p</code>) shows the same view, the Fleet by default, with a Machine selector for <strong>Fleet</strong>, <strong>This machine</strong> or one machine, and a <strong>Clear cooldowns</strong> form for viewers with <code>act</code>. Every Console page&#39;s header shows <strong>Plan usage · N routes limited</strong> beside the host admission status, linking to the page, while any route this machine&#39;s User config names is in cooldown or at or above its <code>max_utilization</code>; its title lists those routes. The header reads only what is saved and runs no non-billed read. <strong>Resources</strong> stays this host&#39;s memory, load and disk alone.</p>
 </div></details>
 <details class="fold"><summary><h3>Standalone skills</h3></summary>
 <div class="manual-content" id="standalone-skills">

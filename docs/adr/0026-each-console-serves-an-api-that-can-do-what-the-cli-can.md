@@ -5,7 +5,7 @@ A Run started by hand on another machine never appeared on the Console the **Day
 The API can do what the CLI can, starting Commands and changing the User config included. That supersedes ADR 0016's "it never starts work" and "no HTTP API is promised to anyone". The Console still never starts work of its own accord. Every Command it starts is asked for by a signed-in person or a token holder, the same as a typed command, so ADR 0009 still holds: thirdshift never schedules itself. Each endpoint behaves exactly like its CLI twin, the **Command limit** included, and a Command started through the API runs detached, so a Console restart or update doesn't end it.
 
 Tokens carry the weight (#1142 Q3.1 to Q3.5):
-- **Scopes:** `read`, `security` (Security run details and findings), `act` (Stop, Dismissal, the eval judgments), `run` (start Commands), `admin` (User config, `update`, `release`, #2054 Q15) and `report` (upload only the token holder's own named **Run metrics** summary when that machine cannot be reached inbound, #2036 Q4.2). `read` is the default.
+- **Scopes:** `read`, `security` (Security run details and findings), `act` (Stop, Dismissal, the eval judgments, clearing recorded **Plan usage** cooldowns), `run` (start Commands), `admin` (User config, `update`, `release`, #2054 Q15) and `report` (upload only the token holder's own named **Run metrics** summary and **Plan usage** view when that machine cannot be reached inbound, #2036 Q4.2, #2182). `read` is the default.
 - **Handling:** 256 random bits, shown once and kept by the issuer only as a hash. The holder keeps it in its **Credentials**. Tokens are accepted over HTTPS only (except 127.0.0.1), named and listed with their last use, revocable at once, optionally given an expiry, and rate-limited after failures. Every call that changes anything goes in the **Console log**.
 - **People:** each address on a Console's sign-in list carries scopes of its own, all five viewer scopes (`read`, `security`, `act`, `run`, `admin`) unless the User config narrows them (#1142 Q4.1, answering #952). A Console calling on someone's behalf names the person signed in. The owning machine refuses the call unless that person is on its own sign-in list with the scope the call needs, and its **Activity log** names both the person and the machine.
 - **CLI-only, even with `admin`:** the following exclusions are checked against the full CLI command inventory (#1775). The machine's own shell stays the root of trust, so the API can't widen its own access.
@@ -26,8 +26,6 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `setup`: Interactive setup bootstraps the machine and its Console sign-in list.
   - `console password`: Console passwords require the machine's shell or the separate sign-in flow.
   - `logs --export`: Log export writes to a caller-selected local path.
-  - `plan-usage` (interim, until #2182): Until #583's Console Ticket serves `/api/v1/plan-usage`, the machine's Plan usage view and its non-billed reads stay in the shell.
-  - `plan-usage --clear` (interim, until #2182): Until #583's Console Ticket adds an authenticated Console action for it, clearing recorded Plan usage cooldowns stays in the shell.
   - `evals prepare`: Eval preparation writes a repository to a caller-selected local path.
   - `evals prepare-arms`: Arm preparation writes its record to a caller-selected local path.
   - `console`: Console serving bootstraps the API listener itself; it is not a client operation.
@@ -48,6 +46,7 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
 
 - A leaked token with `run` spends Harness subscriptions and pushes code on the issuing machine, and one with `admin` reconfigures it. Scopes and per-holder revocation are the mitigation, not an absence of capability.
 - A Security run's details, findings included, reach any Console holding a `security` token, fetched live and never stored there. They stay behind sign-ins and off GitHub, so ADR 0015 holds. #776's constraint that Security runs stay on their own machine does not.
+- `/api/v1/plan-usage` answers for the **Fleet**, as `plan-usage` does by default, because #583 settled full CLI/API parity for it (#2182). It lends this Console's saved Fleet tokens only for that `read`-scope view, naming the caller's person when it has one, and asks each peer for its own view alone (`local=true`), so no read relays further. Clearing cooldowns stays this machine's own.
 - Compact **Run metrics** bucket summaries fetched from **Fleet** peers—or pushed outward under a `report` token by a sleeping or NATted machine—are cached per peer on the watching Console so offline, sleeping or retired machines stay visible read-only without syncing raw logs or running a database (#2036 Q2.1, Q4.2).
 - **Other-account Commands** stay read-only (#1446). A machine acts as its serving account, whoever asks through the API.
 - The CLI-and-page pairing test (ADR 0016) covers three ways in: CLI, page and API.

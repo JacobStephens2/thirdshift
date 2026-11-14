@@ -365,7 +365,7 @@ fn a_finished_command_reports_its_metrics_and_an_offline_console_only_warns() {
     assert!(
         result
             .stderr
-            .contains("warning: metrics not reported to hub:"),
+            .contains("warning: metrics and Plan usage not reported to hub:"),
         "{}",
         result.stderr
     );
