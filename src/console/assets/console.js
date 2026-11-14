@@ -593,7 +593,7 @@ document.addEventListener('keydown', event => {
     if (help.open) help.close();
     else if (!jumps.hidden) jumps.hidden = true;
     else if (!peek.hidden) closePeek();
-    else select(null);
+    else { select(null); spanTree?.clearSelection(); }
     return;
   }
   if (help.open) return;

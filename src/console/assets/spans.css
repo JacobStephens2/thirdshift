@@ -7,7 +7,7 @@
 #span-ticks span:last-child { transform: translateX(-100%); }
 #span-zoom { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px; border: 1px solid var(--look); color: var(--text); }
 #span-zoom b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.span-item { outline: none; }
+#span-tree, .span-item { outline: none; }
 .span-item:focus > .span-row { outline: 2px solid var(--head); outline-offset: -2px; }
 .span-row { padding: 5px 0; border-bottom: 1px solid var(--rule); cursor: pointer; font-size: 13px; }
 .span-row:hover { background: var(--panel); }

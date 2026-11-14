@@ -491,7 +491,10 @@ stay between the sticky axis and the Peek bottom sheet.
 
 Within the tree, arrows and `j` / `k` move focus, Right expands or enters a
 child, Left folds or returns to the parent, Home/End reach either end, and
-Enter/Space opens the Peek. Outside the tree, the Console's usual keys apply.
+Enter/Space opens the Peek. Escape closes the Peek first, then clears the row
+highlight. The cleared selection survives live updates and expansion controls.
+With no row selected, Tab enters the tree without selecting; navigation keys
+select a row again. Outside the tree, the Console's usual keys apply.
 
 Rust route/CLI parity and timing tests live in `tests/console/spans.rs` and
 `tests/console/waterfall.rs`. The Playwright span and Waterfall tests cover
