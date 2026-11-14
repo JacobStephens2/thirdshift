@@ -2846,8 +2846,8 @@ fn a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures() {
     );
     for detail in [
         "#8 landed with ",
-        "#9 failed: muse exited 1: API error 429: Subscription quota exhausted.",
-        "Your usage window resets at 2026-10-24T03:28:16Z.",
+        // Its child Run ended as a Paused Command.
+        "#9 paused: no allowed route has available Plan usage",
         "#10 blocked by #9",
         "#11 failed: muse exited 1: stream protocol error",
     ] {

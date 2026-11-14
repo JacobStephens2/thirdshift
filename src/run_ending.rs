@@ -311,6 +311,8 @@ pub struct Cause {
     /// The host running out of disk space caused it, by its error's own
     /// layers, not by words its agent can write.
     out_of_disk: bool,
+    /// Structured Plan-usage facts paused it: no route had Plan usage.
+    plan_usage_paused: bool,
 }
 
 impl Cause {
@@ -328,6 +330,7 @@ impl Cause {
                 .downcast_ref::<crate::triage::PrivateFindingTriage>()
                 .map(|triage| triage.notification.clone()),
             out_of_disk: crate::failed_run::out_of_disk(error),
+            plan_usage_paused: crate::session::limits::plan_usage_paused(error).is_some(),
         }
     }
 
@@ -590,8 +593,9 @@ fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     }
 }
 
-/// The exit code of a Paused Command: `EX_TEMPFAIL`, a temporary failure
-/// to try again later. A Spec run reads it from a Ticket's child Run, which
+/// The exit code of a Command paused because no route had Plan usage:
+/// `EX_TEMPFAIL`, a temporary failure to try again later. An Experiment or
+/// Scoring run stopped at a plan-limit warning keeps exiting 1. A Spec run reads it from a Ticket's child Run, which
 /// is the one fact of a Ticket's pause no agent could write.
 pub const PAUSED_EXIT: u8 = 75;
 
@@ -603,7 +607,7 @@ struct Shown {
     urls: Vec<String>,
     /// Whether it exits 0.
     success: bool,
-    /// Whether it paused, so exits [`PAUSED_EXIT`].
+    /// Whether no route had Plan usage, so it exits [`PAUSED_EXIT`].
     paused: bool,
 }
 
@@ -647,7 +651,10 @@ impl Shown {
             steps,
             urls: account.urls.iter().map(|url| url.to_string()).collect(),
             success: account.success(),
-            paused: account.outcome == "paused",
+            paused: account
+                .ended
+                .as_ref()
+                .is_err_and(|cause| cause.plan_usage_paused),
         }
     }
 

@@ -605,8 +605,9 @@ fn body(
 }
 
 /// Promote usage exhaustion out of a Spec's Ticket details without replacing
-/// its other failure causes. Read only failed Harness diagnostics, never log
-/// paths or successful sessions that may have recovered from a limit.
+/// its other failure causes. Read only failed Harness diagnostics and paused
+/// Tickets, never log paths or successful sessions that may have recovered
+/// from a limit.
 fn usage_limit(account: &Account) -> Option<String> {
     let cause = account.ended.as_ref().err()?;
     if account.interrupted {
@@ -621,12 +622,18 @@ fn usage_limit(account: &Account) -> Option<String> {
                 && ErrorKind::from_text(diagnostic) == ErrorKind::UsageLimit
         })
     };
+    // A Ticket whose child Run paused, by its exit code, had no route with
+    // Plan usage.
+    let paused = format!(" paused: {}", crate::session::limits::NO_ROUTE);
     let tickets: Vec<_> = account
         .ticket_lines
         .iter()
-        .filter_map(|line| line.split_once(" failed: "))
-        .filter(|(_, cause)| limited(cause))
-        .map(|(ticket, _)| ticket)
+        .filter_map(|line| {
+            line.split_once(" failed: ")
+                .filter(|(_, cause)| limited(cause))
+                .map(|(ticket, _)| ticket)
+                .or_else(|| line.strip_suffix(paused.as_str()))
+        })
         .collect();
     let affected = if tickets.is_empty() {
         if !limited(cause.full()) {
