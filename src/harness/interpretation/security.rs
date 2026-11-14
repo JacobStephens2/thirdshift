@@ -67,6 +67,7 @@ impl Security {
                 Some(format!("Model: {name}"))
             }
             Evidence::PlanLimit(_)
+            | Evidence::PlanUsage(_)
             | Evidence::WorkStarted
             | Evidence::ObservedModel { .. }
             | Evidence::RequestedModelFallback => None,

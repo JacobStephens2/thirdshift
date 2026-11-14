@@ -83,6 +83,19 @@ impl Decoder for AgyProgress {
         {
             evidence.push(Evidence::WorkStarted);
         }
+        if event["event"] == "result"
+            && event["result"]["status"]
+                .as_str()
+                .is_some_and(|status| status != "SUCCESS")
+            && let Some(observation) = event["result"]["error"].as_str().and_then(|reason| {
+                crate::plan_usage::observation::terminal_failure(
+                    crate::harness::Harness::Agy,
+                    reason,
+                )
+            })
+        {
+            evidence.push(Evidence::PlanUsage(observation));
+        }
         if event["event"] == "init"
             && let Some(name) = event["init"]["model"].as_str()
         {

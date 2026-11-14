@@ -321,6 +321,7 @@ mod tests {
             pickup_order: crate::ready::PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
+            routing: crate::plan_usage::Routing::default(),
             security_fix: None,
             security_close: None,
             security_review: false,

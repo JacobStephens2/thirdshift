@@ -26,6 +26,8 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `setup`: Interactive setup bootstraps the machine and its Console sign-in list.
   - `console password`: Console passwords require the machine's shell or the separate sign-in flow.
   - `logs --export`: Log export writes to a caller-selected local path.
+  - `plan-usage` (interim, until #2182): Until #583's Console Ticket serves `/api/v1/plan-usage`, the machine's Plan usage view and its non-billed reads stay in the shell.
+  - `plan-usage --clear` (interim, until #2182): Until #583's Console Ticket adds an authenticated Console action for it, clearing recorded Plan usage cooldowns stays in the shell.
   - `evals prepare`: Eval preparation writes a repository to a caller-selected local path.
   - `evals prepare-arms`: Arm preparation writes its record to a caller-selected local path.
   - `console`: Console serving bootstraps the API listener itself; it is not a client operation.

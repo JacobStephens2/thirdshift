@@ -1,6 +1,8 @@
 //! Muse's JSONL event envelopes. Usage is read from its session log after exit.
 
-use crate::harness::interpretation::{Decoder, Ended, Facts, Report, StreamUpdate, TurnOutcome};
+use crate::harness::interpretation::{
+    Decoder, Ended, Evidence, Facts, Report, StreamUpdate, TurnOutcome,
+};
 use crate::harness::skill_load::SkillLoad;
 use crate::progress::{bash, shorten};
 use serde_json::Value;
@@ -131,10 +133,23 @@ impl Decoder for MuseProgress {
             Some("tool.result") => self.tool(payload),
             _ => Vec::new(),
         };
+        // Only the run's own terminal failure, never a tool task's.
+        let evidence = (event["payload_type"] == "run.terminal.failed")
+            .then(|| payload["reason"].as_str())
+            .flatten()
+            .and_then(|reason| {
+                crate::plan_usage::observation::terminal_failure(
+                    crate::harness::Harness::Muse,
+                    reason,
+                )
+            })
+            .map(Evidence::PlanUsage)
+            .into_iter()
+            .collect();
         StreamUpdate {
             events: self.events.stream(&event),
             progress,
-            evidence: Vec::new(),
+            evidence,
         }
     }
     fn complete(self: Box<Self>) -> Facts {
@@ -347,5 +362,18 @@ mod tests {
             stream.outcome.as_ref().unwrap().session_id.as_deref(),
             Some("s1")
         );
+    }
+
+    #[test]
+    fn a_failed_tool_task_mentioning_quota_is_not_plan_usage() {
+        let mut stream = stream(Harness::Muse, "");
+        for (kind, event) in [
+            ("proposed", json!({"task_id":"t","task_kind":"tool.bash"})),
+            ("started", json!({"task_id":"t"})),
+            ("failed", json!({"task_id":"t","reason":"quota exceeded"})),
+        ] {
+            stream.decode(&json!({"stream":{"kind":"session","id":"s"},"payload_type":format!("task.lifecycle.{kind}"),"payload":{"event":event}}).to_string());
+        }
+        assert!(stream.take_plan_usage().is_empty());
     }
 }

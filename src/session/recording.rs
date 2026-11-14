@@ -436,6 +436,10 @@ struct StreamPolicy {
     private: bool,
 }
 
+/// How often an ordinary session looks for native quota reports, which
+/// only Codex writes beside its stream.
+const NATIVE_PLAN_USAGE_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Record every line in the Session trace. Ordinary sessions also
 /// print progress; Eval sessions stop at plan limits while preserving evidence.
 fn follow(
@@ -448,6 +452,7 @@ fn follow(
 ) -> Result<()> {
     let mut pending = Vec::new();
     let mut buffer = [0u8; 8192];
+    let mut native_read = Instant::now();
     loop {
         // The pipe may stay idle while Codex writes a native quota report.
         // Poll in this owned reader so process cleanup still joins it.
@@ -494,9 +499,17 @@ fn follow(
             for raw in progress.limit_records() {
                 record_line(kind, raw.as_bytes(), log, progress, trace, policy.private)?;
             }
-            if let Some(limit) = progress.plan_limit() {
-                return super::limits::stop(limit.clone());
-            }
+        } else if eof || native_read.elapsed() >= NATIVE_PLAN_USAGE_INTERVAL {
+            // Ordinary sessions read native quota reports for Plan usage
+            // alone, keeping their Session trace as it was.
+            progress.observe_limit_records();
+            native_read = Instant::now();
+        }
+        crate::plan_usage::record(progress.take_plan_usage());
+        if policy.stop_at_limit
+            && let Some(limit) = progress.plan_limit()
+        {
+            return super::limits::stop(limit.clone());
         }
         if eof {
             return Ok(());

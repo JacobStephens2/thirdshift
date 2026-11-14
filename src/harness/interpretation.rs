@@ -32,6 +32,8 @@ pub struct Interpretation {
     events: Option<Vec<event::Event>>,
     work_started: bool,
     plan_limit: Option<limits::Limit>,
+    /// Plan usage seen since the recorder last took it.
+    plan_usage: Vec<crate::plan_usage::Observation>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -157,8 +159,13 @@ pub struct Decoded {
 
 pub(super) enum Evidence {
     PlanLimit(limits::Limit),
+    /// Any Plan usage report, at every status and utilization.
+    PlanUsage(crate::plan_usage::Observation),
     WorkStarted,
-    ObservedModel { name: String, scope: ModelScope },
+    ObservedModel {
+        name: String,
+        scope: ModelScope,
+    },
     RequestedModelFallback,
     SafeguardRefusal(SafeguardRefusal),
 }
@@ -316,6 +323,7 @@ impl Interpretation {
             events: None,
             work_started: false,
             plan_limit: None,
+            plan_usage: Vec::new(),
         }
     }
 
@@ -367,6 +375,30 @@ impl Interpretation {
         self.decoder.limit_records()
     }
 
+    /// Read supplied raw records for Plan usage alone, leaving the Session
+    /// trace as ordinary sessions keep it.
+    pub fn observe_limit_records(&mut self) {
+        let now = chrono::Utc::now();
+        for raw in self.decoder.limit_records() {
+            if let Ok(record) = serde_json::from_str(&raw)
+                && let Some(observation) =
+                    crate::plan_usage::observation::codex_token_count(&record, now)
+            {
+                self.note_plan_usage(observation);
+            }
+        }
+    }
+
+    /// The Plan usage observed since the last call, for the machine's
+    /// snapshot.
+    pub fn take_plan_usage(&mut self) -> Vec<crate::plan_usage::Observation> {
+        std::mem::take(&mut self.plan_usage)
+    }
+
+    fn note_plan_usage(&mut self, observation: crate::plan_usage::Observation) {
+        self.plan_usage.push(observation);
+    }
+
     /// The stream decoder's ID alone, without retained-record recovery or
     /// completion policy. Saved streams can supply this metadata even when
     /// interruption deliberately suppressed recovery during supervision.
@@ -399,6 +431,10 @@ impl Interpretation {
         for fact in evidence {
             if let Evidence::PlanLimit(limit) = &fact {
                 self.plan_limit.get_or_insert_with(|| limit.clone());
+            }
+            if let Evidence::PlanUsage(observation) = fact {
+                self.note_plan_usage(observation);
+                continue;
             }
             if matches!(fact, Evidence::WorkStarted) {
                 self.work_started = true;

@@ -148,7 +148,7 @@ impl Store {
 /// Another local user can take an exclusive flock on a lock they can open,
 /// even with a read-only descriptor, and stall every Quota update. Creation
 /// mode is masked by umask, so an existing lock is tightened explicitly.
-pub(super) fn lock_exclusive(path: &Path) -> Result<File> {
+pub(crate) fn lock_exclusive(path: &Path) -> Result<File> {
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)

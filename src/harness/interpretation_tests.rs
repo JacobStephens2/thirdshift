@@ -1584,3 +1584,29 @@ fn review_opencode_preserves_all_live_text_parts_without_export() {
         .collect();
     assert_eq!(text, "First part. Second part.");
 }
+
+#[test]
+fn agent_text_in_an_interrupted_claude_result_records_no_plan_usage() {
+    let mut progress = stream(Harness::Claude, "");
+    progress.decode(r#"{"type":"result","subtype":"success","is_error":false,"terminal_reason":"aborted_tools","result":"I raised the API quota in config.toml"}"#);
+    assert!(progress.take_plan_usage().is_empty());
+}
+
+#[test]
+fn claude_api_error_limits_without_a_status_keep_their_window_reset_and_spend_cap() {
+    let mut progress = stream(Harness::Claude, "");
+    progress.decode(r#"{"type":"assistant","parent_tool_use_id":null,"is_api_error_message":true,"api_error":"usage_limit_reached","api_error_status":429,"api_error_params":{"rate_limit_info":{"rateLimitType":"seven_day","resetsAt":1791597600}},"message":{"content":[{"type":"text","text":"limit"}]}}"#);
+    let usage = progress.take_plan_usage();
+    let exhausted = usage[0].exhausted.clone().unwrap();
+    assert_eq!(exhausted.window.as_deref(), Some("seven_day"));
+    assert_eq!(exhausted.resets_at.unwrap().timestamp(), 1791597600);
+
+    let mut capped = stream(Harness::Claude, "");
+    capped.decode(r#"{"type":"result","subtype":"error","result":"Extra usage rejected.","api_error_params":{"rate_limit_info":{"overageStatus":"rejected","overageResetsAt":1792000000}}}"#);
+    assert!(
+        capped
+            .take_plan_usage()
+            .iter()
+            .any(|o| o.exhausted.is_some())
+    );
+}
