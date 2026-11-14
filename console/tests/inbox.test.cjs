@@ -2286,6 +2286,8 @@ test('Ready for review copies rendered context in Overview and its folder withou
       for (const section of ['overview', 'ready-for-review']) {
         await page.goto(`${origin}/?section=${section}`);
         const row = page.locator('[data-group="ready for review"] > .commands > .command');
+        await row.getByText('Copy ready PR context', { exact: true }).waitFor({ state: 'attached' });
+        await row.locator('.ci').getByText('CI red', { exact: true }).waitFor({ state: 'attached' });
         const selector = await row.getAttribute('data-command');
         const copy = row.getByRole('button', { name: 'Copy', exact: true });
         assert.equal(await copy.isVisible(), true);
