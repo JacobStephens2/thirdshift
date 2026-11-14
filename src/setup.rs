@@ -1307,12 +1307,15 @@ read_machine = [\"acme/widgets\"]
 
 [security]
 harness = \"codex\"
+routes = []
 fix = false
 close = false
 review = false
 
 [harness]
 default = \"claude\"
+routes = []
+max_utilization = 100
 
 [harness.claude]
 model = \"opus\"
