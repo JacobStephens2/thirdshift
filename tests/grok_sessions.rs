@@ -150,16 +150,19 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"ru
 
 #[test]
 fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
-    for (event, exit, cause) in [
+    // A usage limit ends the Command as a Paused Command, its cause kept.
+    for (event, exit, cause, code) in [
         (
             r#"{"type":"error","message":"backend unavailable"}"#,
             "exit 1",
             "grok exited 1: backend unavailable",
+            1,
         ),
         (
             r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}"#,
             "",
             "grok's turn failed: quota exceeded",
+            75,
         ),
     ] {
         let scenario = Scenario::new();
@@ -170,7 +173,7 @@ fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
         };
         scenario.agent_does_for(7, &script);
         let result = scenario.run(&["harness", "grok", &scenario.issue_url(7)]);
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.code, Some(code), "{}", result.stderr);
         assert!(result.stderr.contains(cause), "{}", result.stderr);
         let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
         let log = support::session_trace::events(scenario.path(&format!(

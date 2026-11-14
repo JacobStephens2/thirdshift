@@ -71,9 +71,22 @@ pub(super) fn trust_reason(issue: &IssueUrl, github: &GitHub) -> Result<Option<S
 
 pub(super) struct Claim<'a> {
     issue: &'a IssueUrl,
-    completed: bool,
+    ending: Ending,
     // Field drop follows Claim::drop, so failure labels land before release.
     _origin: crate::reservation::Reservation,
+}
+
+/// How the Triage run holding a Claim ended, as dropping the Claim reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// It failed or was interrupted: the issue waits for the Day shift.
+    Unfinished,
+    /// Its recommendation was published, which ended the Claim.
+    Completed,
+    /// It ended as a Paused Command: no route had Plan usage, which says
+    /// nothing about the issue, so it goes back to triage without
+    /// `agent-failed`.
+    Paused,
 }
 
 impl<'a> Claim<'a> {
@@ -95,7 +108,7 @@ impl<'a> Claim<'a> {
         // Arm cleanup before the request: a lost response may have applied it.
         let held = Self {
             issue,
-            completed: false,
+            ending: Ending::Unfinished,
             _origin: origin,
         };
         Edit::of(issue, labels, &STATES_AND_CLAIM, &[IN_PROGRESS]).apply(&github)?;
@@ -103,19 +116,24 @@ impl<'a> Claim<'a> {
     }
 
     pub fn completed(&mut self) {
-        self.completed = true;
+        self.ending = Ending::Completed;
+    }
+
+    pub fn paused(&mut self) {
+        self.ending = Ending::Paused;
     }
 }
 
 impl Drop for Claim<'_> {
     fn drop(&mut self) {
-        if self.completed {
+        if self.ending == Ending::Completed {
             return;
         }
         let github = GitHub::new().completion();
         let on: &[Label] = match crate::logs::stop_requested().map(|request| request.ending()) {
             Some(crate::logs::stop::Ending::Requeue) => &[labels::NEEDS_TRIAGE],
             Some(crate::logs::stop::Ending::Triage) => &[labels::READY_FOR_HUMAN],
+            None if self.ending == Ending::Paused => &[labels::NEEDS_TRIAGE],
             None => &[labels::READY_FOR_HUMAN, AGENT_FAILED],
         };
         let ended = (|| {

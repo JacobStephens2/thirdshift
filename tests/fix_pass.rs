@@ -800,3 +800,39 @@ printf 'No findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(scenario.gh_state()["prs"][1]["isDraft"], true);
     assert_eq!(scenario.claude_calls().len(), 2);
 }
+
+#[test]
+fn a_merging_pass_skips_a_red_release_bump_into_main() {
+    for author in [false, true] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("release-0.3.0", "main", &["Bump"]);
+        scenario.github_has_pr("release-0.3.0", "main", "OPEN");
+        let head = scenario.origin_git(&["rev-parse", "release-0.3.0"]);
+        let mut state = scenario.gh_state();
+        state["collaborators"] = json!(["colleague"]);
+        state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
+        scenario.write_gh_state(&state);
+        scenario.agent_does(REPAIR_CI);
+        let mut args = vec!["fix", "base", "main", "merge", "no-base-fix", "no-email"];
+        if author {
+            args.extend(["--author", "colleague"]);
+        }
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("no eligible pull request"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+        assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+        assert!(
+            scenario
+                .origin_file("release-0.3.0", "ci-fix.txt")
+                .is_none()
+        );
+    }
+}

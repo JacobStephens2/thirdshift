@@ -58,6 +58,8 @@
 //!
 //! A PR's `headRefOid` is its head branch's tip on origin, frozen when it is
 //! merged, and a merged PR records its merge commit as `mergeCommit`.
+//! `headLag: {"head": "<old sha>", "reads": N}` keeps the REST PR head at
+//! that SHA for N reads after its origin branch moves, then reports origin.
 //! `--json` rejects a field the fake does not have, such as a PR's
 //! `closingIssuesReferences`, with gh's `Unknown JSON field`, as gh 2.45 does.
 //!

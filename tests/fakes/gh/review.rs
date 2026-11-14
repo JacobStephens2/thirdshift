@@ -24,7 +24,23 @@ pub(super) fn api(state: &mut Json, positional: &[String], flags: &Flags) -> boo
     };
     if *kind == "pulls" && tail.is_empty() {
         check_repo_is(state, Some(repo));
-        println!("{}", metadata(pr, repo));
+        let mut observed = pr.clone();
+        if let Some(lag) = pr.get("headLag") {
+            let old = lag.at("head").str();
+            let reads = lag.at("reads").as_i64().unwrap();
+            if reads > 0 && origin_tip(pr.at("head").str()).as_deref() != Some(old) {
+                observed.set("headRefOid", string(old));
+                let at = prs(state)
+                    .iter()
+                    .position(|candidate| candidate == pr)
+                    .unwrap();
+                state.at_mut("prs").items_mut()[at]
+                    .at_mut("headLag")
+                    .set("reads", number(reads - 1));
+                save(state);
+            }
+        }
+        println!("{}", metadata(&observed, repo));
         return true;
     }
     if *kind == "issues" && tail == ["labels?per_page=100"] {

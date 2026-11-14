@@ -130,7 +130,7 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
         if pass {
             logs::pass_fired(&repo);
             if let Some(reason) =
-                crate::command_limit::early_skip(&repo, std::num::NonZeroUsize::MIN)
+                crate::command_limit::early_skip(&repo, std::num::NonZeroUsize::MIN, choice, false)
             {
                 return skipped(&repo, reason);
             }

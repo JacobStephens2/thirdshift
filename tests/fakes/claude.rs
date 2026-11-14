@@ -208,7 +208,8 @@ pub fn transported_prompt(argv: &[String]) -> Option<String> {
 }
 
 pub fn main(argv: Vec<String>) {
-    if argv == ["auth", "status"] {
+    // `claude auth status`, with or without `--json`, prints JSON either way.
+    if argv == ["auth", "status"] || argv == ["auth", "status", "--json"] {
         if std::env::var_os("FAKE_CLAUDE_SIGNED_OUT").is_some() {
             println!("{{\"loggedIn\":false}}");
             crate::exit(1);

@@ -385,6 +385,7 @@ impl<A: Adapter> PullRequest<A> {
         };
         self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
+        let choice = &crate::logs::implemented_on(choice);
         let owner = crate::logs::captured_owner().ok();
         let version = crate::harness::version::detected(
             choice.harness,

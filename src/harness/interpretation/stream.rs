@@ -13,6 +13,7 @@ use super::{
     Decoder, Ended, Evidence, Facts, ModelScope, Report, SafeguardRefusal, StreamUpdate,
     TurnOutcome,
 };
+use crate::plan_usage::observation as plan_usage;
 use crate::progress::{bash, shorten};
 use crate::prompt;
 mod events;
@@ -168,10 +169,45 @@ impl Dialect {
                 scope,
             });
         }
+        // A failed turn's own error result, never an interrupted turn's
+        // final message, may name a usage limit.
+        if event["type"] == "result" && event["is_error"] == true {
+            let harness = match self {
+                Self::Claude(_) => crate::harness::Harness::Claude,
+                Self::Grok(_) => crate::harness::Harness::Grok,
+            };
+            let reason = [&event["api_error"], &event["error"], &event["result"]]
+                .into_iter()
+                .filter_map(Value::as_str)
+                .chain(
+                    event["errors"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+                .collect::<Vec<_>>()
+                .join("\n");
+            evidence
+                .extend(plan_usage::terminal_failure(harness, &reason).map(Evidence::PlanUsage));
+        }
         if matches!(self, Self::Claude(_)) {
             if let Some(limit) = super::limits::claude(event) {
                 evidence.push(Evidence::PlanLimit(limit));
             }
+            let api_error = match event["type"].as_str() {
+                Some("assistant") => {
+                    event["parent_tool_use_id"].is_null() && assistant_error(event)
+                }
+                Some("result") => result_failed(event),
+                _ => false,
+            };
+            let usage = plan_usage::claude_rate_limit(event).or_else(|| {
+                api_error
+                    .then(|| plan_usage::claude_api_error(event))
+                    .flatten()
+            });
+            evidence.extend(usage.map(Evidence::PlanUsage));
             if event["type"] == "result"
                 && let Some(usage) = event["modelUsage"].as_object()
             {

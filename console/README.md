@@ -223,17 +223,28 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
-show together, each under its heading and count, including empty groups.
-Every group starts open. Click its heading, or focus it and press Enter or Space,
-to fold its rows. The heading and count stay visible; counts and active runs
-still include folded rows. Each browser keeps its group choices through live
-updates, folder changes and reloads when storage is available. Without storage,
-folding still works through live updates. Keyboard row navigation skips folded
-rows, and the same controls work in every Theme and on phones. Without
-JavaScript, groups start open and their native disclosures still work.
-The folders on the left can filter to one section, including Done and Resolved.
-Rows show state, subject, title, gist and age. A Spec with recorded Tickets also
+The Inbox opens on Overview: Needs you, Ready for review, Landing, Working,
+Done and Resolved show together, each under its heading and count, including
+empty groups. The first four start open; Done and Resolved start folded below
+Working, so opening either shows what finished without leaving the page.
+Click a heading, or focus it and press Enter or Space, to fold or open its rows.
+The heading and count stay visible; counts and active runs still include folded
+rows. Each browser keeps the groups it folded or opened through live updates,
+folder changes and reloads when storage is available; a group it never changed
+follows the folder's default. Opening or folding Done or Resolved in Overview
+leaves them as they were in their own folders. Without storage, folding still
+works through live updates. Keyboard row navigation skips folded rows, and the
+same controls work in every Theme and on phones. Without JavaScript, groups
+start as above and their native disclosures still work.
+The folders on the left can filter to one section, including Done and Resolved,
+which open in their own folders. Done and Resolved each say under their heading
+what they hold; Resolved adds when its retention starts and that its length is
+the owning machine's `inbox.days`.
+Rows show state, subject, title, gist and age. Compact Done headers also identify
+their Command kind on desktop and phone, with or without JavaScript, in
+every Theme and across the Fleet. Stored `Run` kinds display as `Ticket run`;
+Custom processes show `Process` and their retained process name. Done outcomes
+remain visible on phones alongside the kind. A Spec with recorded Tickets also
 shows `2 / 5 Tickets complete`, including on phones and on the visible row of a
 Pass that dispatched it. This counts recorded merged Tickets, including Tickets
 closed before the run, and updates with the Command record. Fleet uses the owning
@@ -286,11 +297,15 @@ Remote previews request that bounded tail from the owning machine through
 only the current request's answer. The full Command log is fetched only when
 its reader opens.
 
-Each Needs you row has a **Copy** button at the end of its line for sharing its
-problem with an agent. It copies the machine, Command selector, state, cause,
-issue title, Harness, Tickets and any findings, with absolute issue, pull
-request and Console log links, plus the `thirdshift show '<command>' --json`
-command, without opening Command details. If clipboard access is unavailable,
+Each top-level Inbox row has a **Copy** button at the end of its line for sharing
+context with an agent, in Overview and every section's folder, including Ready
+for review. It copies the section, owning machine, Command selector, repository,
+displayed title, state, CI and Merge conflict facts when available, cause,
+Harness, Tickets and any findings, with absolute issue, pull request, Details
+and Console log links, plus the `thirdshift show '<command>' --json` command.
+Fleet rows qualify that command with `--machine '<name>'`. Copy works by mouse
+or keyboard without opening or changing Command details, fetching logs or
+reading additional GitHub data. If clipboard access is unavailable,
 a dialog selects the same text for copying by keyboard. The dialog keeps that
 snapshot through live updates.
 
@@ -334,6 +349,13 @@ keep the reason's original recorded time while updating the last-fired time.
 These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. A live Command in
 Needs you, or in a hidden section, still counts as running.
+
+While Commands are live, retained skipped Pass reasons appear below the Inbox
+sections under the same **Last recorded skipped Passes** disclosure, closed on
+each page load. Open it to read the full reasons and their links; live updates
+refresh the messages while keeping your open or closed state. With no recorded
+skipped Passes, no empty disclosure appears. The control also works by keyboard
+and without JavaScript.
 
 Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
@@ -460,8 +482,10 @@ thirdshift show widgets#7 --span <span-id> --json
 
 The tree uses the recorder's stable Command, Run and stage span IDs. Each row
 has its kind, status, duration and bar on a shared axis. Errors carry their
-message, running calls extend to now with a hatched bar, and estimated timings
-are dotted and marked `*`. Converted Session tools keep the old scoped
+message, running calls extend to now with animated hatched bars in the tree and
+Peek. Pause motion and the system's reduced-motion preference keep the hatching
+still. Elapsed times and bars update in place until the spans finish. Estimated
+timings are dotted and marked `*`. Converted Session tools keep the old scoped
 Command-log estimates, including unknown times. Commands without traces still
 show their Runs and stages.
 
@@ -501,7 +525,10 @@ stay between the sticky axis and the Peek bottom sheet.
 
 Within the tree, arrows and `j` / `k` move focus, Right expands or enters a
 child, Left folds or returns to the parent, Home/End reach either end, and
-Enter/Space opens the Peek. Outside the tree, the Console's usual keys apply.
+Enter/Space opens the Peek. Escape closes the Peek first, then clears the row
+highlight. The cleared selection survives live updates and expansion controls.
+With no row selected, Tab enters the tree without selecting; navigation keys
+select a row again. Outside the tree, the Console's usual keys apply.
 
 Rust route/CLI parity and timing tests live in `tests/console/spans.rs` and
 `tests/console/waterfall.rs`. The Playwright span and Waterfall tests cover

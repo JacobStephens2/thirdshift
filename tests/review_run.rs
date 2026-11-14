@@ -1250,11 +1250,13 @@ fn a_changed_pr_stops_before_posting_recommendations() {
         assert_eq!(result.code, Some(1), "{changed}: {}", result.stderr);
         assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
         if matches!(changed, "head" | "retarget" | "branch") {
-            assert!(
-                result.stderr.contains("changed during Review run"),
-                "{}",
-                result.stderr
-            );
+            let diagnostic = match changed {
+                "head" => "head moved; expected",
+                "retarget" => "base branch moved; expected main, actual colleague",
+                "branch" => "branch renamed; expected colleague, actual renamed",
+                _ => unreachable!(),
+            };
+            assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
             if changed == "head" {
                 assert_eq!(
                     scenario.origin_file("colleague", "later.txt").as_deref(),

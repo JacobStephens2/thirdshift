@@ -48,7 +48,10 @@ echo '{{"event":"step_update","step_update":{{"step_index":2,"state":"DONE","ste
             "--model",
             "gemini-3.8-flash",
             "--effort",
-            "medium"
+            "medium",
+            // A Harness named on the command keeps to included usage.
+            "--settings",
+            r#"{"useG1Credits":false}"#
         ]
     );
     assert!(!argv.contains(&"--sandbox"));

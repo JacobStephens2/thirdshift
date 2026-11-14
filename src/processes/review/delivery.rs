@@ -3,6 +3,7 @@
 use super::*;
 use crate::ci::{self, Ci, FailedChecks, Watch};
 use crate::github::review::ReviewInput;
+use crate::poll;
 use crate::pull_request::PullRequest;
 
 pub(super) struct Delivery<'a> {
@@ -125,6 +126,7 @@ impl Delivery<'_> {
         *pushed = self.push_fixes(snapshot)?;
         let mut expected = snapshot.clone();
         if let Some(head) = pushed.as_ref() {
+            self.wait_for_pushed_head(&expected, head)?;
             expected.head = head.clone();
         }
         // Review never merges the author's branch or stack. Compare with the
@@ -179,8 +181,9 @@ impl Delivery<'_> {
                     let next = self.push_fixes(&expected)?;
                     watch.after_repair(expected.head.clone(), failed);
                     if let Some(head) = next {
-                        expected.head = head.clone();
-                        *pushed = Some(head);
+                        *pushed = Some(head.clone());
+                        self.wait_for_pushed_head(&expected, &head)?;
+                        expected.head = head;
                     }
                 }
             }
@@ -198,10 +201,7 @@ impl Delivery<'_> {
                 && git.succeeds(&["merge-base", "--is-ancestor", &snapshot.head, &head])?,
             "review fixes must be committed on the pull request's captured branch without rewriting history"
         );
-        ensure!(
-            compatible(self.github, self.pr, snapshot)?.head == snapshot.head,
-            "the branch moved during Review run"
-        );
+        unchanged(self.github, self.pr, snapshot)?;
         if head == snapshot.head {
             return Ok(None);
         }
@@ -215,11 +215,41 @@ impl Delivery<'_> {
     }
 
     fn unchanged_head(&self, head: &str) -> Result<()> {
-        ensure!(
-            compatible(self.github, self.pr, self.snapshot)?.head == head,
-            "pull request changed during Review run CI watch"
-        );
-        Ok(())
+        let expected = ReviewPullRequest {
+            head: head.into(),
+            ..self.snapshot.clone()
+        };
+        unchanged(self.github, self.pr, &expected)
+    }
+
+    /// GitHub may still serve the pre-push head briefly after a successful push.
+    /// Only that head is tolerated; eligibility and branch names stay guarded.
+    fn wait_for_pushed_head(&self, snapshot: &ReviewPullRequest, head: &str) -> Result<()> {
+        let deadline = std::time::Instant::now() + poll::grace_period();
+        let mut waiting_line = poll::WaitingLine::new();
+        let mut backoff = poll::Backoff::new();
+        loop {
+            let current = compatible(self.github, self.pr, snapshot)?;
+            if current.head == head {
+                return Ok(());
+            }
+            ensure!(
+                current.head == snapshot.head,
+                "pull request changed during Review run: head moved; expected {head} (or pre-push {}), actual {}",
+                snapshot.head,
+                current.head,
+            );
+            let now = std::time::Instant::now();
+            ensure!(
+                now < deadline,
+                "timed out waiting for GitHub to report pushed head: expected {head}, actual {}",
+                current.head,
+            );
+            if waiting_line.should_report(()) {
+                progress::step(format!("waiting for GitHub to report pushed head {head}"));
+            }
+            poll::sleep(backoff.observe(current.head, now).min(deadline - now))?;
+        }
     }
 
     /// Delegate to the pull-request owner's Review readiness for `head`.

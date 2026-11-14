@@ -97,6 +97,14 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   }
   const remoteRows = page.locator('.command[data-machine="remote-workstation-with-a-long-name"]');
   await remoteRows.first().waitFor();
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: caller.origin });
+  await remoteRows.getByRole('button', { name: 'Copy', exact: true }).click();
+  await remoteRows.locator('[data-copy-status]').filter({ hasText: 'Copied.' }).waitFor();
+  const needsYouText = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(needsYouText, /^thirdshift · Needs you\nMachine: remote-workstation-with-a-long-name\n/);
+  assert.ok(needsYouText.includes('Remote fixture needs your attention'));
+  assert.ok(needsYouText.includes("--machine 'remote-workstation-with-a-long-name'"));
+  assert.equal(await page.locator('#peek').isVisible(), false);
   assert.match(await page.title(), /^2 need you/);
   assert.equal(await page.locator('.command').count(), 2);
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
@@ -140,6 +148,42 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await page.waitForFunction(() => notices.length === 1);
   assert.match(await page.evaluate(() => notices[0].title), /^3 need you/);
   assert.match(await page.evaluate(() => notices[0].options.body), /^remote-workstation/);
+  // The owning machine's Ready row keeps its PR facts and qualified links.
+  const pr = 'https://github.com/acme/widgets/pull/2174';
+  const subjects = { [pr]: { state: 'Open', ci: 'red', mergeable: 'conflicting', title: 'Ready on the Fleet machine' } };
+  await writeFile(join(homes[1], '.thirdshift/logs/github-inbox.json'), JSON.stringify({ version: 1, subjects }));
+  await writeFile(join(homes[1], '.thirdshift/logs/github-inbox.changed'), 'Fleet copy');
+  added.name = 'fixture'; added.outcome = 'ready for review'; added.cause = null; added.pull_request = pr;
+  await writeFile(remotePath, JSON.stringify(added));
+  const ready = page.locator('[data-group="ready for review"] > .commands > .command[data-machine="remote-workstation-with-a-long-name"]');
+  await ready.getByText('Ready on the Fleet machine', { exact: true }).waitFor({ state: 'attached' });
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    for (const section of ['overview', 'ready-for-review']) {
+      await page.goto(`${caller.origin}/?section=${section}`);
+      const copy = ready.getByRole('button', { name: 'Copy', exact: true });
+      await copy.focus();
+      await page.keyboard.press('Enter');
+      await ready.locator('[data-copy-status]').filter({ hasText: 'Copied.' }).waitFor();
+      const text = await page.evaluate(() => navigator.clipboard.readText());
+      assert.match(text, /^thirdshift · Ready for review\nMachine: remote-workstation-with-a-long-name\n/);
+      for (const fact of [pr, 'Ready on the Fleet machine', 'CI red', 'Merge conflict', 'acme/widgets']) assert.ok(text.includes(fact), fact);
+      const selector = await ready.getAttribute('data-command');
+      assert.ok(text.includes(`thirdshift show '${selector}' --json --machine 'remote-workstation-with-a-long-name'`));
+      for (const attribute of ['data-peek', 'data-log']) {
+        const url = new URL(await ready.getAttribute(attribute), caller.origin);
+        assert.equal(url.searchParams.get('machine'), 'remote-workstation-with-a-long-name');
+        assert.ok(text.includes(url.href));
+      }
+      assert.ok(text.includes(`${remote.origin}/logs`));
+      assert.equal(await page.locator('#peek').isVisible(), false);
+      const box = await copy.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+  }
+  await page.goto(caller.origin);
+  await ready.getByRole('button', { name: 'Copy', exact: true }).waitFor();
   cli(homes[1], ['console', 'token', 'revoke', 'caller']);
   await page.locator('[data-reachability="refused"]').waitFor();
   assert.equal(await remoteRows.count(), 2, 'refused keeps the last good rows');

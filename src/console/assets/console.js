@@ -1,4 +1,5 @@
 import { activity, loadLook, motionAllowed, showFolder } from './look.js';
+import './folds.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
@@ -39,28 +40,10 @@ function markNew() {
 markNew();
 remember(visitKey, Date.now());
 window.addEventListener("pagehide", () => remember(visitKey, Date.now()));
-const foldKey = "thirdshift:console:folded";
-let folded = stored(foldKey, {});
-if (typeof folded !== "object" || Array.isArray(folded)) folded = {};
-for (const section of document.querySelectorAll("details[data-group]")) {
-  if (typeof folded[section.dataset.group] === "boolean") section.open = folded[section.dataset.group];
-  else folded[section.dataset.group] = section.open;
-}
-window.addEventListener("pagehide", () => {
-  // Navigation can discard a native toggle event before it saves the choice.
-  const pending = {};
-  for (const section of document.querySelectorAll("details[data-group]")) {
-    if (folded[section.dataset.group] !== section.open) {
-      pending[section.dataset.group] = section.open;
-    }
-  }
-  if (Object.keys(pending).length) remember(foldKey, { ...stored(foldKey, {}), ...pending });
-});
+// Folding a group keeps a selected row inside it, to regain focus when reopened.
 document.addEventListener("toggle", event => {
   const section = event.target;
   if (!section.matches("details[data-group]")) return;
-  folded[section.dataset.group] = section.open;
-  remember(foldKey, folded);
   if (section.open && selected && section.contains(selected)) selected.focus({ preventScroll: true });
 }, true);
 document.addEventListener("focusin", event => {
@@ -453,23 +436,26 @@ for (const [letter, target] of targets) {
 }
 
 // Copy the rendered facts, including child Commands, without fetching or exposing logs.
-function needsYouContext(row) {
+function inboxContext(row) {
   const facts = row.cloneNode(true);
   for (const control of facts.querySelectorAll('button, form, [role="status"], .new, .heartbeat, .gist')) control.remove();
   for (const link of facts.querySelectorAll('a')) {
     link.replaceWith(link.textContent === link.href ? link.href : `${link.textContent} (${link.href})`);
   }
-  for (const block of facts.querySelectorAll('p, li, ul, .row-head, .row-head > span')) block.append('\n');
+  for (const block of facts.querySelectorAll('p, li, ul, .row-head, .row-head > span, .pr-checks > span')) block.append('\n');
   const text = facts.textContent.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
   const command = row.dataset.command.replaceAll("'", "'\\''");
-  return `thirdshift · Needs you\nMachine: ${document.querySelector('header h1').textContent}\nCommand: ${row.dataset.command}\n${text}\nthirdshift show '${command}' --json`;
+  const section = row.closest('.group').getAttribute('aria-label');
+  const machine = row.dataset.machine || document.querySelector('header h1').textContent;
+  const remote = row.dataset.console ? ` --machine '${machine.replaceAll("'", "'\\''")}'` : '';
+  return `thirdshift · ${section}\nMachine: ${machine}\nCommand: ${row.dataset.command}\n${text}\nthirdshift show '${command}' --json${remote}`;
 }
 
 document.addEventListener('click', async event => {
   const copy = event.target.closest('[data-copy-context]');
   if (!copy) return;
   const row = copy.closest('.command');
-  const text = needsYouContext(row);
+  const text = inboxContext(row);
   try {
     await navigator.clipboard.writeText(text);
     document.getElementById(row.id)?.querySelector('[data-copy-status]')?.replaceChildren('Copied.');
@@ -590,7 +576,7 @@ document.addEventListener('keydown', event => {
     if (help.open) help.close();
     else if (!jumps.hidden) jumps.hidden = true;
     else if (!peek.hidden) closePeek();
-    else select(null);
+    else { select(null); spanTree?.clearSelection(); }
     return;
   }
   if (help.open) return;
