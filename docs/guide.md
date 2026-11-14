@@ -3365,8 +3365,10 @@ With no pull request target, `thirdshift fix` is a **Pass**. It searches open,
 non-draft, same-repository pull requests targeting the Launch directory's
 checked-out branch, or `base <branch>` / `--base <branch>`, in ascending number
 order. Only Trusted accounts are eligible; `--author <login>` / `author <login>`
-restricts selection to that account, which must itself be trusted. Neither
-`base` nor `author` can be combined with a targeted PR.
+restricts selection to that account, which must itself be trusted. It skips
+`release-*` pull requests targeting `main`, leaving those version bumps to
+`scripts/release.sh`; an explicit `thirdshift fix <pr-url>` still repairs them.
+Neither `base` nor `author` can be combined with a targeted PR.
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
 `origin`. A failed first push-workflow attempt with failed jobs gets one
@@ -3484,7 +3486,9 @@ open pull request by that author, one per invocation. The Pass form requires
 `--author`; it cannot be combined with a PR URL. It skips drafts, forks,
 authors who are not Trusted accounts, pull requests labelled `in-progress`,
 and heads already named as `reviewed_head` or `pushed_head` in a Review run's
-marker posted by the GitHub account thirdshift acts as. It also skips a pull
+marker posted by the GitHub account thirdshift acts as. It skips `release-*`
+pull requests targeting `main`, which `scripts/release.sh` delivers; explicit
+`review <PR URL>` still reviews them. It also skips a pull
 request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits `0`

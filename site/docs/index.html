@@ -3221,8 +3221,10 @@ branch does not choose the Base branch: the pull request does.</p>
 non-draft, same-repository pull requests targeting the Launch directory&#39;s
 checked-out branch, or <code>base &lt;branch&gt;</code> / <code>--base &lt;branch&gt;</code>, in ascending number
 order. Only Trusted accounts are eligible; <code>--author &lt;login&gt;</code> / <code>author &lt;login&gt;</code>
-restricts selection to that account, which must itself be trusted. Neither
-<code>base</code> nor <code>author</code> can be combined with a targeted PR.</p>
+restricts selection to that account, which must itself be trusted. It skips
+<code>release-*</code> pull requests targeting <code>main</code>, leaving those version bumps to
+<code>scripts/release.sh</code>; an explicit <code>thirdshift fix &lt;pr-url&gt;</code> still repairs them.
+Neither <code>base</code> nor <code>author</code> can be combined with a targeted PR.</p>
 <p>Without <code>--author</code>, the Pass first checks the selected Base branch&#39;s tip on
 <code>origin</code>. A failed first push-workflow attempt with failed jobs gets one
 failed-jobs re-run; the Pass logs it on stderr and continues to PR selection
@@ -3331,7 +3333,9 @@ open pull request by that author, one per invocation. The Pass form requires
 <code>--author</code>; it cannot be combined with a PR URL. It skips drafts, forks,
 authors who are not Trusted accounts, pull requests labelled <code>in-progress</code>,
 and heads already named as <code>reviewed_head</code> or <code>pushed_head</code> in a Review run&#39;s
-marker posted by the GitHub account thirdshift acts as. It also skips a pull
+marker posted by the GitHub account thirdshift acts as. It skips <code>release-*</code>
+pull requests targeting <code>main</code>, which <code>scripts/release.sh</code> delivers; explicit
+<code>review &lt;PR URL&gt;</code> still reviews them. It also skips a pull
 request based on another open pull request until that base&#39;s current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits <code>0</code>
