@@ -100,11 +100,20 @@ pub(super) fn web_search(attempt: &Path) -> Result<bool> {
                 for attribute in record.attributes {
                     if attribute.key == "thirdshift.events"
                         && let Some(AnyValue::String(events)) = attribute.value
-                        && sessions::web_search(&serde_json::from_str::<
-                            Vec<crate::harness::interpretation::event::Event>,
-                        >(&events)?)
                     {
-                        return Ok(true);
+                        // Decode through Value, as the other trace readers do:
+                        // arbitrary_precision numbers otherwise pass through
+                        // serde's tagged-enum buffer as maps rather than f64.
+                        let events =
+                            serde_json::from_str::<Vec<serde_json::Value>>(&events)?
+                                .into_iter()
+                                .map(serde_json::from_value)
+                                .collect::<serde_json::Result<
+                                    Vec<crate::harness::interpretation::event::Event>,
+                                >>()?;
+                        if sessions::web_search(&events) {
+                            return Ok(true);
+                        }
                     }
                 }
             }
