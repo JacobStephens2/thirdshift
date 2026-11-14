@@ -43,7 +43,7 @@ pub(crate) fn prepare(
     }
     let wrappers = attempt.join("harness-wrappers");
     fs::create_dir_all(&wrappers)?;
-    let socat = resolve_binary("socat")?;
+    let mut binaries = Vec::new();
     let mut allowed = BTreeSet::new();
     let mut grok = None;
     for (name, declared) in &runner.harnesses {
@@ -96,12 +96,7 @@ pub(crate) fn prepare(
         }
         allowed.extend(declared.hosts.iter().cloned());
         let binary = harness_into(&request, &mut binds, &mut env, &declared.binary.path);
-        let wrapper = wrappers.join(name);
-        write_without_following(
-            &wrapper,
-            wrapper_script(harness, &binary, &socat, Path::new(SOCKET_DEST)).as_bytes(),
-        )?;
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+        binaries.push((name, harness, binary));
     }
     for provider in &runner.manifest.providers {
         let key = credentials.provider_key(*provider).ok_or_else(|| {
@@ -109,6 +104,17 @@ pub(crate) fn prepare(
         })?;
         env.set_str(provider.environment(), key);
         allowed.extend(provider.hosts().iter().map(|host| host.to_string()));
+    }
+    // Preserve missing-login classification even on hosts that cannot start
+    // a sandbox. Wrapper dependencies are needed only after credentials pass.
+    let socat = resolve_binary("socat")?;
+    for (name, harness, binary) in binaries {
+        let wrapper = wrappers.join(name);
+        write_without_following(
+            &wrapper,
+            wrapper_script(harness, &binary, &socat, Path::new(SOCKET_DEST)).as_bytes(),
+        )?;
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
     }
     binds.read_only(&wrappers, &wrappers);
     env.prepend_path(&wrappers);
