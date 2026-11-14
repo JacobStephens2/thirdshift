@@ -42,7 +42,10 @@ impl Limit {
     /// the Codex session file this parses, and the plan-limit signal repeats
     /// those strings into the operator's terminal and Command record.
     pub(crate) fn accepted(mut self) -> Self {
-        if !matches!(self.harness.as_deref(), Some("claude" | "codex")) {
+        if !matches!(
+            self.harness.as_deref(),
+            Some("claude" | "codex" | "muse" | "agy" | "grok")
+        ) {
             self.harness = None;
         }
         let window = self

@@ -31,7 +31,10 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
                 progress::step(reason);
                 String::new()
             };
-            if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
+            let harness = command.flags.harness(&config);
+            if let Some(skipped) =
+                command_limit::early_skip(&repo, config.command_limit, &harness, false)
+            {
                 return Ok(skip(&skipped));
             }
             if let Some(running) = command_limit::hold_pass(

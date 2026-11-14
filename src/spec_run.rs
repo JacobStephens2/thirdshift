@@ -352,6 +352,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
                 }
                 Ended::Reached { .. } => format!("#{number} landed"),
                 Ended::Interrupted { .. } => format!("#{number} interrupted"),
+                Ended::Failed { paused: true, .. } => format!("#{number} paused"),
                 Ended::Failed { .. } => format!("#{number} failed"),
             });
         }
@@ -460,6 +461,17 @@ fn land_tickets(
         for line in &lines {
             outside.step(line.clone());
         }
+        if let Some(number) = board.paused()
+            && board.only_paused()
+            && untrusted_ticket(outside, &board).is_none()
+        {
+            let paused = crate::session::limits::PlanUsagePaused {
+                limit: crate::plan_usage::latest_limit().unwrap_or_default(),
+                detail: Some(format!("Ticket #{number} paused")),
+            };
+            crate::logs::paused(&paused.limit);
+            return Err(paused.into());
+        }
         let untrusted = if board.only_waiting() {
             untrusted_ticket(outside, &board)
         } else {
@@ -530,9 +542,19 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
                 cause,
                 log: None,
                 local_work: Vec::new(),
+                paused: false,
             }
         });
         let landed = matches!(ending, Ended::Reached { .. });
+        if matches!(ending, Ended::Failed { paused: true, .. }) {
+            // No route has Plan usage: the Tickets running finish or
+            // salvage, but none queued starts.
+            outside.step(format!(
+                "#{} paused: starting no more Tickets until Plan usage allows",
+                ticket.number
+            ));
+            board.stop();
+        }
         board.ended(&ticket, ending);
         match outside.tickets() {
             Ok(reread) => board.reread(reread),
@@ -1046,6 +1068,7 @@ mod tests {
             cause: cause.to_string(),
             log: Some("/logs/session.jsonl".to_string()),
             local_work: Vec::new(),
+            paused: false,
         }
     }
 

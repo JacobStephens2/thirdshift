@@ -13,9 +13,9 @@
 //! one repository at once. A Pickup run or an issue-less Custom process
 //! takes no lock of a kind.
 //!
-//! A live Experiment, then quota admission, comes before any GitHub call,
-//! remote preparation and slot acquisition. Either skips every Pass without
-//! holding any of these locks.
+//! A live Experiment, then quota admission, then Plan usage, comes before
+//! any GitHub call, remote preparation and slot acquisition. Each skips
+//! every Pass without holding any of these locks, and none sleeps.
 //!
 //! A Pass also tries a shared lock on the file a thirdshift from before the
 //! Command limit locks exclusively. Every overlapping newer Pass keeps its
@@ -79,8 +79,11 @@ pub struct NotAdmitted {
 }
 
 impl NotAdmitted {
+    /// Whether it waits on something shared by the machine, a GitHub Quota
+    /// wait or exhausted Plan usage, so each named Custom process compares
+    /// its own last skip reason.
     pub fn is_quota_wait(&self) -> bool {
-        matches!(self.why, Why::QuotaWait(_))
+        matches!(self.why, Why::QuotaWait(_) | Why::PlanUsage(_))
     }
 }
 
@@ -88,6 +91,8 @@ impl NotAdmitted {
 enum Why {
     Experiment(String),
     QuotaWait(String),
+    /// Every route the Pass may take is unavailable by Plan usage.
+    PlanUsage(String),
     /// `running` Commands are running, at or over the limit.
     AtLimit {
         running: usize,
@@ -104,7 +109,7 @@ impl fmt::Display for NotAdmitted {
         let (repo, limit) = (self.repo.slug(), self.limit);
         match &self.why {
             Why::Experiment(id) => write!(f, "Experiment {id} is live on this machine"),
-            Why::QuotaWait(reason) => f.write_str(reason),
+            Why::QuotaWait(reason) | Why::PlanUsage(reason) => f.write_str(reason),
             Why::AtLimit { running } => write!(
                 f,
                 "at the Command limit on {repo}: {}, pass.command_limit is {limit}",
@@ -116,20 +121,37 @@ impl fmt::Display for NotAdmitted {
     }
 }
 
-/// Check for a live Experiment, then quota, before any GitHub call, remote
-/// preparation or Command-limit slot. A failed Experiment read is left to
-/// [`hold_pass`]; probe failures other than exhaustion preserve the existing
-/// admission behavior.
-pub fn early_skip(repo: &Repo, limit: NonZeroUsize) -> Option<NotAdmitted> {
+/// Check for a live Experiment, then quota, then whether every route a
+/// Pass whose sessions run on `harness` may take, a Security run's when
+/// `security`, is unavailable by this machine's Plan usage, before any
+/// GitHub call, remote preparation or Command-limit slot. A failed
+/// Experiment read is left to [`hold_pass`]; probe failures other than
+/// exhaustion preserve the existing admission behavior.
+pub fn early_skip(
+    repo: &Repo,
+    limit: NonZeroUsize,
+    harness: &crate::harness::Choice,
+    security: bool,
+) -> Option<NotAdmitted> {
     let why = match live_experiment().ok().flatten() {
         Some(id) => Why::Experiment(id),
-        None => Why::QuotaWait(crate::github::GitHub::new().pass_quota_wait()?),
+        None => match crate::github::GitHub::new().pass_quota_wait() {
+            Some(reason) => Why::QuotaWait(reason),
+            None => Why::PlanUsage(plan_usage_skip(harness, security)?),
+        },
     };
     Some(NotAdmitted {
         repo: repo.clone(),
         limit,
         why,
     })
+}
+
+/// Why a Pass on `harness` skips for Plan usage, if every route it may take
+/// is unavailable on this machine.
+fn plan_usage_skip(harness: &crate::harness::Choice, security: bool) -> Option<String> {
+    let config = config::UserConfig::load().ok()?;
+    crate::plan_usage::pass_exhaustion(&config, harness, security).map(|ex| ex.to_string())
 }
 
 fn live_experiment() -> Result<Option<String>> {

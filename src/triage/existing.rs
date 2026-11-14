@@ -72,6 +72,10 @@ pub(super) fn trust_reason(issue: &IssueUrl, github: &GitHub) -> Result<Option<S
 pub(super) struct Claim<'a> {
     issue: &'a IssueUrl,
     completed: bool,
+    /// The Triage run ended as a Paused Command: no route had Plan usage,
+    /// which says nothing about the issue, so it goes back to triage
+    /// without `agent-failed`.
+    paused: bool,
     // Field drop follows Claim::drop, so failure labels land before release.
     _origin: crate::reservation::Reservation,
 }
@@ -96,6 +100,7 @@ impl<'a> Claim<'a> {
         let held = Self {
             issue,
             completed: false,
+            paused: false,
             _origin: origin,
         };
         Edit::of(issue, labels, &STATES_AND_CLAIM, &[IN_PROGRESS]).apply(&github)?;
@@ -104,6 +109,10 @@ impl<'a> Claim<'a> {
 
     pub fn completed(&mut self) {
         self.completed = true;
+    }
+
+    pub fn paused(&mut self) {
+        self.paused = true;
     }
 }
 
@@ -116,6 +125,7 @@ impl Drop for Claim<'_> {
         let on: &[Label] = match crate::logs::stop_requested().map(|request| request.ending()) {
             Some(crate::logs::stop::Ending::Requeue) => &[labels::NEEDS_TRIAGE],
             Some(crate::logs::stop::Ending::Triage) => &[labels::READY_FOR_HUMAN],
+            None if self.paused => &[labels::NEEDS_TRIAGE],
             None => &[labels::READY_FOR_HUMAN, AGENT_FAILED],
         };
         let ended = (|| {

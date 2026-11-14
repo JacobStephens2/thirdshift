@@ -50,6 +50,74 @@ impl std::fmt::Display for Reached {
 
 impl std::error::Error for Reached {}
 
+/// A factory Command stopped because no route it may take has available
+/// Plan usage: a Paused Command. Only structured Harness wire frames and
+/// official non-billed reads build one, never agent-writable text, so an
+/// agent cannot pause its own Run or release its Claim.
+#[derive(Debug)]
+pub(crate) struct PlanUsagePaused {
+    /// The stopping Harness and Plan window, as far as they are known.
+    pub limit: Limit,
+    /// What stopped, when it was not this process's own session: a Spec
+    /// run's Ticket.
+    pub detail: Option<String>,
+}
+
+impl PlanUsagePaused {
+    pub(crate) fn new(limit: Limit) -> Self {
+        Self {
+            limit: limit.accepted(),
+            detail: None,
+        }
+    }
+}
+
+impl std::fmt::Display for PlanUsagePaused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no allowed route has available Plan usage")?;
+        if let Some(detail) = &self.detail {
+            write!(f, " ({detail})")?;
+        }
+        if let Some(harness) = self.limit.harness.as_deref() {
+            write!(f, ": {harness}")?;
+            if let Some(window) = self.limit.window.as_deref() {
+                write!(f, " {} window", window.replace('_', "-"))?;
+            }
+            if let Some(used) = self.limit.utilization {
+                write!(f, " at {:.0}%", used * 100.0)?;
+            }
+            if let Some(reset) = self
+                .limit
+                .resets_at
+                .as_deref()
+                .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+            {
+                write!(
+                    f,
+                    ", resets {}",
+                    reset
+                        .with_timezone(&chrono::Local)
+                        .format("%a %b %-d %H:%M %Z")
+                )?;
+            }
+        }
+        f.write_str("; run the Command again to continue once Plan usage allows")
+    }
+}
+
+impl std::error::Error for PlanUsagePaused {}
+
+/// The Plan-usage pause in `error`'s chain, if it ended a Paused Command.
+pub(crate) fn plan_usage_paused(error: &anyhow::Error) -> Option<&PlanUsagePaused> {
+    // A context layer is found through anyhow; a source deeper in the chain
+    // through the standard one.
+    error.downcast_ref::<PlanUsagePaused>().or_else(|| {
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<PlanUsagePaused>())
+    })
+}
+
 pub(crate) fn stop(limit: Limit) -> anyhow::Result<()> {
     let limit = limit.accepted();
     if let Some(path) = std::env::var_os(SIGNAL_ENV) {

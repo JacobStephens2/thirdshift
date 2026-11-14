@@ -710,6 +710,16 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn retaken_by_pickup(&mut self) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.retaken_by_pickup = true;
+            if let Some(dispatched) = tree.active_dispatch() {
+                dispatched.retaken_by_pickup = true;
+            }
+            self.write_record();
+        }
+    }
+
     pub(super) fn paused(&mut self, limit: &crate::session::limits::Limit) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.limit = Some(limit.clone());

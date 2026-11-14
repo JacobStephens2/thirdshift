@@ -513,6 +513,12 @@ pub(crate) fn resumable(command: &str) {
     record().resumable(command);
 }
 
+/// A Paused Command's Claim put `ready-for-agent` back: a later Pickup run
+/// retakes its issue once Plan usage allows.
+pub(crate) fn retaken_by_pickup() {
+    record().retaken_by_pickup();
+}
+
 pub(crate) fn paused(limit: &crate::session::limits::Limit) {
     record().paused(limit);
 }

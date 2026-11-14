@@ -23,6 +23,7 @@ use crate::issue::{IssueUrl, Repo};
 use crate::logs;
 use crate::plan_usage::Router;
 use crate::plan_usage::router::Picked;
+use limits::Limit;
 use crate::progress;
 use crate::prompt;
 use crate::skills;
@@ -115,6 +116,12 @@ impl Logs {
             dir: dir.to_path_buf(),
             recording: recording::Recording::for_trial().into(),
         }
+    }
+
+    /// Whether these are a Trial's logs: a Trial keeps the Eval stop
+    /// policy, not a factory Command's pause.
+    fn is_trial(&self) -> bool {
+        self.name == "trial"
     }
 
     pub(crate) fn of_trial_step(dir: &Path, role: &str) -> Self {
@@ -268,6 +275,7 @@ impl<'a> Sessions<'a> {
             recording: logs.recording().clone(),
             sandbox: Some(sandbox.clone()),
             router: Router::pinned(),
+            pauses: !logs.is_trial(),
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -325,6 +333,7 @@ impl<'a> Sessions<'a> {
             recording: logs.recording().clone(),
             sandbox: None,
             router,
+            pauses: !logs.is_trial(),
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -450,7 +459,9 @@ impl<'a> Sessions<'a> {
         let security = purpose.is_security();
         let routes = self.outside.borrow().routes(security);
         if routes.len() < 2 {
-            return self.unrouted(purpose, kind, prompt, reports.as_ref());
+            self.pause_if_exhausted(purpose, &label)?;
+            let ended = self.unrouted(purpose, kind, prompt, reports.as_ref());
+            return self.paused_at_a_limit(&label, ended);
         }
         let at_start = self.outside.borrow_mut().worktree_at_start()?;
         let mut tried = Vec::new();
@@ -502,7 +513,7 @@ impl<'a> Sessions<'a> {
             tried.push(current);
             let Some(next) = self.take_route(purpose, &label, &routes, &mut tried, true)? else {
                 self.step(format!("{stopped}; no other route is available"));
-                return Err(error);
+                return self.paused_at_a_limit(&label, Err(error));
             };
             let to = &routes[next];
             if plan_usage || kind != Kind::SecurityReview {
@@ -559,6 +570,7 @@ impl<'a> Sessions<'a> {
                 if after_a_stop {
                     return Ok(None);
                 }
+                self.pause_if_exhausted(purpose, label)?;
                 self.outside.borrow_mut().switch(purpose, &routes[0])?;
                 return Ok(Some(0));
             };
@@ -583,6 +595,55 @@ impl<'a> Sessions<'a> {
             }
             return Ok(Some(index));
         }
+    }
+
+    /// End a factory Command's Step before its session starts, as a Paused
+    /// Command, when every route it may take is unavailable by this
+    /// machine's saved Plan usage: no session would get work done, and
+    /// none sleeps waiting for a Plan window to reset.
+    fn pause_if_exhausted(&self, purpose: Purpose, label: &str) -> Result<()> {
+        let exhaustion = {
+            let mut outside = self.outside.borrow_mut();
+            if !outside.pauses() {
+                return Ok(());
+            }
+            outside.exhaustion(purpose)
+        };
+        let Some(exhaustion) = exhaustion else {
+            return Ok(());
+        };
+        self.step(format!("{label}: not started: {exhaustion}"));
+        let paused = limits::PlanUsagePaused::new(exhaustion.limit());
+        logs::paused(&paused.limit);
+        Err(paused.into())
+    }
+
+    /// A factory Command's Step whose session stopped at a Plan usage limit
+    /// a structured wire frame reported, with no other route to take, ends
+    /// the Command as a Paused Command. A cybersecurity safeguard refusal,
+    /// and every other failure, stands as it is.
+    fn paused_at_a_limit(&self, label: &str, ended: Result<Ended>) -> Result<Ended> {
+        let error = match ended {
+            Ok(ended) => return Ok(ended),
+            Err(error) => error,
+        };
+        if !self.outside.borrow().pauses() || error.is::<SafeguardRefusal>() {
+            return Err(error);
+        }
+        let Some(failure) = error
+            .downcast_ref::<SessionFailure>()
+            .filter(|failure| failure.plan_usage_exhausted)
+        else {
+            return Err(error);
+        };
+        let limit = failure.plan_usage_limit.clone().unwrap_or_else(|| Limit {
+            harness: Some(failure.harness.to_owned()),
+            ..Limit::default()
+        });
+        let paused = limits::PlanUsagePaused::new(limit);
+        self.step(format!("{label}: {paused}"));
+        logs::paused(&paused.limit);
+        Err(error.context(paused))
     }
 
     /// A Step with no routes to take: its session, retried once on the
@@ -741,6 +802,16 @@ trait Outside {
     fn pick(&mut self, _security: bool, _tried: &[usize]) -> Option<Picked> {
         None
     }
+    /// Whether a Plan usage limit with no route left ends the Command as a
+    /// Paused Command: a factory Command's sessions, not a Trial's.
+    fn pauses(&self) -> bool {
+        false
+    }
+    /// Whether every route this purpose's sessions may take is unavailable
+    /// by this machine's saved Plan usage.
+    fn exhaustion(&mut self, _purpose: Purpose) -> Option<crate::plan_usage::Exhaustion> {
+        None
+    }
     /// Run this purpose's sessions on `choice` from now on, once its CLI
     /// is checked.
     fn switch(&mut self, _purpose: Purpose, _choice: &Choice) -> Result<()> {
@@ -822,6 +893,9 @@ struct OnMachine {
     recording: recording::Recording,
     sandbox: Option<crate::sandbox::Launch>,
     router: Router,
+    /// Whether a Plan usage limit with no route left pauses the Command:
+    /// every factory Command's sessions, not a Trial's.
+    pauses: bool,
 }
 
 impl OnMachine {
@@ -846,6 +920,15 @@ impl Outside for OnMachine {
 
     fn pick(&mut self, security: bool, tried: &[usize]) -> Option<Picked> {
         self.router.pick(security, tried)
+    }
+
+    fn pauses(&self) -> bool {
+        self.pauses
+    }
+
+    fn exhaustion(&mut self, purpose: Purpose) -> Option<crate::plan_usage::Exhaustion> {
+        let current = self.current(purpose).0.harness;
+        self.router.exhaustion(purpose.is_security(), current)
     }
 
     fn switch(&mut self, purpose: Purpose, choice: &Choice) -> Result<()> {

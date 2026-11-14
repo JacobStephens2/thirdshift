@@ -319,6 +319,7 @@ impl BaseFix {
                 cause,
                 log,
                 local_work,
+                ..
             } => {
                 taken.local_work = local_work;
                 if let Some(log) = log {
@@ -1145,6 +1146,7 @@ mod tests {
                     cause: "CI red on test".to_string(),
                     log,
                     local_work: Vec::new(),
+                    paused: false,
                 }]),
                 ..Script::default()
             });

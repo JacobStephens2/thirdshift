@@ -346,17 +346,27 @@ pub enum Start {
 /// whatever the Launch directory has checked out, or without one the branch
 /// checked out there, so a detached HEAD with neither fails it.
 ///
-/// A Quota wait skips the Pass before remote preparation. Once the preflight
+/// A Quota wait, or Plan usage unavailable on every route its sessions on
+/// `harness` may take, skips the Pass before remote preparation. Once the preflight
 /// checks pass, the run is also [`NotAdmitted`], with nothing done, if its
 /// repository is at its Command `limit` on this
 /// machine, or, as `sharing` says, another Pass of its kind runs there.
 /// Otherwise this process holds a slot there, and the lock of its kind if it
 /// has one, until it exits, through whatever it dispatches.
-pub fn start(base: Option<&str>, limit: NonZeroUsize, sharing: Sharing) -> Result<Start> {
+pub fn start(
+    base: Option<&str>,
+    limit: NonZeroUsize,
+    sharing: Sharing,
+    harness: &crate::harness::Choice,
+) -> Result<Start> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
     crate::logs::pass_fired(&repo);
-    if let Some(skipped) = command_limit::early_skip(&repo, limit) {
+    let security = matches!(
+        sharing,
+        Sharing::OneOfAKind(crate::command_limit::PassKind::Security)
+    );
+    if let Some(skipped) = command_limit::early_skip(&repo, limit, harness, security) {
         return Ok(Start::NotAdmitted(skipped));
     }
     directory.check_identity()?;

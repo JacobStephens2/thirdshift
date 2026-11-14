@@ -370,10 +370,12 @@ fn investigate(
     } else {
         session::Sessions::within(&session_logs, checkout.path(), harness, investigate)
     };
-    if result.is_ok()
-        && let Some(claim) = &mut claim
-    {
-        claim.completed();
+    if let Some(claim) = &mut claim {
+        match &result {
+            Ok(_) => claim.completed(),
+            Err(error) if session::limits::plan_usage_paused(error).is_some() => claim.paused(),
+            Err(_) => {}
+        }
     }
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);

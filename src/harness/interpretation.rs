@@ -38,6 +38,8 @@ pub struct Interpretation {
     /// included work: sticky once seen, since the recorder takes the
     /// observations themselves.
     plan_usage_exhausted: bool,
+    /// The first such refusal's Harness, Plan window, utilization and reset.
+    plan_usage_limit: Option<limits::Limit>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -195,6 +197,7 @@ enum Failure {
         before_first_turn: bool,
         session_id: Option<String>,
         plan_usage_exhausted: bool,
+        plan_usage_limit: Option<limits::Limit>,
     },
 }
 
@@ -214,6 +217,9 @@ pub struct SessionFailure {
     /// subscription's Plan usage refused included work during the session:
     /// the failure a Step may be routed away from.
     pub plan_usage_exhausted: bool,
+    /// What that wire frame said stopped the session, for a Paused
+    /// Command's record.
+    pub plan_usage_limit: Option<limits::Limit>,
     status: ExitStatus,
 }
 
@@ -266,6 +272,7 @@ impl SessionFailure {
             session_id: None,
             oom_killed: self.oom_killed,
             plan_usage_exhausted: self.plan_usage_exhausted,
+            plan_usage_limit: None,
             status: self.status,
         }
         .to_string()
@@ -290,6 +297,7 @@ impl SessionFailure {
             session_id: None,
             oom_killed: false,
             plan_usage_exhausted: false,
+            plan_usage_limit: None,
             status: ExitStatus::from_raw(code << 8),
         }
     }
@@ -317,6 +325,7 @@ impl Failure {
                 before_first_turn,
                 session_id,
                 plan_usage_exhausted,
+                plan_usage_limit,
             } => {
                 let error = anyhow::Error::new(SessionFailure {
                     harness: cli,
@@ -326,6 +335,7 @@ impl Failure {
                     session_id,
                     oom_killed: false,
                     plan_usage_exhausted,
+                    plan_usage_limit,
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -349,6 +359,7 @@ impl Interpretation {
             plan_limit: None,
             plan_usage: Vec::new(),
             plan_usage_exhausted: false,
+            plan_usage_limit: None,
         }
     }
 
@@ -422,6 +433,9 @@ impl Interpretation {
 
     fn note_plan_usage(&mut self, observation: crate::plan_usage::Observation) {
         self.plan_usage_exhausted |= observation.exhausted.is_some();
+        if self.plan_usage_limit.is_none() {
+            self.plan_usage_limit = observation.limit();
+        }
         self.plan_usage.push(observation);
     }
 
@@ -533,6 +547,7 @@ impl Interpretation {
                             && !facts.report.events.iter().any(work_started),
                         session_id: facts.ended.session_id,
                         plan_usage_exhausted: self.plan_usage_exhausted,
+                        plan_usage_limit: self.plan_usage_limit,
                     })
                 } else {
                     Ok(facts.ended)

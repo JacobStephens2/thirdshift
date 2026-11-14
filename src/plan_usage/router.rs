@@ -198,6 +198,35 @@ impl Router {
     }
 }
 
+impl Router {
+    /// Whether every route of this kind is unavailable by this machine's
+    /// saved Plan usage, as a Step finds it before starting: the routes, or
+    /// with fewer than two the Harness `current` sessions run on, held only
+    /// at confirmed exhaustion. None in unit tests, which read no snapshot.
+    pub fn exhaustion(&self, security: bool, current: Harness) -> Option<super::Exhaustion> {
+        if cfg!(test) {
+            return None;
+        }
+        let candidates = self.candidates(security);
+        let routes: Vec<Route> = if candidates.len() >= 2 {
+            candidates
+                .iter()
+                .map(|candidate| candidate.route.clone())
+                .collect()
+        } else {
+            vec![super::exhaustion::pinned(current)]
+        };
+        let saved = Store::machine().and_then(|store| store.read()).ok()?;
+        super::exhaustion::judge(
+            &routes,
+            &self.routing,
+            &saved,
+            Harness::installed,
+            Utc::now(),
+        )
+    }
+}
+
 /// The first of `candidates` not in `tried` whose route could take a
 /// session now, by the `saved` Plan usage and which Harnesses are
 /// `installed`. A route Plan usage does not watch is usable when installed.

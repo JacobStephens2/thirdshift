@@ -33,6 +33,16 @@ use crate::security::review::{
 };
 use crate::trust::{self, IssueText};
 
+/// Whether a Paused Command's Claim in this process put `ready-for-agent`
+/// back, for its Run notification.
+static RETAKEN_BY_PICKUP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a Paused Command's Claim in this process put `ready-for-agent`
+/// back, so a later Pickup run retakes its issue once Plan usage allows.
+pub fn retaken_by_pickup() -> bool {
+    RETAKEN_BY_PICKUP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The label of a Claimed issue.
 pub const IN_PROGRESS: Label =
     Label::new("in-progress", "A Claim: thirdshift has taken this issue");
@@ -68,15 +78,22 @@ pub enum Ending {
     /// about the issue: the Claim is released whatever is on origin, without
     /// labelling a failure.
     OutOfDisk,
+    /// It ended as a Paused Command: no route it may take had available
+    /// Plan usage, which says nothing about the issue. The Claim is released
+    /// whatever is on origin, without labelling a failure.
+    Paused,
     /// It failed otherwise.
     Failed,
 }
 
 impl Ending {
-    /// How a run that failed with `error` ends its Claim: [`Ending::OutOfDisk`]
+    /// How a run that failed with `error` ends its Claim: [`Ending::Paused`]
+    /// when structured Plan-usage facts paused it, [`Ending::OutOfDisk`]
     /// when the host ran out of disk space, else [`Ending::Failed`].
     pub fn failed(error: &anyhow::Error) -> Self {
-        if crate::failed_run::out_of_disk(error) {
+        if crate::session::limits::plan_usage_paused(error).is_some() {
+            Self::Paused
+        } else if crate::failed_run::out_of_disk(error) {
             Self::OutOfDisk
         } else {
             Self::Failed
@@ -156,6 +173,11 @@ impl Claim<'_> {
     /// - Out of disk: the host failed, not the issue, so the Claim is
     ///   released even with work on origin, except a Security fix, which ends
     ///   as a failed one does.
+    /// - Paused: no route had Plan usage, so the Claim is released even
+    ///   with work on origin, putting `ready-for-agent` back if the Claim
+    ///   took it off, so a later Pickup run continues it, or `needs-triage`
+    ///   after an untrusted edit, except a Security fix, which ends as a
+    ///   failed one does.
     /// - Before Delivery: a successful Custom process releases its Claim if
     ///   nothing is on origin, except a Security fix, and adds no failure label.
     /// - Waiting: a Spec run only waiting hands its Spec back, putting
@@ -241,6 +263,9 @@ trait Outside {
     fn comment(&mut self, issue: &IssueUrl, body: &str) -> Result<()>;
     /// Whether the run was interrupted.
     fn interrupted(&mut self) -> bool;
+    /// Take note that a Paused Command's Claim put `ready-for-agent` back,
+    /// so a later Pickup run retakes the issue once Plan usage allows.
+    fn retaken_by_pickup(&mut self);
     /// The requested Stop ending, if this Command is handling a Stop.
     fn stop(&mut self) -> Option<crate::logs::stop::Ending>;
     /// Hand on the progress line `line`.
@@ -305,6 +330,11 @@ impl Outside for OnGitHub<'_> {
 
     fn interrupted(&mut self) -> bool {
         interrupt::requested()
+    }
+
+    fn retaken_by_pickup(&mut self) {
+        RETAKEN_BY_PICKUP.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::logs::retaken_by_pickup();
     }
 
     fn stop(&mut self) -> Option<crate::logs::stop::Ending> {
@@ -441,7 +471,9 @@ impl<'a> Claimed<'a> {
             Ending::Reached(Goal::ReadyForReview) | Ending::Held => self.remove(outside),
             // Pickup never takes a Security fix, so a waiting one stays with
             // the Day shift as a failed one does, its details in its advisory.
-            Ending::Waiting | Ending::Failed | Ending::OutOfDisk if self.security_fix => {
+            Ending::Waiting | Ending::Failed | Ending::OutOfDisk | Ending::Paused
+                if self.security_fix =>
+            {
                 self.label_failed(outside);
             }
             Ending::Waiting => {
@@ -455,6 +487,7 @@ impl<'a> Claimed<'a> {
                 self.release_if_nothing_on_origin(outside);
             }
             Ending::OutOfDisk => self.release_out_of_disk(outside),
+            Ending::Paused => self.release_paused(outside),
             Ending::Failed => {
                 let not_released = self.release_if_nothing_on_origin(outside);
                 if not_released {
@@ -689,6 +722,66 @@ impl<'a> Claimed<'a> {
         }
     }
 
+    /// [`Ending::Paused`], through `outside`: release the Claim whatever is
+    /// on origin, which stays there for the next run to continue, putting
+    /// `ready-for-agent` back if making it took that off, unless an account
+    /// that is not a Trusted account edited the issue since its last
+    /// Trusted `ready-for-agent` labelling, which leaves `needs-triage`. A
+    /// Claim that took no `ready-for-agent` off only takes `in-progress` off
+    /// if it added that. It finishes after an interrupt, and a failure is a
+    /// warning naming what to run by hand.
+    fn release_paused(&self, outside: &mut impl Outside) {
+        if !self.changed_any() {
+            return;
+        }
+        let issue = self.issue;
+        let why = format!(
+            ", without {AGENT_FAILED}: no allowed route has available Plan usage"
+        );
+        let restored = retry_if_interrupted(outside, |outside| {
+            if !self.removed_ready_for_agent {
+                return self.put_labels_back(outside, &why).map(|()| false);
+            }
+            if let Some(text) = outside.untrusted_edit(issue)? {
+                let edit = Edit::of(
+                    issue,
+                    outside.labels(issue)?,
+                    &[IN_PROGRESS, READY_FOR_AGENT],
+                    &[labels::NEEDS_TRIAGE],
+                );
+                if !edit.takes_off(IN_PROGRESS) {
+                    return Ok(false);
+                }
+                outside.step(format!(
+                    "releasing the Claim on #{} as {}{why}, but its {text} was edited by an \
+                     account that is not a Trusted account since it was last labelled \
+                     {READY_FOR_AGENT}",
+                    issue.number,
+                    labels::NEEDS_TRIAGE
+                ));
+                return outside.apply(&edit).map(|()| false);
+            }
+            if !is_on(&outside.labels(issue)?) {
+                return Ok(false);
+            }
+            self.put_labels_back(outside, &why).map(|()| true)
+        });
+        match restored {
+            Ok(true) => outside.retaken_by_pickup(),
+            Ok(false) => {}
+            Err(error) => outside.warn(
+                &error,
+                format!(
+                    "could not release the Claim on #{} after its Command paused, so unless an \
+                     account that is not a Trusted account edited it since it was last labelled \
+                     {READY_FOR_AGENT}, release it by hand: {}",
+                    issue.number,
+                    self.release_by_hand()
+                ),
+            ),
+        }
+    }
+
     /// [`Claimed::release_if_nothing_on_origin`], its failure as `git` or `gh`
     /// gave it.
     fn put_labels_back_unless_on_origin(&self, outside: &mut impl Outside) -> Result<bool> {
@@ -888,6 +981,8 @@ mod in_memory {
         failing: Vec<(Fails, usize)>,
         /// Every call made, in order.
         pub calls: Vec<Call>,
+        /// Whether a Paused Command's Claim noted that Pickup retakes it.
+        pub retaken_by_pickup: bool,
     }
 
     impl InMemory {
@@ -988,6 +1083,10 @@ mod in_memory {
 
         fn stop(&mut self) -> Option<crate::logs::stop::Ending> {
             self.stop
+        }
+
+        fn retaken_by_pickup(&mut self) {
+            self.retaken_by_pickup = true;
         }
 
         fn step(&mut self, line: String) {
@@ -1413,6 +1512,90 @@ mod tests {
             ]
         );
         assert_eq!(labels(&issue), ["bug", "ready-for-agent"]);
+    }
+
+    #[test]
+    fn a_paused_command_releases_its_claim_even_started_on_origin_for_pickup_to_retake() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.started = true;
+
+        let owed = claimed.end(&mut issue, Ending::Paused);
+
+        assert!(!owed);
+        assert_eq!(
+            issue.calls,
+            [
+                Call::Trust,
+                Call::Labels,
+                Call::Labels,
+                step(
+                    "releasing the Claim on #7: labelling it ready-for-agent, in place of \
+                     in-progress, without agent-failed: no allowed route has available Plan usage"
+                ),
+                edit(
+                    &["in-progress"],
+                    &["ready-for-agent"],
+                    &["bug", "ready-for-agent"]
+                ),
+            ]
+        );
+        assert_eq!(labels(&issue), ["bug", "ready-for-agent"]);
+        assert!(issue.retaken_by_pickup);
+    }
+
+    #[test]
+    fn a_paused_command_after_an_untrusted_edit_leaves_its_issue_for_triage() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.untrusted = Some(IssueText::Body);
+
+        claimed.end(&mut issue, Ending::Paused);
+
+        assert_eq!(labels(&issue), ["bug", "needs-triage"]);
+        assert!(!issue.retaken_by_pickup);
+        assert!(!issue.calls.iter().any(|call| matches!(call, Call::Comment(_))));
+    }
+
+    #[test]
+    fn a_paused_command_that_took_no_ready_for_agent_off_only_removes_its_claim() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["bug"]);
+        let claimed = claimed(&mut issue, &url);
+
+        claimed.end(&mut issue, Ending::Paused);
+
+        assert_eq!(labels(&issue), ["bug"]);
+        assert!(!issue.retaken_by_pickup);
+    }
+
+    #[test]
+    fn a_paused_security_fix_still_waits_for_the_day_shift() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["security-fix", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+
+        claimed.end(&mut issue, Ending::Paused);
+
+        assert_eq!(labels(&issue), ["security-fix", "agent-failed"]);
+        assert!(!issue.retaken_by_pickup);
+    }
+
+    #[test]
+    fn only_a_structured_plan_usage_pause_ends_a_claim_as_paused() {
+        let paused = anyhow::Error::new(crate::session::limits::PlanUsagePaused::new(
+            crate::session::limits::Limit::default(),
+        ))
+        .context("implement session failed");
+        assert_eq!(Ending::failed(&paused), Ending::Paused);
+        // Agent-writable text saying the same is an ordinary failure.
+        let prose = anyhow::anyhow!(
+            "no allowed route has available Plan usage; run the Command again to continue once \
+             Plan usage allows"
+        );
+        assert_eq!(Ending::failed(&prose), Ending::Failed);
     }
 
     #[test]

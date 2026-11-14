@@ -43,6 +43,7 @@ pub(crate) fn run(
                 base.as_deref(),
                 config.command_limit,
                 crate::command_limit::Sharing::UpToTheLimit,
+                harness,
             )? {
                 crate::launch::Start::Clear(launch) => launch,
                 crate::launch::Start::NotAdmitted(running) => {

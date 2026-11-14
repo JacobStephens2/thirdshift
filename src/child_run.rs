@@ -570,11 +570,14 @@ pub enum Ended {
         pr_url: Option<String>,
         base_fix: Option<String>,
     },
-    /// Why, and its session trace, as it reported them.
+    /// Why, and its session trace, as it reported them, and whether it
+    /// ended as a Paused Command, as its exit code said: no route it may
+    /// take had available Plan usage.
     Failed {
         cause: String,
         log: Option<String>,
         local_work: Vec<String>,
+        paused: bool,
     },
     /// Ended by an interrupt passed on to it.
     Interrupted { local_work: Vec<String> },
@@ -938,6 +941,7 @@ impl Handle {
                     .unwrap_or_else(|| format!("the Ticket run {status}")),
                 log: failure.log,
                 local_work,
+                paused: status.code() == Some(i32::from(run_ending::PAUSED_EXIT)),
             },
         })
     }

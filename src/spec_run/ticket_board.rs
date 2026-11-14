@@ -186,6 +186,33 @@ impl TicketBoard {
                 .all(|ticket| self.waits(ticket))
     }
 
+    /// The first Ticket whose Run ended as a Paused Command, if one did.
+    pub(super) fn paused(&self) -> Option<u64> {
+        self.by_number().into_iter().find_map(|ticket| {
+            matches!(
+                self.standings.get(&ticket.issue.identity()),
+                Some(Standing::Ended(Ended::Failed { paused: true, .. }))
+            )
+            .then_some(ticket.issue.number)
+        })
+    }
+
+    /// Whether the Spec run only paused: a Ticket's Run paused, and no
+    /// other failed, was interrupted or is still running, so a later Spec
+    /// run continues it once Plan usage allows.
+    pub(super) fn only_paused(&self) -> bool {
+        self.paused().is_some()
+            && !self.standings.values().any(|standing| {
+                matches!(
+                    standing,
+                    Standing::Running
+                        | Standing::Ended(
+                            Ended::Failed { paused: false, .. } | Ended::Interrupted { .. }
+                        )
+                )
+            })
+    }
+
     /// The open Tickets in the Spec's repository, the ones a later Spec run
     /// may start.
     pub(super) fn open_here(&self) -> impl Iterator<Item = &IssueUrl> {
@@ -358,6 +385,9 @@ impl TicketBoard {
             }
             Some(Standing::Running) => return "running".to_string(),
             Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
+            Some(Standing::Ended(Ended::Failed { paused: true, .. })) => {
+                return "paused: no allowed route has available Plan usage".to_string();
+            }
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
                 return format!("failed: {cause}");
             }
@@ -500,6 +530,7 @@ mod tests {
             cause: cause.to_string(),
             log: log.map(str::to_string),
             local_work: Vec::new(),
+            paused: false,
         }
     }
 
