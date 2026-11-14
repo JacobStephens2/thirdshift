@@ -1269,7 +1269,8 @@ fn done_and_resolved_say_what_they_hold_whether_empty_or_populated() {
     record(home.path(), 1, Some("merged"), 0);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let done_help = "Ended within the last 24 hours, with nothing waiting for you.";
-    let resolved_help = "Older runs with nothing waiting for you, kept here until their retention period ends.";
+    let resolved_help =
+        "Older Commands with nothing waiting for you, kept here until their retention period ends.";
 
     // Resolved is empty here, and still explains itself.
     let html = console.get("/?section=resolved").text().unwrap();
@@ -1277,10 +1278,13 @@ fn done_and_resolved_say_what_they_hold_whether_empty_or_populated() {
     assert!(resolved.contains("Nothing here."), "{resolved}");
     assert!(resolved.contains(resolved_help), "{resolved}");
     assert!(
-        resolved.contains("from when the run ended or its waiting work was dealt with"),
+        resolved.contains("from when the Command ended or its waiting work was dealt with"),
         "{resolved}"
     );
-    assert!(resolved.contains("<a href=\"/history\">History</a>"), "{resolved}");
+    assert!(
+        resolved.contains("the owning machine's <a href=\"/history\">History</a>"),
+        "{resolved}"
+    );
     let done = section(&html, "done");
     assert!(done.contains(done_help), "{done}");
 

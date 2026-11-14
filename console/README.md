@@ -220,7 +220,9 @@ updates, folder changes and reloads when storage is available. Without storage,
 folding still works through live updates. Keyboard row navigation skips folded
 rows, and the same controls work in every Theme and on phones. Without
 JavaScript, groups start open and their native disclosures still work.
-The folders on the left can filter to one section, including Done and Resolved.
+The folders on the left can filter to one section, including Done and Resolved,
+each of which says under its heading what it holds; Resolved adds when its
+retention starts and that its length is the owning machine's `inbox.days`.
 Rows show state, subject, title, gist and age. A Spec with recorded Tickets also
 shows `2 / 5 Tickets complete`, including on phones and on the visible row of a
 Pass that dispatched it. This counts recorded merged Tickets, including Tickets

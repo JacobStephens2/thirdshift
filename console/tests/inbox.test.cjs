@@ -704,7 +704,7 @@ test('Done and Resolved explain themselves on a phone, empty or populated, throu
   try {
     await page.goto(`${origin}/?section=resolved`);
     await help('resolved').waitFor({ state: 'visible' });
-    assert.match(await help('resolved').textContent(), /^Older runs with nothing waiting for you/);
+    assert.match(await help('resolved').textContent(), /^Older Commands with nothing waiting for you/);
     await fits('resolved');
     await page.goto(`${origin}/?section=done`);
     const done = page.locator('#inbox > [data-group="done"]');
