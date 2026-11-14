@@ -468,8 +468,10 @@ thirdshift show widgets#7 --span <span-id> --json
 
 The tree uses the recorder's stable Command, Run and stage span IDs. Each row
 has its kind, status, duration and bar on a shared axis. Errors carry their
-message, running calls extend to now with a hatched bar, and estimated timings
-are dotted and marked `*`. Converted Session tools keep the old scoped
+message, running calls extend to now with animated hatched bars in the tree and
+Peek. Pause motion and the system's reduced-motion preference keep the hatching
+still. Elapsed times and bars update in place until the spans finish. Estimated
+timings are dotted and marked `*`. Converted Session tools keep the old scoped
 Command-log estimates, including unknown times. Commands without traces still
 show their Runs and stages.
 
