@@ -199,8 +199,20 @@ impl<'a> Execution<'a> {
                 None => json!(setup.process.as_deref().unwrap_or("ticket-run")),
             };
         }
+        let recorder = arm
+            .runner
+            .as_ref()
+            .map(|_| custom::Recorder::start(&attempt))
+            .transpose()?
+            .map(RefCell::new);
         if let Some(runner) = &arm.runner {
-            custom::prepare(runner, task, &prepared_repo.repository, &attempt)?;
+            custom::prepare(
+                runner,
+                task,
+                &prepared_repo.repository,
+                &attempt,
+                &recorder.as_ref().unwrap().borrow().command(&attempt),
+            )?;
         } else {
             store::write(&request_path, &document)?;
         }
@@ -220,28 +232,34 @@ impl<'a> Execution<'a> {
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        let (mut launched, sandbox) =
-            match self.command(arm, &request, &request_path, &caps, toolchains.as_deref()) {
-                Ok(command) => command,
-                Err(error) if arm.runner.is_some() => {
-                    interrupt::check()?;
-                    let mut output =
-                        Output::failed(started.elapsed().as_millis(), &format!("{error:#}"));
-                    output.outcome = Outcome::Void;
-                    output.void_cause = Some(if error.is::<crate::sandbox::NoLogin>() {
-                        VoidCause::SessionUnavailable
-                    } else {
-                        VoidCause::SandboxUnavailable
-                    });
-                    output.timings.session_ms = 0;
-                    let score = trace.grade(|| {
-                        grading::score(task, &grading_repository, &output, self.timeout)
-                    })?;
-                    trace.outcome(output.outcome);
-                    return complete(attempt, output, score);
-                }
-                Err(error) => return Err(error),
-            };
+        let record_socket = recorder.as_ref().map(|recorder| recorder.borrow().socket());
+        let (mut launched, sandbox) = match self.command(
+            arm,
+            &request,
+            &request_path,
+            &caps,
+            toolchains.as_deref(),
+            record_socket.as_deref(),
+        ) {
+            Ok(command) => command,
+            Err(error) if arm.runner.is_some() => {
+                interrupt::check()?;
+                let mut output =
+                    Output::failed(started.elapsed().as_millis(), &format!("{error:#}"));
+                output.outcome = Outcome::Void;
+                output.void_cause = Some(if error.is::<crate::sandbox::NoLogin>() {
+                    VoidCause::SessionUnavailable
+                } else {
+                    VoidCause::SandboxUnavailable
+                });
+                output.timings.session_ms = 0;
+                let score = trace
+                    .grade(|| grading::score(task, &grading_repository, &output, self.timeout))?;
+                trace.outcome(output.outcome);
+                return complete(attempt, output, score);
+            }
+            Err(error) => return Err(error),
+        };
         // The unit name stays in the attempt for `journalctl --user -u` after.
         fs::write(attempt.join("scope"), launched.unit())?;
         trace.inherit(launched.command())?;
@@ -256,6 +274,9 @@ impl<'a> Execution<'a> {
             },
             Instant::now() + self.timeout,
             &|| {
+                if let Some(recorder) = &recorder {
+                    recorder.borrow_mut().check(self.signal)?;
+                }
                 monitor.borrow_mut().check(self.signal)?;
                 // Trial work writes nothing to the Command log until its
                 // outcome. Repeat a line so a long Trial is not taken as
@@ -272,6 +293,10 @@ impl<'a> Execution<'a> {
             .as_nanos()
             .try_into()?;
         drop(caches);
+        let traffic = sandbox
+            .as_ref()
+            .map(|sandbox| sandbox.accounting())
+            .unwrap_or_default();
         // The runner and its children have ended. Release the Grok login
         // before a Grader might need that same serialized Trials home.
         drop(sandbox);
@@ -350,6 +375,15 @@ impl<'a> Execution<'a> {
             }
         };
         protocol.timings.suspended_seconds = suspended_seconds;
+        if let Some(recorder) = &recorder {
+            custom::collect(
+                &mut recorder.borrow_mut(),
+                arm.runner.as_ref().unwrap(),
+                &traffic,
+                &mut protocol,
+                self.signal,
+            )?;
+        }
         if protocol.outcome == Outcome::Failed && cap_killed() {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::MemoryCap);
@@ -423,6 +457,11 @@ impl<'a> Execution<'a> {
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
         }
+        if protocol.outcome != Outcome::Void && custom::web_search(&attempt)? {
+            protocol.outcome = Outcome::Void;
+            protocol.void_cause = Some(VoidCause::WebSearch);
+            protocol.cause = Some("Session transcript contains a web-search tool call".into());
+        }
         let score = trace.grade(|| {
             if let Some(prices) = self.pricing {
                 let role = serde_json::to_value(&task.manifest.session)?;
@@ -489,6 +528,7 @@ impl<'a> Execution<'a> {
         path: &Path,
         caps: &crate::scope::Caps,
         toolchains: Option<&Path>,
+        record_socket: Option<&Path>,
     ) -> Result<(crate::scope::Launch, Option<crate::sandbox::Prepared>)> {
         let directory = self
             .directory
@@ -524,6 +564,7 @@ impl<'a> Execution<'a> {
                     attempt,
                     &crate::config::home()?,
                     &environment,
+                    record_socket.context("Custom runner recorder socket is missing")?,
                 )?;
                 let mut args = vec!["-c".into(), r#"exec "$0" "$@""#.into()];
                 args.extend(argv);

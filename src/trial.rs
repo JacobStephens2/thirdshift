@@ -138,6 +138,7 @@ pub(crate) enum VoidCause {
     MemoryCap,
     AccountingGap,
     FixLeaked,
+    WebSearch,
 }
 
 impl std::fmt::Display for VoidCause {
@@ -153,6 +154,7 @@ impl std::fmt::Display for VoidCause {
             Self::MemoryCap => "memory_cap",
             Self::AccountingGap => "accounting_gap",
             Self::FixLeaked => "fix_leaked",
+            Self::WebSearch => "web_search",
         })
     }
 }

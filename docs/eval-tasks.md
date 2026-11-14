@@ -525,8 +525,12 @@ sets the declared credentials and proxy variables.
 
 Custom runners receive version-1 request.json with `repository`, `issue_file`,
 `issue_url`, `base`, `branch`, `runner_dir`, `output_dir` and `record_command`.
-The recorder field is null until #2191 adds the live recorder. The runner
-receives EOF on stdin and writes `output_dir/result.json`, for example:
+`record_command` is an argv prefix. Append `--role <role> -- <harness> [args...]`
+to wrap a supported Harness CLI call. It preserves stdin, stdout, stderr and
+exit status while sending events to the host recorder. OTLP `.logs.jsonl` and
+`.spans.jsonl` stream live into the Trial's read-only `session/` folder; an 85%
+Claude or Codex quota warning pauses the Experiment with `usage_limit`.
+The runner receives EOF on stdin and writes `output_dir/result.json`, for example:
 
 ```json
 {"version":1,"outcome":"delivered"}
@@ -543,9 +547,28 @@ and Pair evidence grade committed HEAD, ignoring uncommitted files (listed in
 attempt diagnostics). No simulated user answers questions. `stopped_to_ask`
 fails its Score and appears in the outcomes tally.
 
-Multi-provider sandbox, login and network adapters are tracked by #2189;
-session recording and accounting by #2191. The contract here supplies their
-preparation and execution seam.
+For post-run recording, write `output_dir/sessions.json` as an array. Each
+entry names a `role`, RFC3339 `started_at` and `ended_at`, and either:
+
+- `harness` plus `stream_file`, containing that Harness's raw stream; or
+- `transcript_file` plus `models`, mapping observed Model names to
+  `uncached_input_tokens`, `cache_read_tokens`, `cache_write_tokens` and
+  `output_tokens`. Transcripts may contain normalized Harness-independent
+  events, one JSON object per line, or plain text.
+
+All files must be regular top-level files inside `output_dir`. The host converts
+them into the same OTLP traces as live sessions, retaining transcripts for
+fix-leak checks, Trial Peek, Waterfall and export. Pricing uses the Experiment's
+frozen `prices.json`, including cache tokens in input totals, and ignores
+runner-reported USD. Converted Claude and Codex streams also retain quota stops.
+List each session once; do not list a live-recorded session again.
+
+A web-search tool call in normalized Session evidence voids the Trial as
+`web_search`. Host proxy evidence counts provider connections and non-probe
+Harness invocations. Provider traffic with no sessions, or fewer Harness
+sessions than Harness runs that contacted a provider, voids the Trial as
+`accounting_gap`. A runner with declared `harnesses` or `providers` that ends
+`delivered` or `stopped_to_ask` with no sessions also has an accounting gap.
 
 Before its first Trial, an Experiment prepares both Arms together:
 

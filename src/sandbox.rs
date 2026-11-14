@@ -205,6 +205,11 @@ pub(crate) fn disabled() -> bool {
 }
 
 impl Prepared {
+    /// Host-observed provider traffic and Custom runner Harness invocations.
+    pub(crate) fn accounting(&self) -> proxy::Accounting {
+        self._proxy.accounting()
+    }
+
     /// What a session runner holds to launch inside the sandbox. The guards
     /// stay with the `Prepared` they came from, which outlives the sessions.
     pub(crate) fn launch(&self) -> Launch {

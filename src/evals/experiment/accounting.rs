@@ -11,7 +11,7 @@ use super::{TrialResult, trial_sessions};
 use crate::otlp_jsonl::{AnyValue, Reader, Spans};
 use crate::session::usage;
 use crate::trial::accounting::{Attempt, Prices, Session, SessionStart};
-use crate::trial::{Outcome, Output};
+use crate::trial::{Outcome, Output, VoidCause};
 
 pub(super) fn capture(
     path: &Path,
@@ -117,6 +117,7 @@ pub(super) fn capture(
                 Outcome::Succeeded | Outcome::Delivered | Outcome::StoppedToAsk
             ) && role != "process"
                 && output.timings.session_ms > 0))
+        || (output.void_cause == Some(VoidCause::AccountingGap) && accounting.gap().is_none())
     {
         accounting.sessions.push(Session {
             path: path.join("session").to_string_lossy().into_owned(),
@@ -124,7 +125,14 @@ pub(super) fn capture(
             time_ms: output.timings.session_ms,
             models: BTreeMap::new(),
             cost_usd: None,
-            gap: Some("accounting gap: missing usage and retained Session evidence".into()),
+            gap: Some(
+                output
+                    .cause
+                    .as_deref()
+                    .filter(|_| output.void_cause == Some(VoidCause::AccountingGap))
+                    .unwrap_or("accounting gap: missing usage and retained Session evidence")
+                    .into(),
+            ),
         });
     }
     Ok(accounting)
