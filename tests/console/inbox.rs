@@ -1346,6 +1346,51 @@ fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group(
 }
 
 #[test]
+fn done_and_resolved_say_what_they_hold_whether_empty_or_populated() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 1, Some("merged"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let done_help = "Ended within the last 24 hours, with nothing waiting for you.";
+    let resolved_help =
+        "Older Commands with nothing waiting for you, kept here until their retention period ends.";
+
+    // Resolved is empty here, and still explains itself.
+    let html = console.get("/?section=resolved").text().unwrap();
+    let resolved = section(&html, "resolved");
+    assert!(resolved.contains("Nothing here."), "{resolved}");
+    assert!(resolved.contains(resolved_help), "{resolved}");
+    assert!(
+        resolved.contains("from when the Command ended or its waiting work was dealt with"),
+        "{resolved}"
+    );
+    assert!(
+        resolved.contains("the owning machine's <a href=\"/history\">History</a>"),
+        "{resolved}"
+    );
+    let done = section(&html, "done");
+    assert!(done.contains(done_help), "{done}");
+
+    record(home.path(), 2, Some("merged"), 2);
+    let html = console.get("/?section=resolved").text().unwrap();
+    for (group, expected) in [("done", done_help), ("resolved", resolved_help)] {
+        let group = section(&html, group);
+        assert!(group.contains("<ul class=\"commands\"><li"), "{group}");
+        let help = group
+            .split("<p class=\"section-help\">")
+            .nth(1)
+            .expect(group)
+            .split("</p>")
+            .next()
+            .unwrap();
+        assert!(help.starts_with(expected), "{help}");
+        // Neither promises success nor asks the Day shift to resolve anything.
+        assert!(!help.contains("succe"), "{help}");
+        assert!(!help.contains("you must"), "{help}");
+    }
+}
+
+#[test]
 fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
