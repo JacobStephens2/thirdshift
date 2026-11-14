@@ -327,6 +327,13 @@ These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. A live Command in
 Needs you, or in a hidden section, still counts as running.
 
+While Commands are live, retained skipped Pass reasons appear below the Inbox
+sections under the same **Last recorded skipped Passes** disclosure, closed on
+each page load. Open it to read the full reasons and their links; live updates
+refresh the messages while keeping your open or closed state. With no recorded
+skipped Passes, no empty disclosure appears. The control also works by keyboard
+and without JavaScript.
+
 Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
 the same button turns it off across its open tabs. Keep a Console tab open
