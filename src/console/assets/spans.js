@@ -49,7 +49,7 @@ export function initSpanTree({ openCommand, openDetails }) {
   const button = (text, action) => {
     const node = el('button', '', text);
     node.type = 'button';
-    node.addEventListener('click', action);
+    if (action) node.addEventListener('click', action);
     return node;
   };
   function ancestors(span) {
@@ -164,7 +164,9 @@ export function initSpanTree({ openCommand, openDetails }) {
       }
       return wrapper;
     }
-    tree.replaceChildren(...roots.map((span, i) => item(span, 0, i, roots.length, new Set())));
+    const replacement = tree.cloneNode(false);
+    replacement.append(...roots.map((span, i) => item(span, 0, i, roots.length, new Set())));
+    Idiomorph.morph(tree, replacement);
     if (focused) rowFor(focused)?.focus({ preventScroll: true });
   }
   function renderAxis() {
@@ -203,9 +205,10 @@ export function initSpanTree({ openCommand, openDetails }) {
     const sameSpan = content.dataset.detailSpanId === span.id, scroll = sameSpan ? peek.scrollTop : 0;
     content.dataset.detailSpanId = span.id;
     const card = el('article', 'span-card'), path = el('nav', 'span-path'); path.setAttribute('aria-label', 'Span ancestors');
+    card.id = `span-detail-${span.id}`;
     for (const parent of ancestors(span)) {
       const link = el('a', '', spanName(parent)); link.href = `#span-${parent.id}`;
-      link.addEventListener('click', event => { event.preventDefault(); revealSpan(parent.id); }); path.append(link);
+      link.dataset.revealSpan = parent.id; path.append(link);
     }
     card.append(path, el('h2', '', `${span.kind} · ${spanName(span)}`), el('p', '', `${span.status}${span.error !== null ? ` · ${span.error}` : ''} · ${clock(span.start)} → ${span.status === 'running' ? 'now' : clock(span.end)}${span.estimated ? ' · estimated*' : ''}`));
     const tiles = el('div', 'span-tiles');
@@ -226,19 +229,20 @@ export function initSpanTree({ openCommand, openDetails }) {
     card.append(tiles);
     for (const [label, owner] of [['Within parent', parent], ['Within Command', roots[0]]]) {
       if (owner && owner.start !== null && end(owner) !== null) {
-        const position = el('div', 'span-position', label); position.append(bar(span, { start: owner.start, end: end(owner) })); card.append(position);
+        const position = el('div', 'span-position', label); position.id = `span-position-${span.id}-${label === 'Within parent' ? 'parent' : 'command'}`;
+        position.append(bar(span, { start: owner.start, end: end(owner) })); card.append(position);
       }
     }
     const actions = el('div', 'span-actions');
-    const zoomButton = button(zoom ? 'Zoom out to whole Command' : children.has(span.id) ? `Zoom timeline to this ${kindName[span.kind]}` : 'Zoom timeline around this call', () => zoomTo(zoom ? null : span.id));
+    const zoomButton = button(zoom ? 'Zoom out to whole Command' : children.has(span.id) ? `Zoom timeline to this ${kindName[span.kind]}` : 'Zoom timeline around this call');
+    zoomButton.dataset.spanAction = 'zoom';
     zoomButton.disabled = span.start === null; actions.append(zoomButton);
     if (span.conversation_url) { const link = el('a', '', 'Open in conversation'); link.href = span.conversation_url; actions.append(link); }
     const machine = new URL(span.command_url, location.href).searchParams.get('machine');
     const cli = `thirdshift show ${quote(data.command)} --span ${span.id} --json${machine ? ` --machine ${quote(machine)}` : ''}`;
-    const copy = button('Copy CLI', async () => {
-      try { await navigator.clipboard.writeText(cli); status.textContent = 'CLI copied.'; } catch { status.textContent = cli; }
-    });
-    copy.dataset.copyCli = cli; actions.append(copy, button('Command details', () => { detail = null; openCommand(span); })); card.append(actions);
+    const copy = button('Copy CLI'); copy.dataset.spanAction = 'copy'; copy.dataset.copyCli = cli;
+    const command = button('Command details'); command.dataset.spanAction = 'command';
+    actions.append(copy, command); card.append(actions);
     function section(label, body, open = false) {
       const disclosure = el('details'); disclosure.dataset.detailSection = label;
       disclosure.open = sameSpan ? folds.get(label) ?? open : open;
@@ -254,9 +258,23 @@ export function initSpanTree({ openCommand, openDetails }) {
       if (value === undefined || value === null) continue;
       const row = el('tr'); row.append(el('th', '', key), el('td', '', String(value))); body.append(row);
     }
-    table.append(body); section('Overview table', table); content.replaceChildren(card);
+    table.append(body); section('Overview table', table); Idiomorph.morph(content, card, { morphStyle: 'innerHTML' });
     peek.hidden = false; document.body.classList.add('peek-open'); peek.scrollTop = scroll;
   }
+  // Details are morphed in place, so handlers resolve the current span and
+  // attributes rather than retaining closures from an earlier render.
+  content.addEventListener('click', async event => {
+    const link = event.target.closest('[data-reveal-span]');
+    if (link) { event.preventDefault(); revealSpan(link.dataset.revealSpan); return; }
+    const action = event.target.closest('[data-span-action]'), span = nodes.get(detail);
+    if (!action || !span) return;
+    if (action.dataset.spanAction === 'zoom') zoomTo(zoom ? null : span.id);
+    else if (action.dataset.spanAction === 'command') { detail = null; openCommand(span); }
+    else if (action.dataset.spanAction === 'copy') {
+      const cli = action.dataset.copyCli;
+      try { await navigator.clipboard.writeText(cli); status.textContent = 'CLI copied.'; } catch { status.textContent = cli; }
+    }
+  });
   tree.addEventListener('click', event => {
     const row = event.target.closest('.span-row'); if (!row) return;
     const id = row.parentElement.dataset.spanId;

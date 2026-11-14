@@ -66,6 +66,72 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Done headers keep Command kinds and outcomes readable on desktop and phones', async t => {
+  const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));
+  const originals = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const base = JSON.parse(originals[0]);
+  const process = 'nightly-maintenance-of-every-service-in-the-development-environment';
+  const cases = [
+    ['Run', null, 'Ticket run'],
+    ['Spec run', null, 'Spec run'],
+    ['Triage run', null, 'Triage run'],
+    ['Review run', null, 'Review run'],
+    ['Process', process, `Process ${process}`],
+  ];
+  const fixtures = cases.map(([kind, process_name], index) => ({ ...base, kind, process_name,
+    name: `done-kind-${index}`, tickets: index === 1 ? base.tickets : [], cause: null, outcome: 'merged',
+    issue: { number: 42, url: 'https://github.com/acme/widgets/issues/42', title: 'Identify completed work' },
+  }));
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      for (const javaScriptEnabled of [true, false]) {
+        await Promise.all(paths.map((path, index) => replaceRecord(path, JSON.stringify(fixtures[index]))));
+        const page = await pageFor(t, { viewport, javaScriptEnabled });
+        await page.goto(`${origin}/?section=done`);
+        const heads = paths.map((_, index) => page.locator(`#inbox .command[data-command*="${index + 1}-fixture.command.json"] > .row-head`));
+        for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+          for (const mode of ['light', 'dark']) {
+            const theme = `${family}-${mode}`;
+            await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+            await page.evaluate(() => document.fonts.ready);
+            for (const [index, [, , label]] of cases.entries()) {
+              assert.equal(await heads[index].locator('.command-kind').textContent(), label);
+              assert.equal(await heads[index].locator('.subject a').getAttribute('href'), fixtures[index].issue.url);
+              const fields = ['.command-kind', '.state', '.subject-issue', '.issue-title', '.gist', '.age'];
+              if (index === 1) fields.push('.ticket-progress');
+              for (const field of fields) {
+                const layout = await heads[index].locator(field).evaluate(node => {
+                  const box = node.getBoundingClientRect();
+                  const range = document.createRange();
+                  range.selectNodeContents(node);
+                  const rects = [...range.getClientRects()];
+                  return { box: box.toJSON(), rects: rects.map(rect => rect.toJSON()), visible: box.width > 0 && box.height > 0 && rects.length > 0 && rects.every(rect =>
+                    rect.left >= box.left - 1 && rect.right <= box.right + 1 &&
+                    rect.left >= 0 && rect.right <= innerWidth) };
+                });
+                assert.ok(layout.visible, `${field} must be readable for ${label}, ${theme}, ${viewport.width}px, JS=${javaScriptEnabled}: ${JSON.stringify(layout)}`);
+              }
+              assert.equal(await heads[index].locator('.gist').textContent(), 'merged');
+            }
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+          }
+        }
+        assert.equal(await page.locator('body').evaluate(node => node.classList.contains('peek-open')), false);
+        if (javaScriptEnabled) {
+          await replaceRecord(paths[0], JSON.stringify({ ...fixtures[0], kind: 'Fix run' }));
+          await heads[0].locator('.command-kind').getByText('Fix run', { exact: true }).waitFor();
+        }
+        await page.reload();
+        assert.equal(await heads[0].locator('.command-kind').textContent(), javaScriptEnabled ? 'Fix run' : 'Ticket run');
+        await page.close();
+      }
+    }
+  } finally {
+    await Promise.all(paths.map((path, index) => replaceRecord(path, originals[index])));
+  }
+});
+
 test('Needs you Review and Triage headers prefer PR links and keep issue and Command fallbacks', async t => {
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));
@@ -545,7 +611,7 @@ test('Command details times out a held request and can be opened again', async t
 const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${group}"]`);
 const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
 const shownGroups = page => shownGroup(page).evaluateAll(groups => groups.map(group => group.dataset.group));
-const overviewGroups = ['needs you', 'ready for review', 'landing', 'working'];
+const overviewGroups = ['needs you', 'ready for review', 'landing', 'working', 'done', 'resolved'];
 
 test('Inbox group headings fold independently by pointer and keyboard on desktop and phone', async t => {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -601,7 +667,7 @@ test('Inbox group choices survive reload before the native toggle event', async 
       const needs = page.locator('#inbox > [data-group="needs you"]');
       await ready.locator(':scope > summary').click();
       // Start with a saved, folded group before racing its next toggle.
-      await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folds'))?.['ready for review'] === false);
       await page.reload();
       assert.equal(await ready.getAttribute('open'), null);
       await page.evaluate(() => {
@@ -635,9 +701,9 @@ test('reloading another Console tab preserves the newer Inbox group choice', asy
       await other.goto(`${origin}${path}`);
       const ready = inbox.locator('#inbox > [data-group="ready for review"]');
       await ready.locator(':scope > summary').click();
-      await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folds'))?.['ready for review'] === false);
       await other.reload();
-      assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review']), false);
+      assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folds'))?.['ready for review']), false);
       await inbox.reload();
       await ready.locator(':scope > .commands').waitFor({ state: 'hidden' });
     });
@@ -691,6 +757,38 @@ test('folded Inbox groups keep live counts and choices through folders, hiding a
   }
 });
 
+test('Done and Resolved explain themselves on a phone, empty or populated, through live refresh', async t => {
+  const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const help = group => page.locator(`#inbox > [data-group="${group}"] > .section-help`);
+  const fits = async group => {
+    const box = await help(group).boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
+    assert.equal(await help(group).evaluate(node => node.scrollWidth <= node.clientWidth), true);
+  };
+  try {
+    await page.goto(`${origin}/?section=resolved`);
+    await help('resolved').waitFor({ state: 'visible' });
+    assert.match(await help('resolved').textContent(), /^Older Commands with nothing waiting for you/);
+    await fits('resolved');
+    await page.goto(`${origin}/?section=done`);
+    const done = page.locator('#inbox > [data-group="done"]');
+    const count = Number(await done.locator(':scope > summary .count').textContent());
+    await help('done').waitFor({ state: 'visible' });
+    await fits('done');
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="done"] > summary .count').textContent === String(expected), count + 1);
+    await help('done').waitFor({ state: 'visible' });
+    assert.equal(await help('done').textContent(), 'Ended within the last 24 hours, with nothing waiting for you.');
+    await fits('done');
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('every Inbox section folder has a native disclosure without JavaScript', async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   await page.goto(origin);
@@ -705,6 +803,122 @@ test('every Inbox section folder has a native disclosure without JavaScript', as
     await section.locator(':scope > .commands').waitFor({ state: 'hidden' });
     await page.keyboard.press('Space');
     await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])').open);
+  }
+});
+
+test('Overview folds Done and Resolved below Working and opens them in place on desktop and phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const config = join(home, '.thirdshift/config.toml');
+  const original = await readFile(path, 'utf8');
+  const originalConfig = await readFile(config, 'utf8');
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const page = await pageFor(t, { viewport });
+      await page.goto(`${origin}/?section=overview`);
+      const url = page.url();
+      const group = name => page.locator(`#inbox > [data-group="${name}"]`);
+      const done = group('done');
+      const resolved = group('resolved');
+      assert.deepEqual(await shownGroups(page), overviewGroups);
+      for (const name of overviewGroups) {
+        assert.equal(await group(name).getAttribute('open'), ['done', 'resolved'].includes(name) ? null : '', name);
+      }
+      await done.locator(':scope > summary').getByRole('heading', { name: /^Done \d+$/, level: 3 }).waitFor();
+      await resolved.locator(':scope > summary').getByRole('heading', { name: /^Resolved \d+$/, level: 3 }).waitFor();
+      // A folded group still counts what finishes while it is closed.
+      const count = Number(await done.locator(':scope > summary .count').textContent());
+      const fixture = JSON.parse(original);
+      fixture.outcome = 'merged';
+      await replaceRecord(path, JSON.stringify(fixture));
+      await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="done"] > summary .count').textContent === String(expected), count + 1);
+      assert.equal(await done.getAttribute('open'), null);
+      // Pointer and keyboard open them in place.
+      await done.locator(':scope > summary').click();
+      await done.locator(':scope > .commands > .command').first().waitFor({ state: 'visible' });
+      await resolved.locator(':scope > summary').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('#inbox > [data-group="resolved"]').open);
+      await resolved.locator(':scope > .empty, :scope > .commands > .command').first().waitFor({ state: 'visible' });
+      assert.equal(page.url(), url);
+      assert.deepEqual(await shownGroups(page), overviewGroups);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => !document.querySelector('#inbox > [data-group="resolved"]').open);
+      // Choices survive live updates, folders and reloads.
+      await replaceRecord(path, original);
+      await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="done"] > summary .count').textContent === String(expected), count);
+      assert.equal(await done.getAttribute('open'), '');
+      await folder(page, 'landing').click();
+      await folder(page, 'overview').click();
+      assert.equal(await done.getAttribute('open'), '');
+      assert.equal(await resolved.getAttribute('open'), null);
+      await page.reload();
+      assert.equal(await done.getAttribute('open'), '');
+      assert.equal(await resolved.getAttribute('open'), null);
+      // A section hidden with Sections stays hidden in Overview.
+      await writeFile(config, originalConfig + 'hidden_sections = ["done"]\n');
+      await done.waitFor({ state: 'hidden' });
+      assert.deepEqual(await shownGroups(page), overviewGroups.filter(name => name !== 'done'));
+      await writeFile(config, originalConfig);
+      await done.waitFor({ state: 'visible' });
+    }
+  } finally {
+    await replaceRecord(path, original);
+    await writeFile(config, originalConfig);
+  }
+});
+
+test('Done and Resolved open in their own folders until this browser folds them', async t => {
+  for (const name of ['done', 'resolved']) {
+    const page = await pageFor(t);
+    // Older Consoles saved every group's state; only a fold was a choice.
+    await page.addInitScript(() => {
+      if (!localStorage.getItem('thirdshift:console:folds')) {
+        localStorage.setItem('thirdshift:console:folded', JSON.stringify({ 'needs you': false, done: true, resolved: true }));
+      }
+    });
+    await page.goto(`${origin}/?section=${name}`);
+    const section = page.locator(`#inbox > [data-group="${name}"]`);
+    assert.equal(await section.getAttribute('open'), '');
+    await folder(page, 'overview').click();
+    assert.equal(await section.getAttribute('open'), null);
+    assert.equal(await page.locator('#inbox > [data-group="needs you"]').getAttribute('open'), null);
+    await folder(page, name).click();
+    assert.equal(await section.getAttribute('open'), '');
+    await section.locator(':scope > summary').click();
+    await page.waitForFunction(group => JSON.parse(localStorage.getItem('thirdshift:console:folds'))?.[group] === false, name);
+    await page.goto(`${origin}/?section=${name}`);
+    assert.equal(await section.getAttribute('open'), null);
+  }
+});
+
+test('re-folding Done in Overview leaves its own folder open', async t => {
+  const page = await pageFor(t);
+  await page.goto(`${origin}/?section=overview`);
+  const done = page.locator('#inbox > [data-group="done"]');
+  assert.equal(await done.getAttribute('open'), null);
+  await done.locator(':scope > summary').click();
+  await page.waitForFunction(() => document.querySelector('#inbox > [data-group="done"]').open);
+  await done.locator(':scope > summary').click();
+  await page.waitForFunction(() => !document.querySelector('#inbox > [data-group="done"]').open);
+  await page.locator('#inbox .folders a[data-group="done"]').click();
+  assert.equal(await done.getAttribute('open'), '');
+  await page.goto(`${origin}/?section=done`);
+  assert.equal(await done.getAttribute('open'), '');
+});
+
+test('Overview folds Done and Resolved without JavaScript and opens them in place', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await pageFor(t, { javaScriptEnabled: false, viewport });
+    await page.goto(`${origin}/?section=overview`);
+    assert.deepEqual(await shownGroups(page), overviewGroups);
+    for (const name of ['done', 'resolved']) {
+      const section = page.locator(`#inbox > [data-group="${name}"]`);
+      assert.equal(await section.getAttribute('open'), null);
+      await section.locator(':scope > summary').click();
+      await page.waitForFunction(group => document.querySelector(`#inbox > [data-group="${group}"]`).open, name);
+    }
+    assert.equal(page.url(), `${origin}/?section=overview`);
   }
 });
 
@@ -1448,6 +1662,94 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
   }
 });
 
+test("skipped Passes stay folded during live Commands and preserve toggles across updates", { skip: process.platform !== 'linux' }, async t => {
+  const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const url = 'https://github.com/acme/widgets/issues/1234567890123456789012345678901234567890';
+  const reasons = [
+    'Architect run skipped: at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1',
+    'Fix run skipped: no eligible pull request targeting main on acme/widgets',
+    'Pickup run skipped: no Ready issue on acme/widgets',
+    'Review run skipped: GitHub Quota wait until 2026-01-01 12:17 EST (core: 499 left)',
+    `Triage run skipped: waiting on ${url} <script>unsafe</script> ${'reason'.repeat(60)}`,
+  ];
+  const recorded = reasons.map(reason => `2026-01-01 12:00:00 ${reason}\n`).join('');
+  Object.assign(fixture, { process_id: server.pid, process_start: start, ended_at: null, outcome: null, cause: null, tickets: [] });
+  await replaceRecord(path, JSON.stringify(fixture));
+  try {
+    for (const javaScriptEnabled of [false, true]) {
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+        await replaceRecord(activity, recorded);
+        const page = await pageFor(t, { javaScriptEnabled, viewport });
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.goto(`${origin}/?section=overview`);
+        await page.getByText('1 active run', { exact: true }).waitFor();
+        assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
+        const passes = page.getByRole('complementary', { name: 'Idle Passes' });
+        const messages = passes.locator('p');
+        await messages.first().waitFor({ state: 'hidden' });
+        const summary = passes.locator('summary');
+        assert.equal(await summary.count(), 1);
+        // A prior row selection must not steal Space/Enter from the disclosure.
+        if (javaScriptEnabled) {
+          await page.keyboard.press('j');
+          await page.locator('.is-selected').first().waitFor();
+        }
+        await summary.focus();
+        await page.keyboard.press('Space');
+        await messages.first().waitFor({ state: 'visible' });
+        assert.equal(await messages.count(), reasons.length);
+        for (const reason of reasons) {
+          const expected = reason.replace(' skipped:', ' idle on acme/widgets:');
+          await passes.getByText(expected, { exact: true }).waitFor();
+        }
+        assert.equal(await passes.getByRole('link').getAttribute('href'), url);
+        assert.equal(await passes.locator('script').count(), 0);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        if (javaScriptEnabled) {
+          await page.evaluate(() => { window.visitMarker = 'same live Inbox'; });
+          await replaceRecord(activity, `${recorded}2026-01-01 12:01:00 Pickup run skipped: updated while open\n`);
+          await passes.getByText('Pickup run idle on acme/widgets: updated while open', { exact: true }).waitFor();
+          assert.equal(await messages.count(), reasons.length);
+        }
+        await summary.focus();
+        await page.keyboard.press('Enter');
+        await messages.first().waitFor({ state: 'hidden' });
+        if (javaScriptEnabled) {
+          await replaceRecord(activity, `${recorded}2026-01-01 12:02:00 Pickup run skipped: updated while closed\n`);
+          const updated = passes.getByText('Pickup run idle on acme/widgets: updated while closed', { exact: true });
+          await updated.waitFor({ state: 'attached' });
+          await updated.waitFor({ state: 'hidden' });
+          await summary.click();
+          await updated.waitFor();
+          assert.equal(await page.evaluate(() => window.visitMarker), 'same live Inbox');
+        } else {
+          await summary.click();
+          await messages.first().waitFor({ state: 'visible' });
+        }
+        await page.reload();
+        await messages.first().waitFor({ state: 'hidden' });
+        assert.deepEqual(errors, []);
+        await page.close();
+      }
+    }
+    await rm(activity);
+    const page = await pageFor(t);
+    await page.goto(`${origin}/?section=overview`);
+    await page.getByText('1 active run', { exact: true }).waitFor();
+    assert.equal(await page.locator('#idle-passes').count(), 0);
+    assert.equal(await page.getByRole('complementary', { name: 'Idle Passes' }).count(), 0);
+  } finally {
+    await replaceRecord(path, original);
+    await rm(activity, { force: true });
+  }
+});
+
 test("skipped Pass disclosure keeps native keyboard controls after selecting an Inbox row", async t => {
   const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
   await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets\n');
@@ -1642,7 +1944,8 @@ for (const storage of ['blocked', 'read-only', 'malformed']) {
       if (mode === 'blocked') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
       else if (mode === 'read-only') Storage.prototype.setItem = () => { throw new Error('Storage full'); };
       else {
-        localStorage.setItem('thirdshift:console:folded', 'false');
+        localStorage.setItem('thirdshift:console:folds', 'false');
+        localStorage.setItem('thirdshift:console:folded', '[false]');
         localStorage.setItem('thirdshift:console:last-look', '{broken');
       }
     }, storage);
@@ -1767,8 +2070,8 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
       const path = join(dir, `${number}-fixture.command.json`);
       paths.push(path);
       const url = `https://github.com/acme/widgets/pull/${number}`;
-      await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', outcome: 'ready for review',
-        cause: null, tickets: [], pull_request: url,
+      await replaceRecord(path, JSON.stringify({ ...base, kind: number === 232 ? 'Spec run' : 'Run', outcome: 'ready for review',
+        cause: null, tickets: number === 232 ? base.tickets : [], pull_request: url,
         issue: number === 229 ? null : { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'A distinct issue title that must not replace the PR title' } }));
       // Undefined represents an old cache; null represents an unread PR.
       if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable,
@@ -1780,7 +2083,7 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
     for (const javaScriptEnabled of [true, false]) {
       const page = await pageFor(t, { javaScriptEnabled });
       await page.goto(`${origin}/?section=ready-for-review`);
-      for (const width of [1440, 768, 390]) {
+      for (const width of [1440, 1000, 900, 768, 390]) {
         await page.setViewportSize({ width, height: 900 });
         for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
           await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -1793,6 +2096,7 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
             assert.equal(await row.locator('script').count(), 0);
             assert.equal(await row.locator('.row-head > .issue-title').isVisible(), true);
             assert.equal(await row.locator('.merge-conflict').count(), mergeable === 'conflicting' ? 1 : 0);
+            assert.equal(await row.locator('.command-kind').isVisible(), false, 'the extra label belongs to Done');
             const badges = [[row.locator('.ci'), label, tag]];
             if (mergeable === 'conflicting') badges.push([row.locator('.merge-conflict'), 'Merge conflict', 'urgent']);
             for (const [badge, label, tag] of badges) {
@@ -1812,6 +2116,15 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
               assert.equal(seen.clipped, false, `${width}: ${label} must be readable`);
               assert.equal(seen.fits, true, `${width}: ${label} must fit`);
             }
+            const overlap = await row.locator('.row-head').evaluate(head => {
+              const checks = head.querySelector('.pr-checks').getBoundingClientRect();
+              return [...head.querySelectorAll('.command-kind, .ticket-progress')].some(node => {
+                const field = node.getBoundingClientRect();
+                return field.left < checks.right && field.right > checks.left &&
+                  field.top < checks.bottom && field.bottom > checks.top;
+              });
+            });
+            assert.equal(overlap, false, `${width}: PR checks must not overlap Command kind or Ticket progress`);
           }
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -2085,7 +2398,7 @@ test("hiding the open folder with Sections returns to Overview", async t => {
     await page.getByRole('button', { name: 'Save sections' }).click();
     await page.locator('#inbox .folders a[data-group="needs you"][hidden]').waitFor({ state: 'attached' });
     await page.waitForURL('**/?section=overview');
-    assert.deepEqual(await shownGroups(page), ['ready for review', 'landing', 'working']);
+    assert.deepEqual(await shownGroups(page), ['ready for review', 'landing', 'working', 'done', 'resolved']);
   } finally {
     await writeFile(config, '[console]\nport = 0\n');
     await rm(merged, { force: true });
@@ -2122,7 +2435,7 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   await page.keyboard.press('k');
   assert.equal(await selected.evaluate(el => el.matches('summary')), true, 'k returns to the heading');
   await page.keyboard.press('k');
-  assert.equal(await selected.evaluate(el => el.parentElement.dataset.group), 'working', 'k wraps to the last visible heading');
+  assert.equal(await selected.evaluate(el => el.parentElement.dataset.group), 'resolved', 'k wraps to the last visible heading, folded Resolved');
   await page.keyboard.press('j');
   await page.keyboard.press('j');
   assert.equal(await selected.getAttribute('id'), first);
