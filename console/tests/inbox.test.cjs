@@ -2269,7 +2269,17 @@ test('Ready for review copies rendered context in Overview and its folder withou
   const path = join(dir, '2174-copy.command.json');
   const log = join(dir, '2174-copy.log');
   const cache = join(logs, 'github-inbox.json');
-  const previous = await readFile(cache, 'utf8').catch(() => null);
+  // The Console's startup GitHub read must finish before installing kept facts.
+  // Otherwise its older answer can overwrite this fixture in an isolated run.
+  const deadline = Date.now() + 15000;
+  let previous;
+  while (previous === undefined) {
+    previous = await readFile(cache, 'utf8').catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    assert.ok(Date.now() < deadline, 'Console completed its startup GitHub read');
+    if (previous === undefined) await new Promise(resolve => setTimeout(resolve, 25));
+  }
   const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
   const pr = 'https://github.com/acme/widgets/pull/2174';
   const subjects = { [pr]: { state: 'Open', ci: 'red', mergeable: 'conflicting', title: 'Copy ready PR context' } };
@@ -2340,8 +2350,7 @@ test('Ready for review copies rendered context in Overview and its folder withou
     await page.waitForFunction(() => navigator.clipboard.readText().then(text => text.includes('Updated ready title')));
   } finally {
     await Promise.all([path, log].map(path => rm(path, { force: true })));
-    if (previous === null) await rm(cache, { force: true });
-    else await replaceRecord(cache, previous);
+    await replaceRecord(cache, previous);
     await writeFile(join(logs, 'github-inbox.changed'), 'restore copy context');
   }
 });
