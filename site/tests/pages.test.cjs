@@ -7,6 +7,12 @@ const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
+test("architecture describes the shipped Custom runner sandbox", async () => {
+  const page = await readFile(join(__dirname, "..", "architecture/index.html"), "utf8");
+  assert.ok(!page.includes("The Trial-wide provider sandbox and session recorder follow in #2189 and #2191."),
+    "Architecture still describes the #2189 Trial sandbox as future work");
+});
+
 test("Experiment format documentation matches the emitted contract", async () => {
   const root = join(__dirname, "..", "..");
   const reading = await readFile(join(root, "src/evals/experiment/reading.rs"), "utf8");

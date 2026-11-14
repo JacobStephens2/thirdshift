@@ -610,7 +610,7 @@ pub fn run(options: Options) -> Result<()> {
         }
         logs::stage(logs::Stage::EvalTasks);
         model_grader::prepare(&experiment, &config.harness)?;
-        panel::prepare(&experiment)?;
+        panel::prepare(&mut experiment)?;
         workers::run(&experiment)?;
         pairs::run(&experiment)?;
         // The panel grades last, so a pause in it holds back no model Score.

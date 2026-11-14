@@ -73,6 +73,9 @@ pub(crate) struct Seat {
     pub harness: String,
     pub model: String,
     pub effort: Option<String>,
+    /// Kimi aliases need their provider resolved once, while fixing the Bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_family: Option<String>,
 }
 
 /// What counts as one vote.
@@ -113,10 +116,12 @@ impl Seat {
             Harness::named(&harness).is_some(),
             "unknown panel seat Harness {harness}"
         );
+        let model = model.with_context(usage)?;
         Ok(Self {
             harness,
-            model: model.with_context(usage)?,
+            model,
             effort,
+            provider_family: None,
         })
     }
 
@@ -125,7 +130,9 @@ impl Seat {
     }
 
     pub(crate) fn family(&self) -> String {
-        family(self.harness(), Some(&self.model))
+        self.provider_family
+            .clone()
+            .unwrap_or_else(|| family(self.harness(), Some(&self.model)))
     }
 }
 
@@ -235,6 +242,16 @@ pub(super) fn check_stand_in(description: &Description) -> Result<()> {
     if panel.role != Role::Counted || super::deciders::people_role(bar) != Role::Counted {
         return Ok(());
     }
+    // New Kimi seats are resolved with the prepared Arms before Trials.
+    // Resuming a legacy Bar keeps its original unresolved classification.
+    if description.prepared.is_none()
+        && panel
+            .seats
+            .iter()
+            .any(|seat| seat.harness() == Harness::Kimi && seat.provider_family.is_none())
+    {
+        return Ok(());
+    }
     let voting: BTreeSet<String> = panel
         .voting(&arm_families(description))
         .into_iter()
@@ -254,29 +271,26 @@ pub(super) fn check_stand_in(description: &Description) -> Result<()> {
 /// A Model's family is its provider: the Harness's own, or the provider an
 /// OpenCode Model names.
 pub(super) fn family(harness: Harness, model: Option<&str>) -> String {
-    match harness {
-        Harness::Claude => "anthropic",
-        Harness::Codex => "openai",
-        Harness::Grok => "xai",
-        Harness::Muse => "meta",
-        Harness::Agy => "google",
-        Harness::Kimi => "moonshot",
-        Harness::OpenCode => crate::proxy::opencode_provider(model).unwrap_or("opencode"),
-    }
-    .to_owned()
+    crate::proxy::harness_family(harness, model, &[])
 }
 
 /// Every family either Arm's sessions run on, Process Steps included.
 pub(super) fn arm_families(description: &Description) -> BTreeSet<String> {
     let mut families = BTreeSet::new();
     for arm in [Arm::Baseline, Arm::Candidate] {
+        let prepared = description.prepared.as_ref().map(|prepared| match arm {
+            Arm::Baseline => &prepared.baseline,
+            Arm::Candidate => &prepared.candidate,
+        });
+        if let Some(frozen) = prepared.and_then(|arm| arm.families.as_ref()) {
+            families.extend(frozen.iter().cloned());
+            continue;
+        }
         let setup = description.setup(arm);
         if let Some(harness) = setup.harness.as_deref().and_then(Harness::named) {
             families.insert(family(harness, setup.model.as_deref()));
         }
-    }
-    if let Some(prepared) = &description.prepared {
-        for arm in [&prepared.baseline, &prepared.candidate] {
+        if let Some(arm) = prepared {
             if let Some(runner) = &arm.runner {
                 families.extend(
                     runner
@@ -304,7 +318,26 @@ pub(super) fn arm_families(description: &Description) -> BTreeSet<String> {
 
 /// Fix each seat's executable before Trials can change PATH, reusing an
 /// Arm's pinned Harness where they share one.
-pub(super) fn prepare(experiment: &store::Stored) -> Result<()> {
+pub(super) fn prepare(experiment: &mut store::Stored) -> Result<()> {
+    if !experiment.directory.join("started").exists() {
+        let mut changed = false;
+        if let Some(panel) = &mut experiment.description.bar.panel {
+            for seat in &mut panel.seats {
+                if seat.harness() == Harness::Kimi && seat.provider_family.is_none() {
+                    let hosts = crate::proxy::allowed_hosts(Harness::Kimi, Some(&seat.model))?;
+                    seat.provider_family = Some(crate::proxy::harness_family(
+                        Harness::Kimi,
+                        Some(&seat.model),
+                        &hosts,
+                    ));
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            experiment.save()?;
+        }
+    }
     let Some(panel) = &experiment.description.bar.panel else {
         return Ok(());
     };

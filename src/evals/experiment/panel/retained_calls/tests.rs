@@ -22,6 +22,7 @@ fn description() -> Description {
                 harness: harness.into(),
                 model: model.into(),
                 effort: None,
+                provider_family: None,
             })
             .into(),
         vote: Vote::Family,

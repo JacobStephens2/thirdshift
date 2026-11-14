@@ -93,8 +93,12 @@ optional Effort), the `vote` unit (`family`, the default, or `model`) and
 `arm_family_rule` (on by default). Each seat reads every pair of process
 Trials in a blind packet, once in each presentation order, with the sides
 swapped in the second. Each `PanelPair` lists every seat as a `PanelGrader`:
-its `family` (its provider: the Harness's own, or the provider an OpenCode
-Model names), whether it `votes`, and its two `orders`. Each `PanelCall` names
+its `family` (its provider: the Harness's own, the provider an OpenCode
+Model names, or the resolved provider of a Kimi alias), whether it `votes`,
+and its two `orders`. New Kimi seats retain `provider_family` in the Bar,
+and native prepared Arms retain `families`, so reports use the identities
+fixed before Trials. Older records without those fields keep their original
+family classification. Each `PanelCall` names
 the Arm `shown_as_a`, gives each Arm's per-criterion `rubric`, merge
 reason and `ready_to_merge` call, then the comparison's `reason` and
 `preference`. A Grader's `preference` and `merge` calls stand only when both
@@ -522,7 +526,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
     "commit": "string?", "binary": "string",
-    "harness": "FixedHarness?", "process?": "FrozenProcess", "runner?": "FrozenRunner"
+    "harness": "FixedHarness?", "process?": "FrozenProcess", "runner?": "FrozenRunner", "families?": ["string"]
   },
   "FrozenRunner": {
     "name": "string", "directory": "string", "files": {"*": "string"},
@@ -548,7 +552,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "panel?": "Panel", "people?": "People"
   },
   "Panel": {
-    "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
+    "seats": [{"harness": "string", "model": "string", "effort": "string?", "provider_family?": "string"}],
     "vote": "family|model", "arm_family_rule": "boolean", "spending_limit?": "number",
     "role": "beside|counted", "families": "integer", "agreement": "number"
   },

@@ -1,5 +1,6 @@
 //! Prepare both Arms before exposing their fixed binaries to the Trial runner.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,9 @@ pub(crate) struct Arm {
     pub process: Option<Process>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner: Option<Runner>,
+    /// Provider identities fixed before Trials; absent in older Arm records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub families: Option<BTreeSet<String>>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -143,6 +147,7 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
                 harness: None,
                 process: None,
                 runner: Some(Runner::freeze(runner, &directory)?),
+                families: None,
             }
         } else {
             Arm {
@@ -151,6 +156,7 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
                 harness: Some(frozen::pin(request.harness, &mut pinned)?),
                 process: Process::freeze(request, &directory, &mut pinned, None)?,
                 runner: None,
+                families: None,
             }
         });
     }
@@ -160,6 +166,27 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
             fs::create_dir_all(&builds)?;
             arm.binary = build(repository, &builds.canonicalize()?, &request.commit)?;
             Process::from_build(request, &arm.binary, &mut arm.process, &mut pinned)?;
+            let mut families = BTreeSet::new();
+            let models = std::iter::once((request.harness, request.model.as_deref())).chain(
+                arm.process
+                    .iter()
+                    .flat_map(|process| &process.steps)
+                    .map(|step| {
+                        (
+                            Harness::named(&step.harness.name).expect("frozen Harness"),
+                            step.model.as_deref(),
+                        )
+                    }),
+            );
+            for (harness, model) in models {
+                let hosts = if harness == Harness::Kimi && model.is_some() {
+                    crate::proxy::allowed_hosts(harness, model)?
+                } else {
+                    Vec::new()
+                };
+                families.insert(crate::proxy::harness_family(harness, model, &hosts));
+            }
+            arm.families = Some(families);
         }
     }
     let [baseline, candidate]: [Arm; 2] = inputs.try_into().ok().expect("two Arms");

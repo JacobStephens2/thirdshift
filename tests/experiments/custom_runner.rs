@@ -433,6 +433,260 @@ assert (home / 'credentials/kimi-code.json').read_text() == 'managed-login'
 }
 
 #[test]
+fn custom_kimi_accepts_declared_provider_env_login_without_managed_oauth() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Custom Kimi provider env login): bwrap is not on PATH");
+        return;
+    }
+    let fixture = process::fixture();
+    harness_script(
+        &fixture,
+        "kimi",
+        &format!(
+            "cat <<'JSON'\n{}\nJSON",
+            include_str!("../fixtures/kimi-providers.json")
+        ),
+    );
+    let home = fixture.scenario.path("home/.kimi-code");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("config.toml"),
+        r#"
+default_model = "kimi-k3.1-pro"
+[providers.fireworks]
+type = "openai"
+base_url = "https://api.fireworks.ai/inference/v1"
+[providers.fireworks.env]
+OPENAI_API_KEY = "declared-api-login"
+[models."kimi-k3.1-pro"]
+provider = "fireworks"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
+max_context_size = 262144
+"#,
+    )
+    .unwrap();
+    assert!(!home.join("credentials/kimi-code.json").exists());
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+import tomllib
+config = tomllib.loads((pathlib.Path(os.environ['KIMI_CODE_HOME']) / 'config.toml').read_text())
+assert config['providers']['fireworks']['env']['OPENAI_API_KEY'] == 'declared-api-login'
+"#,
+        ) + DELIVER),
+    );
+    declarations(&fixture, "harnesses = { kimi = [\"kimi-k3.1-pro\"] }");
+    let result = fixture.scenario.run(&runner_args());
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+}
+
+#[test]
+fn a_kimi_panel_seat_with_the_custom_runners_fireworks_alias_withholds_its_vote() {
+    let fixture = process::fixture();
+    pairs::pair_fixture(&fixture, pairs::CANDIDATE_TEST);
+    runner(&fixture, DELIVER);
+    harness_script(&fixture, "claude", "exit 0");
+    harness_script(
+        &fixture,
+        "kimi",
+        &format!(
+            "cat <<'JSON'\n{}\nJSON",
+            include_str!("../fixtures/kimi-providers.json")
+        ),
+    );
+    declarations(&fixture, "harnesses = { kimi = [\"kimi-k3.1-pro\"] }");
+    let result = run(
+        &fixture,
+        &[
+            "--panel-seat",
+            "harness=claude,model=judge-one",
+            "--panel-seat",
+            "harness=kimi,model=kimi-k3.1-pro",
+            "--panel",
+            "counted",
+            "--people",
+            "counted",
+            "--people-reader",
+            "ann@example.com",
+        ],
+    );
+    assert_ne!(
+        result.code,
+        Some(0),
+        "stand-in must be refused: {}",
+        result.stdout
+    );
+    assert!(
+        result
+            .stderr
+            .contains("the voting Grader panel spans 1 family (anthropic)"),
+        "{}",
+        result.stderr
+    );
+    let experiments = fixture.scenario.path("home/.thirdshift/evals/experiments");
+    if experiments.is_dir() {
+        for experiment in fs::read_dir(experiments).unwrap() {
+            assert!(
+                !experiment.unwrap().path().join("started").exists(),
+                "stand-in family breadth must be checked before Trials start"
+            );
+        }
+    }
+    // A one-family Bar lets Trials finish; these fake Graders deliberately
+    // leave no calls. The saved family must remain readable without Kimi.
+    let result = run(
+        &fixture,
+        &[
+            "--panel-seat",
+            "harness=claude,model=judge-one",
+            "--panel-seat",
+            "harness=kimi,model=kimi-k3.1-pro",
+            "--panel",
+            "counted",
+            "--people",
+            "counted",
+            "--people-reader",
+            "ann@example.com",
+            "--panel-families",
+            "1",
+        ],
+    );
+    assert!(
+        result.stderr.contains("panel Grader left no calls"),
+        "{}",
+        result.stderr
+    );
+    harness_script(&fixture, "kimi", "exit 89");
+    let saved = fixture.experiment();
+    assert_eq!(
+        saved["bar"]["panel"]["seats"][1]["provider_family"],
+        "fireworks-ai"
+    );
+}
+
+#[test]
+fn custom_kimi_accepts_declared_provider_env_endpoint_without_managed_oauth() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Custom Kimi provider env login): bwrap is not on PATH");
+        return;
+    }
+    let fixture = process::fixture();
+    harness_script(
+        &fixture,
+        "kimi",
+        &format!(
+            "cat <<'JSON'\n{}\nJSON",
+            include_str!("../fixtures/kimi-providers.json")
+        ),
+    );
+    let home = fixture.scenario.path("home/.kimi-code");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("config.toml"),
+        r#"
+default_model = "kimi-k3.1-pro"
+[providers.fireworks]
+type = "openai"
+[providers.fireworks.env]
+OPENAI_BASE_URL = "https://api.fireworks.ai/inference/v1"
+OPENAI_API_KEY = "declared-api-login"
+[models."kimi-k3.1-pro"]
+provider = "fireworks"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
+max_context_size = 262144
+"#,
+    )
+    .unwrap();
+    assert!(!home.join("credentials/kimi-code.json").exists());
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+import tomllib
+config = tomllib.loads((pathlib.Path(os.environ['KIMI_CODE_HOME']) / 'config.toml').read_text())
+assert config['providers']['fireworks']['env']['OPENAI_API_KEY'] == 'declared-api-login'
+"#,
+        ) + DELIVER),
+    );
+    declarations(&fixture, "harnesses = { kimi = [\"kimi-k3.1-pro\"] }");
+    let result = fixture.scenario.run(&runner_args());
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+}
+
+#[test]
+fn a_legacy_kimi_panel_bar_resumes_with_its_original_family_classification() {
+    let fixture = process::fixture();
+    pairs::pair_fixture(&fixture, pairs::CANDIDATE_TEST);
+    runner(&fixture, DELIVER);
+    harness_script(&fixture, "claude", "exit 0");
+    harness_script(
+        &fixture,
+        "kimi",
+        &format!(
+            "cat <<'JSON'\n{}\nJSON",
+            include_str!("../fixtures/kimi-providers.json")
+        ),
+    );
+    declarations(&fixture, "harnesses = { kimi = [\"kimi-k3.1-pro\"] }");
+    let flags = [
+        "--panel-seat",
+        "harness=claude,model=judge-one",
+        "--panel-seat",
+        "harness=kimi,model=kimi-k3.1-pro",
+        "--panel",
+        "counted",
+        "--people",
+        "counted",
+        "--people-reader",
+        "ann@example.com",
+        "--panel-families",
+        "1",
+    ];
+    let first = run(&fixture, &flags);
+    assert!(
+        first.stderr.contains("panel Grader left no calls"),
+        "{}",
+        first.stderr
+    );
+    let view = fixture.experiment();
+    let metadata = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}/experiment.json",
+        view["id"].as_str().unwrap()
+    ));
+    let mut saved: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    saved["bar"]["panel"]["seats"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("provider_family");
+    fs::write(&metadata, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let resumed = run(&fixture, &flags);
+    assert!(
+        resumed.stderr.contains("panel Grader left no calls"),
+        "the same command must resume the legacy Bar; got: {}",
+        resumed.stderr
+    );
+}
+
+#[test]
 fn custom_runner_does_not_inherit_the_operator_environment() {
     let fixture = process::fixture();
     runner(

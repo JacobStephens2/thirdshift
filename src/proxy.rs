@@ -114,6 +114,21 @@ impl Provider {
     }
 }
 
+/// A Harness Model's provider family, using its resolved hosts for Kimi aliases.
+pub(crate) fn harness_family(harness: Harness, model: Option<&str>, hosts: &[String]) -> String {
+    match harness {
+        Harness::Claude => "anthropic",
+        Harness::Codex => "openai",
+        Harness::Grok => "xai",
+        Harness::Muse => "meta",
+        Harness::Agy => "google",
+        Harness::OpenCode => opencode_provider(model).unwrap_or("opencode"),
+        Harness::Kimi if hosts.iter().any(|host| host == "api.fireworks.ai") => "fireworks-ai",
+        Harness::Kimi => "moonshot",
+    }
+    .to_owned()
+}
+
 /// One provider's hosts by the name an OpenCode Model uses for it.
 fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
     match provider {

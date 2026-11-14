@@ -214,8 +214,8 @@ fn kimi(
             .ok_or_else(|| no_login(format!("missing Kimi provider {id}")))?;
         let base_url = model
             .get("base_url")
-            .or_else(|| provider.get("base_url"))
             .and_then(toml::Value::as_str)
+            .or_else(|| kimi_setting(&provider, "base_url"))
             .unwrap_or("https://api.kimi.com/coding/v1");
         let hosts = proxy::kimi_hosts(base_url)?;
         ensure!(
@@ -227,12 +227,8 @@ fn kimi(
                 .filter(|key| !key.is_empty())
                 .ok_or_else(|| no_login(format!("missing Kimi Trial login variable {variable}")))?;
             env.set(variable, Path::new(&key));
-        } else if provider
-            .get("api_key")
-            .and_then(toml::Value::as_str)
-            .is_some_and(|key| !key.is_empty())
-        {
-            // The declared provider's inline key stays in this private copy.
+        } else if kimi_setting(&provider, "api_key").is_some() {
+            // Direct and provider-env keys stay in this private config copy.
         } else {
             managed = true;
         }
@@ -265,6 +261,32 @@ fn kimi(
     )?;
     env.set(HOME_ENV, &directory);
     Ok(())
+}
+
+/// Kimi's provider config accepts conventional names inside its env table.
+/// Those values stay in the config rather than the process environment.
+fn kimi_setting<'a>(provider: &'a toml::Value, field: &str) -> Option<&'a str> {
+    provider
+        .get(field)
+        .and_then(toml::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let variable = match (provider.get("type")?.as_str()?, field) {
+                ("kimi", "api_key") => "KIMI_API_KEY",
+                ("kimi", "base_url") => "KIMI_BASE_URL",
+                ("anthropic", "api_key") => "ANTHROPIC_API_KEY",
+                ("anthropic", "base_url") => "ANTHROPIC_BASE_URL",
+                ("openai" | "openai_responses", "api_key") => "OPENAI_API_KEY",
+                ("openai" | "openai_responses", "base_url") => "OPENAI_BASE_URL",
+                ("google-genai", "api_key") => "GOOGLE_API_KEY",
+                _ => return None,
+            };
+            provider
+                .get("env")?
+                .get(variable)?
+                .as_str()
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn wrapper_script(harness: Harness, binary: &Path) -> String {

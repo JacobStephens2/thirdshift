@@ -177,6 +177,35 @@ fn success(output: Output) -> Value {
 }
 
 #[test]
+fn native_kimi_arms_freeze_the_alias_provider_family() {
+    let fixture = Fixture::new();
+    fixture.seed(&fixture.baseline);
+    fixture.seed(&fixture.candidate);
+    executable(
+        &fixture.bin.join("kimi"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'kimi fixture 1'; exit 0; fi\ncat <<'JSON'\n{}\nJSON\n",
+            include_str!("fixtures/kimi-providers.json")
+        ),
+    );
+    let arms = success(
+        fixture
+            .command_with_harnesses("arms.json", "kimi", "kimi")
+            .args([
+                "--baseline-model",
+                "kimi-k3.1-pro",
+                "--candidate-model",
+                "kimi-k3.1-pro",
+            ])
+            .output()
+            .unwrap(),
+    );
+    for arm in ["baseline", "candidate"] {
+        assert_eq!(arms[arm]["families"], serde_json::json!(["fireworks-ai"]));
+    }
+}
+
+#[test]
 fn custom_runners_freeze_dirty_sources_and_home_trees_without_building() {
     let fixture = Fixture::new();
     fs::write(fixture.source.join("runner.py"), "print('frozen')\n").unwrap();

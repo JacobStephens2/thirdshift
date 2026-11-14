@@ -132,21 +132,7 @@ impl Runner {
             };
             for model in models {
                 let allowed = proxy::allowed_hosts(harness, model)?;
-                let family = match harness {
-                    Harness::Claude => "anthropic",
-                    Harness::Codex => "openai",
-                    Harness::Grok => "xai",
-                    Harness::Muse => "meta",
-                    Harness::Agy => "google",
-                    Harness::OpenCode => {
-                        proxy::opencode_provider(model).context("missing provider")?
-                    }
-                    Harness::Kimi if allowed.iter().any(|host| host == "api.fireworks.ai") => {
-                        "fireworks-ai"
-                    }
-                    Harness::Kimi => "moonshot",
-                };
-                families.insert(family.to_string());
+                families.insert(proxy::harness_family(harness, model, &allowed));
                 hosts.extend(allowed);
             }
             harnesses.insert(
