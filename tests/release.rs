@@ -1043,6 +1043,8 @@ fn a_draft_bump_pr_after_publication_names_the_ready_step() {
     let url = pr["url"].as_str().unwrap();
     let err = stderr(&output);
     assert!(err.contains("GitHub Release was published"), "{err}");
+    assert!(err.contains(&format!("{url} is a draft")), "{err}");
+    assert!(err.contains(&format!("gh pr ready {url}")), "{err}");
     assert!(release.origin_tag("v0.2.0").is_some(), "{url}: {err}");
 }
 
@@ -1129,6 +1131,25 @@ fn after_the_tag_the_command_waits_for_the_release_workflow_run_to_be_listed_and
             .unwrap()
             .contains("Release 0.2.0 published"),
         "{err}"
+    );
+}
+
+#[test]
+fn a_failed_release_workflow_still_reports_failure_when_its_details_cannot_be_read() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.release_workflow(failed_release());
+    release.gh(&["fake", "fails", "run view"]);
+
+    let output = release.run("0.2.0");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("release workflow failed"), "{err}");
+    assert!(err.contains("tag is left for the Day shift"), "{err}");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
     );
 }
 
@@ -1477,7 +1498,8 @@ fn assert_refused_by(
 
 #[test]
 fn a_version_that_is_not_plain_semver_is_refused() {
-    // One version end to end; the version check's own test takes the rest.
+    // One version end to end; `native::native_release_rejects_versions_and_wrong_origins_before_any_push`
+    // takes the other malformed versions.
     let release = Release::new();
 
     assert_refused(&release, "0.4.0-rc.1", &["release version must be X.Y.Z"]);
@@ -1485,7 +1507,8 @@ fn a_version_that_is_not_plain_semver_is_refused() {
 
 #[test]
 fn a_version_not_higher_than_the_one_on_main_is_refused() {
-    // One version end to end; the comparison's own test takes the rest.
+    // One version end to end; `native::native_release_rejects_versions_and_wrong_origins_before_any_push`
+    // takes the other versions not above main.
     let release = Release::new();
 
     assert_refused(&release, "0.0.10", &["strictly greater than 0.1.0 on main"]);
@@ -1500,6 +1523,15 @@ fn versions_are_compared_as_numbers_not_text() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(release.origin_tag("v0.10.0").is_some());
+}
+
+#[test]
+fn a_tag_that_exists_locally_is_refused() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    git(&release.maintainer(), &["tag", "v0.2.0"]);
+
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists locally"]);
 }
 
 #[test]
@@ -1518,7 +1550,7 @@ fn a_tag_that_exists_on_origin_is_refused() {
     git(&contributor, &["tag", "v0.2.0"]);
     git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
 
-    assert_refused(&release, "0.2.0", &["no candidate main commit"]);
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
     assert!(git(&release.maintainer(), &["tag", "--list", "v0.2.0"]).is_empty());
 }
 
@@ -1529,7 +1561,7 @@ fn a_tag_on_main_that_exists_on_origin_is_refused_as_on_origin() {
     git(&contributor, &["tag", "v0.2.0", "origin/main"]);
     git(&contributor, &["push", "-q", "origin", "v0.2.0"]);
 
-    assert_refused(&release, "0.2.0", &["no candidate main commit"]);
+    assert_refused(&release, "0.2.0", &["v0.2.0 already exists on origin"]);
 }
 
 #[test]
@@ -1567,6 +1599,30 @@ fn with_no_green_commit_since_the_last_tag_the_command_waits_for_success() {
             .unwrap()
             < err.find("publishing v").unwrap()
     );
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+}
+
+#[test]
+fn a_main_whose_ci_appears_after_a_few_polls_is_released() {
+    let release = Release::new();
+    release.main_ci("completed", "failure");
+    release.merge_pr("untested", "Not yet built", "");
+    let base = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "run",
+        &json!({
+            "branch": "main", "workflow": "ci.yml", "event": "push",
+            "headSha": base, "status": "completed", "conclusion": "success", "hidden_polls": 3,
+        })
+        .to_string(),
+    ]);
+    release.ci_reports(GREEN);
+
+    let output = release.run("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
     let head = release.pr_head("release-0.2.0");
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
 }
@@ -1719,9 +1775,17 @@ fn a_merged_bump_pr_whose_head_is_not_on_origin_is_refused() {
     release.merge_bump_pr("0.2.0", &head);
     let missing = json!("0".repeat(40)).to_string();
     release.gh(&["fake", "pr", "release-0.2.0", "headRefOid", &missing]);
-    assert_refused_by(&release, "missing head", &["not our ref"], || {
-        release.run("0.2.0")
-    });
+    let url = release.pr("release-0.2.0")["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert_refused_by(
+        &release,
+        "missing head",
+        &[&url, "could not be fetched"],
+        || release.run("0.2.0"),
+    );
 }
 
 #[test]
@@ -1920,7 +1984,10 @@ fn a_tag_that_is_not_on_the_bump_head_is_refused() {
 
     assert!(!output.status.success());
     let err = stderr(&output);
-    assert!(!err.is_empty(), "{err}");
+    assert!(
+        err.contains("published tag differs from the release PR"),
+        "{err}"
+    );
     assert_eq!(release.origin_refs(), refs_before);
 }
 
@@ -1952,7 +2019,7 @@ fn a_tag_with_no_bump_pr_is_refused() {
 
     assert!(!output.status.success());
     let err = stderr(&output);
-    assert!(!err.is_empty(), "{err}");
+    assert!(err.contains("v0.2.0 already exists"), "{err}");
     assert_eq!(release.origin_refs(), refs_before);
     assert_eq!(release.prs_from("release-0.2.0").len(), 0);
 }
@@ -2000,7 +2067,7 @@ fn a_bump_pr_closed_without_merging_is_refused() {
 }
 
 #[test]
-fn a_closed_release_requires_reopening_even_after_its_branch_is_deleted() {
+fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
     // Even a closed PR from another repository leaves nothing to resume.
     for cross_repository in ["false", "true"] {
         let release = Release::new();
@@ -2022,12 +2089,19 @@ fn a_closed_release_requires_reopening_even_after_its_branch_is_deleted() {
 
         let output = release.run("0.2.0");
 
-        assert!(!output.status.success(), "{}", stderr(&output));
-        assert!(stderr(&output).contains("was closed; reopen its PR"));
+        assert!(
+            output.status.success(),
+            "{cross_repository}: {}",
+            stderr(&output)
+        );
         let prs = release.prs_from("release-0.2.0");
-        assert_eq!(prs.len(), 1);
+        assert_eq!(prs.len(), 2);
         assert_eq!(prs[0]["state"], "CLOSED");
-        assert!(release.origin_tag("v0.2.0").is_none());
+        assert_eq!(prs[1]["state"], "MERGED");
+        assert_eq!(
+            release.origin_tag("v0.2.0"),
+            Some(release.pr_head("release-0.2.0"))
+        );
     }
 }
 

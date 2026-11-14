@@ -121,7 +121,25 @@ pub(super) fn finish(
         !github.review_blocks_merge(&pr.issue, pr.issue.number),
         "review required before merging the release bump pull request; the GitHub Release remains published"
     );
-    github.merge(&pr.issue, pr.issue.number, &cut.head).with_context(|| format!("GitHub Release was published, but the bump pull request was not merged; the Day shift must merge {}", pr.url))?;
+    if let Err(error) = github.merge(&pr.issue, pr.issue.number, &cut.head) {
+        // A PR turned draft after validation (the 0.29.0 recovery) needs
+        // marking ready before anyone can merge it.
+        let draft = matches!(
+            github.pr_snapshot(&pr.issue, &pr.url),
+            Ok(Some(snapshot)) if snapshot.pr.is_draft
+        );
+        let step = if draft {
+            format!(
+                "{} is a draft; review it and run gh pr ready {}, then merge it",
+                pr.url, pr.url
+            )
+        } else {
+            format!("the Day shift must merge {}", pr.url)
+        };
+        return Err(error.context(format!(
+            "GitHub Release was published, but the bump pull request was not merged; {step}"
+        )));
+    }
     ensure!(
         github.pr_state(&pr.issue, &pr.url)? == PrState::Merged,
         "GitHub Release was published, but the bump pull request has not merged"

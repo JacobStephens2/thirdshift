@@ -6,7 +6,7 @@ Part of the [#698 grilling](README.md).
 
 **Q6.1 - Where an Experiment stops a change: at the merge or at the release.** Q1.1 wants to know whether a change makes the agents worse before it reaches production, and production is the release, not `main` (Q5.3's note). You answered Q5.3 with (a): a Run whose change touches an Eval suite leaves its pull request for review, unless the User config lets it Self-merge. The options:
 - (a) **At the release.** Runs Self-merge as now. A release whose changes since the last one touch an Eval suite (Q3.3) waits for an Experiment on the commit being released, with the last release as the Baseline arm, both built as Q4.3 builds Arms.
-  - A pass releases. A fail or an inconclusive verdict waits for you, as `the former release shell script --review` does now.
+  - A pass releases. A fail or an inconclusive verdict waits for you, as the former release shell script did with `--review`.
   - One Experiment covers every change in the release, so a fail doesn't say which change caused it. You'd revert, or run an Experiment on each change.
 - (b) **At the merge,** as you answered Q5.3, with a User config key for whether such Runs may Self-merge. Each pull request gets an Experiment of its own, and a release needs none.
 - (c) **Both:** (a) always, and (b)'s key for anyone who wants each change judged alone.

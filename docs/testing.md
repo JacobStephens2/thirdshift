@@ -78,7 +78,8 @@ target or doctests. For a focused iteration, use
 `cargo test --bin thirdshift <module>::tests` or `cargo test --test <file>`
 (the file name without `.rs`).
 
-The native Release summary happy-path test runs a real sandbox. Install
+Every Release run test in `cargo test --test release` starts its summary
+Session in a real sandbox. Install
 `bubblewrap` and `socat` before running the Rust suite. On Ubuntu 24.04,
 AppArmor must also permit `/usr/bin/bwrap` to create unprivileged user
 namespaces. The Rust CI workflow installs these dependencies, loads a profile
@@ -167,9 +168,11 @@ subtrees and cleans up its recorded children even on a failed assertion.
 
 ## Release fixture child lifetime
 
-Linux Release command and release-notes helper tests use `FixtureChild` from the same
-child-lifetime helper. Each command has a 120-second wait bound, with stdout and
-stderr included in a timeout panic. File-backed input and output keep inherited
+Linux Release commands started through `tests/release.rs`'s `Release` fixture,
+and the release-notes helper tests, use `FixtureChild` from the same
+child-lifetime helper. Each such command has a 120-second wait bound, with
+stdout and stderr included in a timeout panic. The command-line contract cases
+in `tests/release/native.rs` run the binary directly without that bound. File-backed input and output keep inherited
 descriptors and large input from blocking that wait.
 
 A dedicated guardian process acts as a Linux subreaper for each command. Normal

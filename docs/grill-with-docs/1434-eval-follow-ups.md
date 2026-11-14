@@ -137,7 +137,7 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 *Answer:* agree
 
 **Q2.6 - Estimate the cost from this machine's past Trials, and ask only on a terminal?** Q1.6 decided to show the worst case and an estimate before the first Trial, and ask. The options:
-- (a) The estimate is the mean minutes of completed Trials on this machine, per suite and Harness. With no history, show only the worst case. Ask only when stdin is a terminal. `--yes` skips the question. the retired release shell script asks once, through its existing prompt.
+- (a) The estimate is the mean minutes of completed Trials on this machine, per suite and Harness. With no history, show only the worst case. Ask only when stdin is a terminal. `--yes` skips the question. The retired release shell script asks once, through its existing prompt.
 - (b) Always ask, with no `--yes`.
 
 *Recommended:* (a). Scripts and the release flow need a way through. One question per release is enough.

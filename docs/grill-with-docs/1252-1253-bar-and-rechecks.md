@@ -23,7 +23,7 @@ Research: `src/verdict.rs`, `src/evals/experiment/grading.rs`, `src/evals/experi
 
 *Answer:* agree
 
-**Q1.3 - What should a release do on an inconclusive Verdict?** the former release shell script (line 259) asks "release anyway? [y/N]" on both fail and inconclusive. With a Bar no real release can pass, that prompt gets answered yes every time, and then it stops protecting anything. The options:
+**Q1.3 - What should a release do on an inconclusive Verdict?** The former release shell script (line 259) asks "release anyway? [y/N]" on both fail and inconclusive. With a Bar no real release can pass, that prompt gets answered yes every time, and then it stops protecting anything. The options:
 - (a) Keep the prompt on inconclusive, and set the Bar (later rounds) so that a release which changes nothing usually passes. Then an inconclusive is rare, and a reason to stop.
 - (b) Prompt only on fail. An inconclusive releases with its intervals in the release summary. The gate then only catches a regression the data shows clearly: with 30 tasks, a large one.
 - (c) Keep everything as it is, and accept the override as the normal path for now.

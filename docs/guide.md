@@ -4400,6 +4400,14 @@ deduplicated skip naming the blocked release. An explicit version resumes that
 version and refuses another live unfinished version with recovery instructions.
 Published GitHub Releases are final: their tags are never moved.
 
+A fresh cut refuses a `v<version>` tag that already exists locally or on
+origin. A bump PR closed without merging whose `release-<version>` branch is
+gone from origin leaves nothing to resume, so that version starts over. A failed
+release workflow exits `1` naming the failed jobs and the run URL with
+`gh run rerun --failed <id>` to recover, and leaves the tag for the Day shift.
+When the merge after publication fails because the bump PR turned draft, the
+error names `gh pr ready <url>`; the GitHub Release stays published.
+
 While waiting on the bump PR, a Merge conflict or completed failing check can
 start one in-process targeted Fix run with `--no-merge --no-base-fix`. Every
 adopted head must still have the exact tree of its main merge-base plus the Cargo

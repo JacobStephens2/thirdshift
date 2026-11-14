@@ -90,6 +90,22 @@ fn native_release_resumes_its_experiment_and_refuses_an_unattended_inconclusive_
         .filter(|name| name.ends_with(".command.json"))
         .collect::<Vec<_>>();
     assert_eq!(records.len(), 2);
+    let declined = scenario.run_on_terminal(
+        &["release", "0.2.0", "--with-experiment"],
+        &NO_SANDBOX,
+        &[("release anyway? [y/N]", "n")],
+    );
+    assert_ne!(declined.code, Some(0), "{}", declined.stderr);
+    assert!(
+        declined.stderr.contains("release declined"),
+        "{}",
+        declined.stderr
+    );
+    assert!(
+        scenario
+            .origin_git(&["branch", "--list", "release-0.2.0"])
+            .is_empty()
+    );
     let overridden = scenario.run_on_terminal(
         &["release", "0.2.0", "--with-experiment"],
         &NO_SANDBOX,

@@ -85,7 +85,7 @@ This host already has bwrap, with the AppArmor profile that Security reviews use
 - (a) **A hidden internal flag, like the former summary shim,** such as `thirdshift --session <kind> --worktree D --logs D`, with the Harness, Model and Effort. It runs one session through the same code a Run uses: the Harness check, the production prompt, skills, sub-agent rules, review reports, Resume and Model evidence. It then prints one JSON line with the final message, log paths, HEAD before and after, and elapsed time. A small JavaScript provider spawns it and stops it on cancel. An Arm is a thirdshift build plus a Harness, Model and Effort.
 - (b) **The same command, public and documented,** such as `thirdshift session`.
 
-*Recommended:* (a). It exists for the Eval harness, as the former summary shim exists for releases. It can go public later if #706's `thirdshift review` wants it.
+*Recommended:* (a). It exists for the Eval harness, as the former summary shim did for releases. It can go public later if #706's `thirdshift review` wants it.
 
 *Answer:* agre
 
