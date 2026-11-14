@@ -204,7 +204,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands and named Experiment waits, also shown in the Console
        thirdshift cronjobs [--fleet] [--json] | launch-directories [--json]  List schedules or Launch directories
-       thirdshift resources [--json] | plan-usage [--json] [--clear [<harness>]]  Show host limits, or subscription Plan usage; --clear forgets cooldowns
+       thirdshift resources [--json] | plan-usage [--fleet | --machine <name> | --local] [--json] [--clear [<harness>]] [--push [<destination>]]  Show host limits, or subscription Plan usage across the Fleet; --clear forgets this machine's cooldowns, --push reports them
        thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
        thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost

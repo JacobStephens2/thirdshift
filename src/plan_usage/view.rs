@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use chrono::{DateTime, Local, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::observation::SUBSCRIPTION;
 use super::route::{Route, Routing};
@@ -15,7 +15,7 @@ use crate::config::UserConfig;
 use crate::harness::Harness;
 
 /// Where the User config names a route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Setting {
     #[serde(rename = "harness.default")]
     Default,
@@ -39,7 +39,7 @@ impl fmt::Display for Setting {
 }
 
 /// Whether a route could take a session now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Availability {
     Available,
@@ -57,6 +57,12 @@ impl Availability {
     pub(super) fn usable(self) -> bool {
         matches!(self, Self::Available | Self::Revalidating)
     }
+
+    /// Whether the route's subscription is used up or at its ceiling: what
+    /// the Console header warns of.
+    pub fn limited(self) -> bool {
+        matches!(self, Self::Cooldown | Self::AtCeiling)
+    }
 }
 
 impl fmt::Display for Availability {
@@ -72,7 +78,7 @@ impl fmt::Display for Availability {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfiguredRoute {
     pub setting: Setting,
     /// 1-based position in a `routes` list.
@@ -87,9 +93,12 @@ pub struct ConfiguredRoute {
     pub active: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Row {
-    #[serde(serialize_with = "super::route::harness_name")]
+    #[serde(
+        serialize_with = "super::route::harness_name",
+        deserialize_with = "subscription_harness"
+    )]
     pub harness: Harness,
     pub installed: bool,
     pub active: bool,
@@ -98,13 +107,24 @@ pub struct Row {
     pub state: State,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct View {
     pub version: u8,
     pub harnesses: Vec<Row>,
     /// When availability was judged, so the text agrees with it.
-    #[serde(skip)]
+    #[serde(skip, default = "Utc::now")]
     pub now: DateTime<Utc>,
+}
+
+/// A row's Harness, read from another machine's view: only a subscription
+/// Harness Plan usage watches.
+fn subscription_harness<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Harness, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    Harness::named(&name)
+        .filter(|harness| SUBSCRIPTION.contains(harness))
+        .ok_or_else(|| serde::de::Error::custom(format!("not a subscription Harness: {name:?}")))
 }
 
 /// Each place the User config names a route, in route order: the default
@@ -278,20 +298,130 @@ impl View {
     }
 }
 
-fn local(time: DateTime<Utc>) -> String {
+pub(super) fn local(time: DateTime<Utc>) -> String {
     time.with_timezone(&Local)
         .format("%a %b %-d %H:%M %Z")
         .to_string()
 }
 
+impl fmt::Display for ConfiguredRoute {
+    /// Where the route is named, its settings and its availability.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.setting)?;
+        if let Some(position) = self.position {
+            write!(f, " {position}")?;
+        }
+        if let Some(model) = &self.model {
+            write!(f, ", {model}")?;
+        }
+        if let Some(effort) = &self.effort {
+            write!(f, ", {effort}")?;
+        }
+        if self.max_utilization < super::route::FULL {
+            write!(f, ", ceiling {}%", self.max_utilization)?;
+        }
+        if self.allow_credits {
+            f.write_str(", credits allowed")?;
+        }
+        write!(f, ": {}", self.availability)?;
+        if self.active {
+            f.write_str(", active")?;
+        }
+        Ok(())
+    }
+}
+
+/// A saved state's lines, each indented and ending in a newline but the
+/// last: account, windows, credits, limits, cooldown, and when it was
+/// observed.
+pub(super) fn write_state(
+    f: &mut fmt::Formatter<'_>,
+    state: &State,
+    installed: bool,
+    now: DateTime<Utc>,
+) -> fmt::Result {
+    if let Some(account) = &state.account {
+        let mut parts = Vec::new();
+        match account.signed_in {
+            Some(true) => parts.push("signed in".to_owned()),
+            Some(false) => parts.push("signed out".to_owned()),
+            None => {}
+        }
+        parts.extend(account.plan.iter().map(|plan| format!("plan {plan}")));
+        parts.extend(account.tier.iter().map(|tier| format!("tier {tier}")));
+        parts.extend(account.label.clone());
+        if !parts.is_empty() {
+            writeln!(f, "  account: {}", parts.join(", "))?;
+        }
+    }
+    for window in &state.windows {
+        write!(f, "  {}:", window.name)?;
+        match window.used_percent {
+            Some(used) if !window.reset_by(now) => write!(f, " {used:.0}% used")?,
+            Some(_) => f.write_str(" reset since observed")?,
+            None => f.write_str(" utilization not reported")?,
+        }
+        if let Some(status) = &window.status {
+            write!(f, ", {status}")?;
+        }
+        if let Some(reset) = window.resets_at.filter(|reset| *reset > now) {
+            write!(f, ", resets {}", local(reset))?;
+        }
+        writeln!(f)?;
+    }
+    if let Some(credits) = &state.credits {
+        match (&credits.balance, credits.has_credits) {
+            (Some(balance), _) => writeln!(f, "  credits: {balance}")?,
+            (None, Some(has)) => writeln!(f, "  credits: {}", if has { "some" } else { "none" })?,
+            (None, None) => {}
+        }
+    }
+    if state.ordinary_usage_allowed == Some(false) {
+        writeln!(f, "  included usage not allowed")?;
+    }
+    if state.spend_control_reached == Some(true) {
+        writeln!(f, "  spend control reached")?;
+    }
+    if let Some(cooldown) = &state.cooldown {
+        if cooldown.until > now {
+            write!(f, "  cooldown until {}", local(cooldown.until))?;
+        } else {
+            write!(f, "  revalidating since {}", local(cooldown.until))?;
+        }
+        let mut why = Vec::new();
+        why.extend(
+            cooldown
+                .window
+                .iter()
+                .map(|window| format!("{window} window")),
+        );
+        why.extend(
+            cooldown
+                .overage
+                .iter()
+                .map(|overage| format!("overage {overage}")),
+        );
+        if let Some(minutes) = cooldown.backoff_minutes {
+            why.push(format!("no reset reported, backoff {minutes} minutes"));
+        }
+        if !why.is_empty() {
+            write!(f, " ({})", why.join(", "))?;
+        }
+        writeln!(f)?;
+    }
+    match (state.observed_at, &state.source) {
+        (Some(at), Some(source)) => write!(f, "  observed {} by {source}", local(at)),
+        (Some(at), None) => write!(f, "  observed {}", local(at)),
+        (None, _) if !installed => f.write_str("  CLI not on PATH"),
+        (None, _) => f.write_str("  nothing observed yet"),
+    }
+}
+
 impl fmt::Display for View {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.harnesses.is_empty() {
-            return f.write_str(
-                "No Plan usage to show: no configured subscription Harness, no saved observation and no signed-in CLI",
-            );
+            return f.write_str(EMPTY);
         }
-        let now = self.now;
         for (index, row) in self.harnesses.iter().enumerate() {
             if index > 0 {
                 writeln!(f)?;
@@ -302,110 +432,16 @@ impl fmt::Display for View {
             }
             writeln!(f)?;
             for route in &row.routes {
-                write!(f, "  route: {}", route.setting)?;
-                if let Some(position) = route.position {
-                    write!(f, " {position}")?;
-                }
-                if let Some(model) = &route.model {
-                    write!(f, ", {model}")?;
-                }
-                if let Some(effort) = &route.effort {
-                    write!(f, ", {effort}")?;
-                }
-                if route.max_utilization < super::route::FULL {
-                    write!(f, ", ceiling {}%", route.max_utilization)?;
-                }
-                if route.allow_credits {
-                    f.write_str(", credits allowed")?;
-                }
-                write!(f, ": {}", route.availability)?;
-                if route.active {
-                    f.write_str(", active")?;
-                }
-                writeln!(f)?;
+                writeln!(f, "  route: {route}")?;
             }
-            let state = &row.state;
-            if let Some(account) = &state.account {
-                let mut parts = Vec::new();
-                match account.signed_in {
-                    Some(true) => parts.push("signed in".to_owned()),
-                    Some(false) => parts.push("signed out".to_owned()),
-                    None => {}
-                }
-                parts.extend(account.plan.iter().map(|plan| format!("plan {plan}")));
-                parts.extend(account.tier.iter().map(|tier| format!("tier {tier}")));
-                parts.extend(account.label.clone());
-                if !parts.is_empty() {
-                    writeln!(f, "  account: {}", parts.join(", "))?;
-                }
-            }
-            for window in &state.windows {
-                write!(f, "  {}:", window.name)?;
-                match window.used_percent {
-                    Some(used) if !window.reset_by(now) => write!(f, " {used:.0}% used")?,
-                    Some(_) => f.write_str(" reset since observed")?,
-                    None => f.write_str(" utilization not reported")?,
-                }
-                if let Some(status) = &window.status {
-                    write!(f, ", {status}")?;
-                }
-                if let Some(reset) = window.resets_at.filter(|reset| *reset > now) {
-                    write!(f, ", resets {}", local(reset))?;
-                }
-                writeln!(f)?;
-            }
-            if let Some(credits) = &state.credits {
-                match (&credits.balance, credits.has_credits) {
-                    (Some(balance), _) => writeln!(f, "  credits: {balance}")?,
-                    (None, Some(has)) => {
-                        writeln!(f, "  credits: {}", if has { "some" } else { "none" })?
-                    }
-                    (None, None) => {}
-                }
-            }
-            if state.ordinary_usage_allowed == Some(false) {
-                writeln!(f, "  included usage not allowed")?;
-            }
-            if state.spend_control_reached == Some(true) {
-                writeln!(f, "  spend control reached")?;
-            }
-            if let Some(cooldown) = &state.cooldown {
-                if cooldown.until > now {
-                    write!(f, "  cooldown until {}", local(cooldown.until))?;
-                } else {
-                    write!(f, "  revalidating since {}", local(cooldown.until))?;
-                }
-                let mut why = Vec::new();
-                why.extend(
-                    cooldown
-                        .window
-                        .iter()
-                        .map(|window| format!("{window} window")),
-                );
-                why.extend(
-                    cooldown
-                        .overage
-                        .iter()
-                        .map(|overage| format!("overage {overage}")),
-                );
-                if let Some(minutes) = cooldown.backoff_minutes {
-                    why.push(format!("no reset reported, backoff {minutes} minutes"));
-                }
-                if !why.is_empty() {
-                    write!(f, " ({})", why.join(", "))?;
-                }
-                writeln!(f)?;
-            }
-            match (state.observed_at, &state.source) {
-                (Some(at), Some(source)) => write!(f, "  observed {} by {source}", local(at))?,
-                (Some(at), None) => write!(f, "  observed {}", local(at))?,
-                (None, _) if !row.installed => f.write_str("  CLI not on PATH")?,
-                (None, _) => f.write_str("  nothing observed yet")?,
-            }
+            write_state(f, &row.state, row.installed, self.now)?;
         }
         Ok(())
     }
 }
+
+/// What a view with no rows says.
+pub(crate) const EMPTY: &str = "No Plan usage to show: no configured subscription Harness, no saved observation and no signed-in CLI";
 
 #[cfg(test)]
 mod tests {

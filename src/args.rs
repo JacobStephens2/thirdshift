@@ -1042,10 +1042,16 @@ pub fn parse(args: &[String]) -> Result<Command> {
     })))
 }
 
-/// `plan-usage [--json] [--clear [<harness>]]`, in any order.
+/// `plan-usage [--fleet | --machine <name> | --local] [--json]`,
+/// `plan-usage --clear [<harness>] [--json]` or `plan-usage --push
+/// [<destination>]`, in any order. Clearing and pushing act on this machine
+/// alone.
 fn plan_usage(args: &[String]) -> Result<crate::plan_usage::Action> {
-    let usage = "usage: thirdshift plan-usage [--json] [--clear [<harness>]]";
+    use crate::plan_usage::{Action, Selection};
+    let usage = "usage: thirdshift plan-usage [--fleet | --machine <name> | --local] [--json] | --clear [<harness>] [--json] | --push [<destination>]";
     let (mut json, mut clear, mut harness) = (false, false, None);
+    let (mut push, mut destination) = (false, None);
+    let mut selection = Selection::Default;
     let mut words = args.iter().peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -1056,13 +1062,30 @@ fn plan_usage(args: &[String]) -> Result<crate::plan_usage::Action> {
                     harness = Some(crate::plan_usage::subscription_named(name)?);
                 }
             }
+            "--push" if !push => {
+                push = true;
+                destination = words.next_if(|name| !name.starts_with('-')).cloned();
+            }
+            "--fleet" if selection == Selection::Default => selection = Selection::Fleet,
+            "--local" if selection == Selection::Default => selection = Selection::Local,
+            "--machine" if selection == Selection::Default => {
+                let name = words.next().context("--machine needs a Fleet name")?;
+                crate::config::console::fleet::validate_name(name)?;
+                selection = Selection::Machine(name.clone());
+            }
             _ => bail!("{usage}"),
         }
     }
-    Ok(if clear {
-        crate::plan_usage::Action::Clear { harness, json }
-    } else {
-        crate::plan_usage::Action::Show { json }
+    let shows = json || selection != Selection::Default;
+    Ok(match (clear, push) {
+        (true, true) => bail!("{usage}"),
+        (true, false) if selection != Selection::Default => bail!(
+            "--clear forgets this machine's cooldowns; run it on the Fleet machine or its Console\n{usage}"
+        ),
+        (true, false) => Action::Clear { harness, json },
+        (false, true) if shows => bail!("{usage}"),
+        (false, true) => Action::Push { destination },
+        (false, false) => Action::Show { selection, json },
     })
 }
 

@@ -71,6 +71,9 @@ mod metrics;
 #[path = "console/metrics_report.rs"]
 mod metrics_report;
 
+#[path = "console/plan_usage.rs"]
+mod plan_usage;
+
 #[path = "console/idle.rs"]
 mod idle;
 
