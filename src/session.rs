@@ -23,10 +23,10 @@ use crate::issue::{IssueUrl, Repo};
 use crate::logs;
 use crate::plan_usage::Router;
 use crate::plan_usage::router::Picked;
-use limits::Limit;
 use crate::progress;
 use crate::prompt;
 use crate::skills;
+use limits::Limit;
 
 pub mod kind;
 pub(crate) mod limits;
@@ -121,7 +121,7 @@ impl Logs {
     /// Whether these are a Trial's logs: a Trial keeps the Eval stop
     /// policy, not a factory Command's pause.
     fn is_trial(&self) -> bool {
-        self.name == "trial"
+        self.recording().is_trial()
     }
 
     pub(crate) fn of_trial_step(dir: &Path, role: &str) -> Self {

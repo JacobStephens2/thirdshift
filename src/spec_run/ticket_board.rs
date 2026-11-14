@@ -139,7 +139,9 @@ impl TicketBoard {
             .values()
             .flat_map(|standing| match standing {
                 Standing::Ended(
-                    Ended::Failed { local_work, .. } | Ended::Interrupted { local_work },
+                    Ended::Failed { local_work, .. }
+                    | Ended::Paused { local_work, .. }
+                    | Ended::Interrupted { local_work },
                 ) => local_work.as_slice(),
                 Standing::Running | Standing::Ended(_) => &[],
             })
@@ -191,7 +193,7 @@ impl TicketBoard {
         self.by_number().into_iter().find_map(|ticket| {
             matches!(
                 self.standings.get(&ticket.issue.identity()),
-                Some(Standing::Ended(Ended::Failed { paused: true, .. }))
+                Some(Standing::Ended(Ended::Paused { .. }))
             )
             .then_some(ticket.issue.number)
         })
@@ -206,9 +208,7 @@ impl TicketBoard {
                 matches!(
                     standing,
                     Standing::Running
-                        | Standing::Ended(
-                            Ended::Failed { paused: false, .. } | Ended::Interrupted { .. }
-                        )
+                        | Standing::Ended(Ended::Failed { .. } | Ended::Interrupted { .. })
                 )
             })
     }
@@ -385,8 +385,8 @@ impl TicketBoard {
             }
             Some(Standing::Running) => return "running".to_string(),
             Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
-            Some(Standing::Ended(Ended::Failed { paused: true, .. })) => {
-                return "paused: no allowed route has available Plan usage".to_string();
+            Some(Standing::Ended(Ended::Paused { .. })) => {
+                return format!("paused: {}", crate::session::limits::NO_ROUTE);
             }
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
                 return format!("failed: {cause}");
@@ -530,7 +530,6 @@ mod tests {
             cause: cause.to_string(),
             log: log.map(str::to_string),
             local_work: Vec::new(),
-            paused: false,
         }
     }
 

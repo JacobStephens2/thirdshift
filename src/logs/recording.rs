@@ -530,7 +530,7 @@ impl<O: Outside> Record<O> {
         self.record_config_warnings(&root);
         // Quota waits compare this named Process's last reason even when
         // another Custom process fires between its Passes.
-        let history = if reason.is_quota_wait() {
+        let history = if reason.waits_on_the_machine() {
             History::ProcessSkip(name)
         } else {
             History::Kind(Kind::Process)
@@ -677,6 +677,9 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         self.check_suspension();
+        if account.outcome == "paused" {
+            self.resumable_by_this_command();
+        }
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.finish(
@@ -716,6 +719,26 @@ impl<O: Outside> Record<O> {
             if let Some(dispatched) = tree.active_dispatch() {
                 dispatched.retaken_by_pickup = true;
             }
+            self.write_record();
+        }
+    }
+
+    pub(super) fn recorded_retaken_by_pickup(&self) -> bool {
+        self.command_record
+            .as_ref()
+            .is_some_and(|(_, tree)| tree.command.retaken_by_pickup)
+    }
+
+    /// Keep this process's own command line as a Paused Command's resume
+    /// command, unless a more precise one, such as a Run's Continuation, is
+    /// already recorded.
+    pub(super) fn resumable_by_this_command(&mut self) {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Some((_, tree)) = &mut self.command_record
+            && tree.command.resume_command.is_none()
+            && let Ok(joined) = shlex::try_join(args.iter().map(String::as_str))
+        {
+            tree.command.resume_command = Some(format!("thirdshift {joined}"));
             self.write_record();
         }
     }
@@ -1067,7 +1090,7 @@ impl<O: Outside> Record<O> {
             };
             let last = match history {
                 History::Kind(kind) => activity::last_of(whole, kind),
-                History::ProcessSkip(name) => activity::last_process_skip(whole, name),
+                History::ProcessSkip(name) => activity::last_of_process(whole, name),
             };
             if last.map(|(_, text)| text) == Some(line) {
                 return Ok(());

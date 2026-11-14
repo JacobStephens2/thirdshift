@@ -573,16 +573,10 @@ impl ReviewProcess {
             Ok(last)
         })();
         skills::remove_written();
-        let outcome = if result.is_ok() {
-            if delivered {
-                "ready for review"
-            } else {
-                "succeeded"
-            }
-        } else if interrupt::requested() {
-            "interrupted"
-        } else {
-            "failed"
+        let outcome = match &result {
+            Ok(_) if delivered => "ready for review",
+            Ok(_) => "succeeded",
+            Err(error) => failure_outcome(error),
         };
         let account = Account {
             recovery: None,

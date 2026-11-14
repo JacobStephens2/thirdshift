@@ -46,15 +46,12 @@ impl Exhaustion {
         let Some(stop) = self.stops.first() else {
             return Limit::default();
         };
-        Limit {
-            harness: Some(stop.harness.name().to_owned()),
-            window: stop.window.clone(),
-            utilization: stop.used_percent.map(|used| used / 100.0),
-            resets_at: stop
-                .resets_at
-                .map(|reset| reset.to_rfc3339_opts(SecondsFormat::Secs, true)),
-        }
-        .accepted()
+        Limit::of(
+            stop.harness,
+            stop.window.clone(),
+            stop.used_percent,
+            stop.resets_at,
+        )
     }
 
     /// The held routes, as "claude in cooldown (five_hour) until
@@ -72,11 +69,7 @@ impl Exhaustion {
 
 impl fmt::Display for Exhaustion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "no allowed route has available Plan usage: {}",
-            self.routes()
-        )
+        write!(f, "{}: {}", crate::session::limits::NO_ROUTE, self.routes())
     }
 }
 
@@ -144,7 +137,12 @@ impl Stop {
         availability: Availability,
         now: DateTime<Utc>,
     ) -> Option<Self> {
-        let live = || state.windows.iter().filter(move |window| !window.reset_by(now));
+        let live = || {
+            state
+                .windows
+                .iter()
+                .filter(move |window| !window.reset_by(now))
+        };
         match availability {
             Availability::Cooldown => {
                 let cooldown = state.cooldown.as_ref()?;
@@ -250,7 +248,9 @@ mod tests {
         assert_eq!(exhaustion.earliest_reset(), Some(codex_reset));
         let reason = exhaustion.to_string();
         assert!(
-            reason.starts_with("no allowed route has available Plan usage: claude in cooldown (five_hour) until "),
+            reason.starts_with(
+                "no allowed route has available Plan usage: claude in cooldown (five_hour) until "
+            ),
             "{reason}"
         );
         assert!(
@@ -282,10 +282,16 @@ mod tests {
             ("claude".to_string(), cooled(now - TimeDelta::minutes(1))),
             ("codex".to_string(), used(100.0, now + TimeDelta::hours(1))),
         ]);
-        assert_eq!(judge(&routing.routes, &routing, &lapsed, |_| true, now), None);
+        assert_eq!(
+            judge(&routing.routes, &routing, &lapsed, |_| true, now),
+            None
+        );
         // An installed API-key Harness is never watched, so always usable.
         let open = Routing {
-            routes: vec![Route::named(Harness::Claude), Route::named(Harness::OpenCode)],
+            routes: vec![
+                Route::named(Harness::Claude),
+                Route::named(Harness::OpenCode),
+            ],
             ..Routing::default()
         };
         assert_eq!(judge(&open.routes, &open, &saved, |_| true, now), None);

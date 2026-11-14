@@ -137,11 +137,9 @@ fn passes_skip_without_work_while_every_route_is_unavailable_and_log_each_reason
             .exists()
     );
     assert!(
-        scenario
-            .gh_calls()
-            .iter()
-            .all(|call| call.starts_with(&["api".into(), "rate_limit".into()])
-                || call.starts_with(&["api".into(), "user".into()])),
+        scenario.gh_calls().iter().all(|call| call
+            .starts_with(&["api".into(), "rate_limit".into()])
+            || call.starts_with(&["api".into(), "user".into()])),
         "{:?}",
         scenario.gh_calls()
     );
@@ -324,7 +322,12 @@ fn a_paused_run_on_an_issue_edited_by_an_untrusted_account_is_left_for_triage() 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(75), "{}", result.stderr);
-    assert_eq!(scenario.issue_labels(7), ["needs-triage"], "{}", result.stderr);
+    assert_eq!(
+        scenario.issue_labels(7),
+        ["needs-triage"],
+        "{}",
+        result.stderr
+    );
     let record = issue_record(&scenario);
     assert!(record["retaken_by_pickup"].is_null(), "{record:#}");
     // No Pickup run retakes it, so it waits in Needs you.
@@ -370,14 +373,9 @@ fn a_pause_pickup_retakes_is_saved_but_not_emailed_when_only_unmerged_runs_are()
 
     assert_eq!(result.code, Some(75), "{}", result.stderr);
     assert!(resend.requests().is_empty(), "{:?}", resend.requests());
-    let saved = scenario.log_files(
-        "home/.thirdshift/logs/acme/widgets/commands/issue",
-        "txt",
-    );
+    let saved = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "txt");
     assert!(
-        saved
-            .iter()
-            .any(|name| name.ends_with(".notification.txt")),
+        saved.iter().any(|name| name.ends_with(".notification.txt")),
         "{saved:?}"
     );
 }
@@ -445,7 +443,9 @@ fn a_spec_run_whose_ticket_pauses_starts_no_queued_ticket_and_pauses() {
     );
     assert_eq!(scenario.issue_labels(20), ["ready-for-agent"]);
     assert!(
-        !scenario.issue_labels(21).contains(&"agent-failed".to_string()),
+        !scenario
+            .issue_labels(21)
+            .contains(&"agent-failed".to_string()),
         "{:?}",
         scenario.issue_labels(21)
     );
@@ -470,4 +470,81 @@ fn a_custom_process_whose_step_stops_at_its_limit_pauses() {
         "{}",
         activity(&scenario)
     );
+    let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/process");
+    assert_eq!(record["outcome"], "paused", "{record:#}");
+    assert!(record["resume_command"].as_str().is_some(), "{record:#}");
+}
+
+#[test]
+fn a_review_run_whose_only_route_stops_at_its_limit_is_recorded_paused() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    scenario.agent_does(&stops_at_the_limit());
+    let result = scenario.run(&["review", &url]);
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
+    let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/review");
+    assert_eq!(record["outcome"], "paused", "{record:#}");
+}
+
+#[test]
+fn a_named_custom_process_logs_its_plan_usage_skip_again_after_running_normally() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\ndefault = \"claude\"\n");
+    process_named(&scenario, "notes");
+    plan_usage_is(&scenario, json!({"claude": in_cooldown()}));
+    assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
+    plan_usage_is(&scenario, json!({}));
+    scenario.run(&["process", "notes"]); // runs, not skipped
+    assert!(claude_sessions(&scenario) > 0);
+    plan_usage_is(&scenario, json!({"claude": in_cooldown()}));
+    assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
+    let line = format!(
+        "Process notes skipped: no allowed route has available Plan usage: claude in cooldown (five_hour) until {RESET_AT}"
+    );
+    let log = activity(&scenario);
+    assert_eq!(
+        log.lines().filter(|l| l.ends_with(&line)).count(),
+        2,
+        "{log}"
+    );
+}
+
+#[test]
+fn a_spec_run_whose_ticket_pauses_at_a_full_window_records_the_stopping_harness() {
+    let scenario = Scenario::new();
+    let now = chrono::Utc::now().to_rfc3339();
+    plan_usage_is(
+        &scenario,
+        json!({"claude": {"observed_at": now, "read_at": now,
+        "windows": [{"name": "five_hour", "used_percent": 100.0, "resets_at": RESET_AT}]}}),
+    );
+    scenario.issue_labelled(20, &["ready-for-agent"]);
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    let result = scenario.run(&["parallel", "1", &scenario.issue_url(20)]);
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
+    let record = issue_record(&scenario);
+    assert_eq!(record["outcome"], "paused", "{record:#}");
+    assert_eq!(record["limit"]["harness"], "claude", "{record:#}");
+    assert_eq!(record["limit"]["resets_at"], RESET_AT, "{record:#}");
+}
+
+#[test]
+fn a_paused_security_fix_still_waits_for_the_day_shift() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["security-fix", "ready-for-agent"]);
+    scenario.agent_does(&stops_at_the_limit());
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
+    assert_eq!(
+        scenario.issue_labels(7),
+        ["security-fix", "agent-failed"],
+        "{}",
+        result.stderr
+    );
+    let record = issue_record(&scenario);
+    assert_eq!(record["outcome"], "paused", "{record:#}");
+    assert!(record["retaken_by_pickup"].is_null(), "{record:#}");
 }

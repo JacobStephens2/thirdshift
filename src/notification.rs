@@ -303,7 +303,7 @@ impl RunNotification {
         }
         // A Paused Command a later Pickup run retakes needs no one, so it
         // is saved but not emailed when only unmerged runs are.
-        let retaken = account.outcome == "paused" && crate::claim::retaken_by_pickup();
+        let retaken = account.outcome == "paused" && crate::logs::recorded_retaken_by_pickup();
         if let Some(resend) = self.resend
             && !(self.unless_merged && (account.merged_with_nothing_waiting() || retaken))
             && let Err(error) = resend.send(&subject, &text)

@@ -33,16 +33,6 @@ use crate::security::review::{
 };
 use crate::trust::{self, IssueText};
 
-/// Whether a Paused Command's Claim in this process put `ready-for-agent`
-/// back, for its Run notification.
-static RETAKEN_BY_PICKUP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Whether a Paused Command's Claim in this process put `ready-for-agent`
-/// back, so a later Pickup run retakes its issue once Plan usage allows.
-pub fn retaken_by_pickup() -> bool {
-    RETAKEN_BY_PICKUP.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 /// The label of a Claimed issue.
 pub const IN_PROGRESS: Label =
     Label::new("in-progress", "A Claim: thirdshift has taken this issue");
@@ -333,7 +323,6 @@ impl Outside for OnGitHub<'_> {
     }
 
     fn retaken_by_pickup(&mut self) {
-        RETAKEN_BY_PICKUP.store(true, std::sync::atomic::Ordering::Relaxed);
         crate::logs::retaken_by_pickup();
     }
 
@@ -585,34 +574,28 @@ impl<'a> Claimed<'a> {
         }
         let issue = self.issue;
         if let Err(error) = retry_if_interrupted(outside, |outside| {
-            let (off, on, line): (&[Label], &[Label], String) =
-                match outside.untrusted_edit(issue)? {
-                    None => (
-                        &[IN_PROGRESS],
-                        &[READY_FOR_AGENT],
-                        format!(
-                            "labelling #{} {READY_FOR_AGENT}, in place of {IN_PROGRESS}: its \
-                             Spec run is only waiting",
-                            issue.number
-                        ),
-                    ),
-                    Some(text) => (
-                        &[IN_PROGRESS, READY_FOR_AGENT],
-                        &[labels::NEEDS_TRIAGE],
-                        format!(
-                            "labelling #{} {}, in place of {IN_PROGRESS}: its Spec run is only \
-                             waiting, but its {text} was edited by an account that is not a \
-                             Trusted account since it was last labelled {READY_FOR_AGENT}",
-                            issue.number,
-                            labels::NEEDS_TRIAGE
-                        ),
-                    ),
-                };
-            let edit = Edit::of(issue, outside.labels(issue)?, off, on);
+            if let Some(text) = outside.untrusted_edit(issue)? {
+                let said = format!(
+                    "labelling #{} {}, in place of {IN_PROGRESS}: its Spec run is only waiting",
+                    issue.number,
+                    labels::NEEDS_TRIAGE
+                );
+                return self.leave_for_triage(outside, text, &said).map(drop);
+            }
+            let edit = Edit::of(
+                issue,
+                outside.labels(issue)?,
+                &[IN_PROGRESS],
+                &[READY_FOR_AGENT],
+            );
             if !edit.takes_off(IN_PROGRESS) {
                 return Ok(());
             }
-            outside.step(line);
+            outside.step(format!(
+                "labelling #{} {READY_FOR_AGENT}, in place of {IN_PROGRESS}: its Spec run is \
+                 only waiting",
+                issue.number
+            ));
             outside.apply(&edit)
         }) {
             outside.warn(
@@ -722,6 +705,34 @@ impl<'a> Claimed<'a> {
         }
     }
 
+    /// Label the issue `needs-triage` in place of `in-progress` and any
+    /// `ready-for-agent`, in one request that keeps its other labels, saying
+    /// `said` and that its `text` was edited by an account that is not a
+    /// Trusted account since it was last labelled `ready-for-agent`. One no
+    /// longer `in-progress` is left as it is. Returns whether it labelled it.
+    fn leave_for_triage(
+        &self,
+        outside: &mut impl Outside,
+        text: IssueText,
+        said: &str,
+    ) -> Result<bool> {
+        let issue = self.issue;
+        let edit = Edit::of(
+            issue,
+            outside.labels(issue)?,
+            &[IN_PROGRESS, READY_FOR_AGENT],
+            &[labels::NEEDS_TRIAGE],
+        );
+        if !edit.takes_off(IN_PROGRESS) {
+            return Ok(false);
+        }
+        outside.step(format!(
+            "{said}, but its {text} was edited by an account that is not a Trusted account \
+             since it was last labelled {READY_FOR_AGENT}"
+        ));
+        outside.apply(&edit).map(|()| true)
+    }
+
     /// [`Ending::Paused`], through `outside`: release the Claim whatever is
     /// on origin, which stays there for the next run to continue, putting
     /// `ready-for-agent` back if making it took that off, unless an account
@@ -736,30 +747,20 @@ impl<'a> Claimed<'a> {
         }
         let issue = self.issue;
         let why = format!(
-            ", without {AGENT_FAILED}: no allowed route has available Plan usage"
+            ", without {AGENT_FAILED}: {}",
+            crate::session::limits::NO_ROUTE
         );
         let restored = retry_if_interrupted(outside, |outside| {
             if !self.removed_ready_for_agent {
                 return self.put_labels_back(outside, &why).map(|()| false);
             }
             if let Some(text) = outside.untrusted_edit(issue)? {
-                let edit = Edit::of(
-                    issue,
-                    outside.labels(issue)?,
-                    &[IN_PROGRESS, READY_FOR_AGENT],
-                    &[labels::NEEDS_TRIAGE],
-                );
-                if !edit.takes_off(IN_PROGRESS) {
-                    return Ok(false);
-                }
-                outside.step(format!(
-                    "releasing the Claim on #{} as {}{why}, but its {text} was edited by an \
-                     account that is not a Trusted account since it was last labelled \
-                     {READY_FOR_AGENT}",
+                let said = format!(
+                    "releasing the Claim on #{} as {}{why}",
                     issue.number,
                     labels::NEEDS_TRIAGE
-                ));
-                return outside.apply(&edit).map(|()| false);
+                );
+                return self.leave_for_triage(outside, text, &said).map(|_| false);
             }
             if !is_on(&outside.labels(issue)?) {
                 return Ok(false);
@@ -1556,7 +1557,12 @@ mod tests {
 
         assert_eq!(labels(&issue), ["bug", "needs-triage"]);
         assert!(!issue.retaken_by_pickup);
-        assert!(!issue.calls.iter().any(|call| matches!(call, Call::Comment(_))));
+        assert!(
+            !issue
+                .calls
+                .iter()
+                .any(|call| matches!(call, Call::Comment(_)))
+        );
     }
 
     #[test]

@@ -82,7 +82,7 @@ impl NotAdmitted {
     /// Whether it waits on something shared by the machine, a GitHub Quota
     /// wait or exhausted Plan usage, so each named Custom process compares
     /// its own last skip reason.
-    pub fn is_quota_wait(&self) -> bool {
+    pub fn waits_on_the_machine(&self) -> bool {
         matches!(self.why, Why::QuotaWait(_) | Why::PlanUsage(_))
     }
 }

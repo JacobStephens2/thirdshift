@@ -199,6 +199,23 @@ impl Router {
 }
 
 impl Router {
+    /// The routes of this kind a session may take, in order: with fewer
+    /// than two, the one Harness it runs on, else `current`, as a pinned
+    /// route held only at confirmed exhaustion.
+    pub fn allowed(&self, security: bool, current: Harness) -> Vec<Route> {
+        let candidates = self.candidates(security);
+        if candidates.len() >= 2 {
+            return candidates
+                .iter()
+                .map(|candidate| candidate.route.clone())
+                .collect();
+        }
+        let pinned = candidates
+            .first()
+            .map_or(current, |candidate| candidate.choice.harness);
+        vec![super::exhaustion::pinned(pinned)]
+    }
+
     /// Whether every route of this kind is unavailable by this machine's
     /// saved Plan usage, as a Step finds it before starting: the routes, or
     /// with fewer than two the Harness `current` sessions run on, held only
@@ -207,18 +224,9 @@ impl Router {
         if cfg!(test) {
             return None;
         }
-        let candidates = self.candidates(security);
-        let routes: Vec<Route> = if candidates.len() >= 2 {
-            candidates
-                .iter()
-                .map(|candidate| candidate.route.clone())
-                .collect()
-        } else {
-            vec![super::exhaustion::pinned(current)]
-        };
         let saved = Store::machine().and_then(|store| store.read()).ok()?;
         super::exhaustion::judge(
-            &routes,
+            &self.allowed(security, current),
             &self.routing,
             &saved,
             Harness::installed,

@@ -352,7 +352,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
                 }
                 Ended::Reached { .. } => format!("#{number} landed"),
                 Ended::Interrupted { .. } => format!("#{number} interrupted"),
-                Ended::Failed { paused: true, .. } => format!("#{number} paused"),
+                Ended::Paused { .. } => format!("#{number} paused"),
                 Ended::Failed { .. } => format!("#{number} failed"),
             });
         }
@@ -542,11 +542,10 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
                 cause,
                 log: None,
                 local_work: Vec::new(),
-                paused: false,
             }
         });
         let landed = matches!(ending, Ended::Reached { .. });
-        if matches!(ending, Ended::Failed { paused: true, .. }) {
+        if matches!(ending, Ended::Paused { .. }) {
             // No route has Plan usage: the Tickets running finish or
             // salvage, but none queued starts.
             outside.step(format!(
@@ -1068,7 +1067,6 @@ mod tests {
             cause: cause.to_string(),
             log: Some("/logs/session.jsonl".to_string()),
             local_work: Vec::new(),
-            paused: false,
         }
     }
 

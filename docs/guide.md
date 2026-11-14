@@ -277,10 +277,11 @@ allowed route has no Plan usage also ends with outcome `paused`, without
 sleeping: a session Step about to start finds every route held, or a session
 stops at its Harness's own structured limit with no route left to try. Only
 structured Harness wire frames and official non-billed reads count, never text
-an agent wrote. Its record keeps the stopping Harness's `limit` and, for an
-issue, the Continuation as `resume_command`; work already pushed stays on its
-branch, and it exits `75`. A Spec run whose Ticket pauses starts no queued
-Ticket while running ones finish, then pauses. Its Claim comes off without
+an agent wrote. Its record keeps the stopping Harness's `limit` and, as
+`resume_command`, the Continuation for an issue, else the command that started
+it; work already pushed stays on its branch, and it exits `75`. A Spec run
+whose Ticket pauses starts no queued Ticket while running ones finish, then
+pauses, and a Run whose Base fix pauses pauses with it. Its Claim comes off without
 `agent-failed`, putting `ready-for-agent` back if the Claim took it off, unless
 an account that is not a Trusted account edited the issue since its last
 Trusted `ready-for-agent` labelling, which leaves `needs-triage`; a Security
