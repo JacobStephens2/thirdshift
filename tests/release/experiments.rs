@@ -149,6 +149,18 @@ fn cli(release: &Release, args: &[&str]) -> Value {
     serde_json::from_str(&stdout(&output)).unwrap()
 }
 
+/// Runs the Release command with `args`, under the Experiment's bound: its
+/// Trials and Graders may run inside the Release run.
+fn release_with_experiment(release: &Release, args: &[&str]) -> Output {
+    support::child_lifetime::FixtureChild::spawn(
+        native::command(release, "")
+            .args(args)
+            .envs(ENV.iter().copied()),
+        "",
+    )
+    .wait(EXPERIMENT_BOUND)
+}
+
 fn views(release: &Release) -> Vec<Value> {
     cli(release, &["experiments", "--json"])
         .as_array()
@@ -258,7 +270,7 @@ fn a_passing_release_experiment_finishes_before_the_first_push() {
     complete_experiment(&release, &candidate);
     let calls = fs::read_to_string(release.root().join("claude-calls.json")).unwrap();
     assert!(!release.origin_branch("release-0.2.0"));
-    let output = release.run_with(&["0.2.0", "--with-experiment"], "", ENV);
+    let output = release_with_experiment(&release, &["0.2.0", "--with-experiment"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let experiments = views(&release);
     assert_eq!(experiments.len(), 1);
@@ -276,7 +288,7 @@ fn an_advisory_release_experiment_needs_a_terminal_override() {
     let release = Release::new();
     prepare(&release, 1);
     let before = release.origin_refs();
-    let output = release.run_with(&["0.2.0", "--with-experiment"], "", ENV);
+    let output = release_with_experiment(&release, &["0.2.0", "--with-experiment"]);
     assert!(!output.status.success());
     let experiments = views(&release);
     assert_eq!(experiments[0]["verdict"]["verdict"], "inconclusive");
@@ -364,7 +376,7 @@ fn unpublished_tag_recovery_keeps_the_prior_experiment_baseline() {
     release.ci_reports(GREEN);
     let initial = release.origin(&["rev-parse", "main"]);
     complete_experiment(&release, &initial);
-    let first = release.run_with(&["0.2.0", "--with-experiment"], "", ENV);
+    let first = release_with_experiment(&release, &["0.2.0", "--with-experiment"]);
     assert!(!first.status.success(), "{}", stderr(&first));
     let tagged = release.origin_tag("v0.2.0").unwrap();
     release.merge_pr("newer", "Recover with newer content", "");
@@ -392,5 +404,52 @@ fn unpublished_tag_recovery_keeps_the_prior_experiment_baseline() {
             &format!("{}^", release.origin_tag("v0.2.0").unwrap())
         ]),
         candidate
+    );
+}
+
+#[test]
+fn a_pass_without_the_experiment_never_publishes_a_version_pinned_for_one() {
+    let release = Release::new();
+    prepare(&release, 1);
+    let output = release_with_experiment(&release, &["1.0.0", "--with-experiment"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("unattended release has no terminal override"),
+        "{}",
+        stderr(&output)
+    );
+    // Drop the push guard, so only the Release run itself can refuse 1.0.0.
+    fs::rename(release.bin().join("git-release"), release.bin().join("git")).unwrap();
+    let pass = release.run_with(&[], "", ENV);
+    assert!(pass.status.success(), "{}", stderr(&pass));
+    assert!(!release.origin_branch("release-1.0.0"), "{}", stderr(&pass));
+    assert!(release.origin_tag("v1.0.0").is_none(), "{}", stderr(&pass));
+    let activity = fs::read_to_string(
+        release
+            .root()
+            .join("home/.thirdshift/logs/JacobStephens2/thirdshift/activity.log"),
+    )
+    .unwrap();
+    assert!(
+        activity.contains("Release run skipped:")
+            && activity.contains("thirdshift release 1.0.0 --with-experiment"),
+        "{activity}"
+    );
+}
+
+#[test]
+fn a_refused_release_experiment_shows_its_suite_results_first() {
+    let release = Release::new();
+    prepare(&release, 1);
+    let output = release_with_experiment(&release, &["0.2.0", "--with-experiment"]);
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    let shown = err.find("spec-review: Advisory suite").expect(&err);
+    assert!(
+        shown
+            < err
+                .find("unattended release has no terminal override")
+                .unwrap(),
+        "{err}"
     );
 }

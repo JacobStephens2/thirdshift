@@ -7,10 +7,7 @@ use super::{Version, fetch, git_run};
 use crate::{git::Git, github::GitHub, poll, progress};
 
 pub(super) enum Candidate {
-    Ready {
-        base: String,
-        previous: Option<String>,
-    },
+    Ready { base: String },
     Skipped(String),
 }
 
@@ -24,8 +21,7 @@ pub(super) fn candidate(
     let started = Instant::now();
     loop {
         fetch(git)?;
-        let previous = previous.map(str::to_owned);
-        let boundary = previous.as_ref().map(|tag| format!("^{tag}"));
+        let boundary = previous.map(|tag| format!("^{tag}"));
         let mut args = vec!["rev-list", "--first-parent", "origin/main"];
         if let Some(boundary) = &boundary {
             args.push(boundary);
@@ -35,7 +31,7 @@ pub(super) fn candidate(
         let mut pending = false;
         let mut failure = String::new();
         for sha in commits.lines() {
-            if let Some(previous) = &previous {
+            if let Some(previous) = previous {
                 // Release tags may sit on a merged side branch of main.
                 if git_run(git, &["merge-base", previous, sha])?
                     != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
@@ -43,7 +39,7 @@ pub(super) fn candidate(
                     continue;
                 }
             }
-            if wanted.is_none() && !shipped_changes(git, previous.as_deref(), sha)? {
+            if wanted.is_none() && !shipped_changes(git, previous, sha)? {
                 continue;
             }
             eligible = true;
@@ -52,10 +48,7 @@ pub(super) fn candidate(
                     if run.status == "completed"
                         && run.conclusion.as_deref() == Some("success") =>
                 {
-                    return Ok(Candidate::Ready {
-                        base: sha.into(),
-                        previous,
-                    });
+                    return Ok(Candidate::Ready { base: sha.into() });
                 }
                 Some(run) if run.status != "completed" => pending = true,
                 None if started.elapsed() < poll::grace_period() => pending = true,
@@ -88,7 +81,8 @@ pub(super) fn candidate(
         );
         if line.should_report(()) {
             // Admission skips stay silent; once CI is pending, the wait must
-            // be visible before a candidate turns green.
+            // be visible before a candidate turns green, in Working and to Stop.
+            crate::logs::waiting();
             crate::logs::show_held();
             progress::step("waiting for main push CI before releasing");
         }
@@ -135,9 +129,5 @@ fn shipped_changes(git: &Git, previous: Option<&str>, sha: &str) -> Result<bool>
             || path.starts_with(".github/workflows/release")
             || path.starts_with(".github/workflows/publish")
             || path.starts_with("scripts/release")
-            || matches!(
-                path,
-                "scripts/generate-release.py" | "scripts/setup-release-tags.sh"
-            )
     }))
 }

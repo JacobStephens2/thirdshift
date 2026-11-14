@@ -69,7 +69,15 @@ def fence_tag_pushes(generated):
           python3 scripts/release-tag-guard.py
 
 '''
-    return generated.replace(anchor, guard + anchor + "    needs: [release-tag-guard]\n", 1)
+    # Insert above plan's own comment lines, which describe plan.
+    start = generated.index(anchor)
+    while True:
+        previous = generated.rfind("\n", 0, start - 1) + 1
+        if not generated.startswith("  #", previous):
+            break
+        start = previous
+    return (generated[:start] + guard + generated[start:]).replace(
+        anchor, anchor + "    needs: [release-tag-guard]\n", 1)
 
 
 def harden_release_workflow(generated):

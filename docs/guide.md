@@ -558,8 +558,8 @@ Remote `config` and `update` return the owner's JSON. Unknown and link-only
 machines are refused. Omitting `--machine` selects local work. A configured
 Fleet name always selects its owner, even when the name matches the local
 hostname; local choices then say `(local)`. An unpaired local hostname also
-selects local work. `/api/v1/start-options` requires `run` and returns known
-repositories and startable Passes; `whoami` accepts any authenticated scope so
+selects local work. `/api/v1/start-options` requires `run` or `admin` and
+returns known repositories and the Passes those scopes may start; `whoami` accepts any authenticated scope so
 `run`-only and `admin`-only tokens can pair without general read access.
 
 Open a remote row to see its Command details in the same Console, including
@@ -964,7 +964,7 @@ which also starts a Spec run when the issue has Tickets. Every request names
 | `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
 | `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
 | `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
-| `release` | Requires `admin` scope; optional `version` (`X.Y.Z`) or `bump` (`major`, `minor`, `patch`), mutually exclusive; omit both for automatic minor/patch selection; optional `email`, `harness`, `model`, `effort`; repository must be `JacobStephens2/thirdshift` |
+| `release` | Requires `admin` scope; optional `version` (`X.Y.Z`) or `bump` (`major`, `minor`, `patch`), mutually exclusive; omit both for automatic minor/patch selection; optional `with_experiment` boolean; optional `email`, `harness`, `model`, `effort`; repository must be `JacobStephens2/thirdshift` |
 
 `POST /api/v1/start` is an alias of this path. Release starts require `admin`
 scope; the other Commands require `run`. The Console shows a separate Release
@@ -4413,13 +4413,19 @@ start one in-process targeted Fix run with `--no-merge --no-base-fix`. Every
 adopted head must still have the exact tree of its main merge-base plus the Cargo
 version bump. A draft, unresolved failure or conflict stops before tagging.
 When the content base changes, requested Experiments and release notes refresh.
+Bump PR workflows have five minutes to appear, as does GitHub's mergeability
+report after checks pass and the release workflow after the tag push; queued
+and running checks keep waiting.
 
 Experiments are off by default. `--with-experiment` pins the selected content
 commit across interruptions and runs or resumes the release Experiment from the
 running binary, on touched Eval suites against the last published release tag.
 Pending rechecks and leak decisions wait with progress lines. A failed or
-inconclusive Verdict requires `release anyway? [y/N]` on a terminal; unattended
-runs fail. Console Start's **Run release Experiment** checkbox and the admin-only
+inconclusive Verdict prints the Experiment's per-suite results, Advisory suites
+included, on stderr, then requires `release anyway? [y/N]` on a terminal;
+unattended runs fail. A Release Pass without `--with-experiment` never
+publishes a pinned version: it skips, naming
+`thirdshift release <version> --with-experiment` to resume it. Console Start's **Run release Experiment** checkbox and the admin-only
 start API's `with_experiment` boolean select the same behavior.
 
 `--review` requires terminal stdin and is checked before Setup or network work.
@@ -4438,7 +4444,9 @@ embedded Factory skills or Processes, Cargo manifest/lockfile, dist or Rust
 toolchain configuration, `README.md`, `LICENSE`, release/publish workflows or
 release scripts. Documentation, website, Day shift agent skills and tests alone
 do not trigger a release. The newest eligible green commit is selected
-immediately, even when a newer candidate is still waiting for CI.
+immediately, even when a newer candidate is still waiting for CI. A Pass that
+waits for pending main push CI appears in Working and `thirdshift stop` reaches
+it; if every candidate then ends non-green, its record ends `skipped`.
 
 Without a bump flag, the same fresh-home sandboxed, traced Session chooses
 `minor` or `patch` and writes the summary from merged pull requests and the two
@@ -4446,7 +4454,8 @@ candidate versions. New CLI commands/flags, Console pages/actions, config keys
 and user-visible contract changes call for minor; fixes and internal refinements
 call for patch. Automatic selection never chooses major: invalid output or a
 failed Session falls back to patch, using generated notes when the summary is
-unusable. `--major`, `--minor` and `--patch` pin the bump and ask only for a summary.
+unusable. Those notes go outside the bump PR's empty summary markers, so the
+GitHub Release lists them once. `--major`, `--minor` and `--patch` pin the bump and ask only for a summary.
 
 Use `--harness`, `--model`, `--effort`, `--email`, `--email-unless-merged` or
 `--no-email` as on other Commands. A machine-local release lock and atomic

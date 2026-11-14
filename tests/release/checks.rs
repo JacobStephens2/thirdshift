@@ -385,7 +385,7 @@ fn continued_external_head_churn_is_bounded_without_starting_fix_runs() {
 }
 
 #[test]
-fn spec_resume_after_interrupted_fix_refreshes_release_notes() {
+fn a_resume_after_an_interrupted_fix_refreshes_release_notes() {
     let release = Release::new();
     let (_, repaired) = conflicted_bump(&release);
     set_pr(
@@ -473,9 +473,8 @@ fn recovery_after_a_repaired_tag_resumes_between_branch_and_tag_pushes() {
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
 }
 
-/// The Experiment is a yield: the cargo stand-in moves the release branch to
-/// an exact bump of newer main and rewrites the notes marker to that base
-/// before the script observes the pull request again.
+/// A bump PR without a content-base marker, repaired to an exact bump of newer
+/// main before the Release run resumes it, gets notes for that newer base.
 #[test]
 fn an_unmarked_legacy_pr_repaired_before_resume_refreshes_its_notes() {
     let release = Release::new();

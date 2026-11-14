@@ -204,10 +204,9 @@ impl Notes<'_> {
         } else {
             String::new()
         };
-        let summary = controls::review(
-            summary.unwrap_or_else(|| "_The agent summary was unavailable._".into()),
-            review,
-        )?;
+        // Without a summary the markers stay empty: release-notes.sh adds the
+        // generated notes once, after whatever the markers hold.
+        let summary = controls::review(summary.unwrap_or_default(), review)?;
         Ok(format!(
             "## Summary\n\n<!-- release-summary:start -->\n{summary}\n<!-- release-summary:end -->\n\n{notes}\n\n## Version diff\n\n```diff\n{diff}\n```\n\n<!-- release-content-base: {} -->\n",
             cut.base
@@ -304,7 +303,7 @@ fn ready(
                 )
             });
         ensure!(
-            !checks.is_empty() || started.elapsed() < poll::grace_period(),
+            !checks.is_empty() || started.elapsed() < poll::release_grace_period(),
             "no release bump checks appeared at {}; inspect GitHub Actions, then thirdshift release {}",
             cut.head,
             cut.version
@@ -319,7 +318,7 @@ fn ready(
             }
             let since = green_since.get_or_insert_with(Instant::now);
             ensure!(
-                since.elapsed() < poll::grace_period(),
+                since.elapsed() < poll::release_grace_period(),
                 "GitHub did not report the green bump pull request mergeable"
             );
         }

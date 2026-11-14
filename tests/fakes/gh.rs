@@ -2238,6 +2238,8 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
         );
     }
     let tag = &positional[0];
+    // A run with `draft` set left a draft GitHub Release, not a published one.
+    let mut draft = false;
     if let Some(run) = state
         .get("runs")
         .map(Json::items)
@@ -2249,11 +2251,12 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
                 && run.get("branch").and_then(Json::as_str) == Some(tag)
         })
     {
+        draft = run.get("draft").is_some_and(Json::truthy);
         let published = run.get("published").map(Json::truthy).unwrap_or_else(|| {
             run.at("conclusion").str() == "success"
                 && run.get("pending_polls").and_then(Json::as_i64).unwrap_or(0) == 0
         });
-        if !published {
+        if !published && !draft {
             die("release not found", 1);
         }
     }
@@ -2271,7 +2274,7 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
     }
     if native {
         println!(
-            "{{\"url\":\"https://github.com/{}/releases/tag/{tag}\",\"isDraft\":false}}",
+            "{{\"url\":\"https://github.com/{}/releases/tag/{tag}\",\"isDraft\":{draft}}}",
             state.at("repo").str()
         );
         return;

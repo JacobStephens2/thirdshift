@@ -728,8 +728,8 @@ print(json.dumps({{'type':'result','subtype':'success','is_error':False,'result'
         (!refs.is_empty()).then(|| self.origin(&["rev-parse", &format!("{tag}^{{commit}}")]))
     }
 
-    /// Pushes a `release-<version>` branch off main with the bump commit the
-    /// script makes, as a run interrupted after pushing it leaves it, and
+    /// Pushes a `release-<version>` branch off main with the bump commit a
+    /// Release run makes, as a run interrupted after pushing it leaves it, and
     /// returns that commit.
     fn push_bump(&self, version: &str) -> String {
         let contributor = self.contributor();
@@ -889,8 +889,7 @@ fn stdout(output: &Output) -> String {
 }
 
 /// Sources `script` from `scripts/` without running it, then runs the bash
-/// `code`, which calls its functions, in an empty directory. The cases of a
-/// step go here, and one case of each through the whole script.
+/// `code`, which calls its functions, in an empty directory.
 fn with_functions_of(script: &str, code: &str) -> Output {
     let dir = TempDir::new().unwrap();
     with_input(
@@ -916,7 +915,7 @@ fn failed_release() -> Value {
     })
 }
 
-/// Asserts the script exited 1 on the failed release workflow run, naming
+/// Asserts the Release run exited 1 on the failed release workflow run, naming
 /// the failed job and the run and how to rerun it, with `v0.2.0` left on
 /// `merge`.
 fn assert_release_failed(release: &Release, output: &Output, merge: &str) {
@@ -1302,6 +1301,24 @@ fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_in
     );
     assert!(again.status.success(), "{}", stderr(&again));
     assert_eq!(stdout(&again), body);
+}
+
+#[test]
+fn an_unavailable_summary_leaves_its_markers_empty_and_the_notes_appear_once() {
+    let release = Release::new();
+    release.summary_says(" ");
+    release.ci_reports(GREEN);
+    let output = release.run("0.2.0");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let pr_body = release.pr_body("release-0.2.0");
+    let (marked, _) = summary_and_rest(&pr_body);
+    assert!(marked.trim().is_empty(), "{pr_body}");
+
+    let notes_run = release.run_notes_script("v0.2.0");
+
+    assert!(notes_run.status.success(), "{}", stderr(&notes_run));
+    let notes = release.generated_notes("v0.2.0");
+    assert_eq!(stdout(&notes_run), format!("{notes}\n\n{INSTALL_NOTES}\n"));
 }
 
 #[test]
@@ -1699,7 +1716,6 @@ fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
 
 #[test]
 fn a_resumed_bump_pr_from_another_repository_is_refused() {
-    // The open PR end to end; finding the earlier run takes the rest.
     for (merged, tagged) in [(false, false), (true, false), (true, true)] {
         let release = Release::new();
         let head = release.push_bump("0.2.0");
@@ -1718,22 +1734,17 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
             .to_owned();
         let reasons = [url.as_str(), "changed release PR identity"];
 
-        if merged {
-            assert_refused_by(
-                &release,
-                &format!("merged {merged}, tagged {tagged}"),
-                &reasons,
-                || release.run("0.2.0"),
-            );
-        } else {
-            assert_refused(&release, "0.2.0", &reasons);
-        }
+        assert_refused_by(
+            &release,
+            &format!("merged {merged}, tagged {tagged}"),
+            &reasons,
+            || release.run("0.2.0"),
+        );
     }
 }
 
 #[test]
 fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
-    // One open PR end to end; checking the bump PR takes the rest.
     for merged in [false, true] {
         for change in [
             BumpChange::AppendComment("README.md"),
@@ -1753,16 +1764,12 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
             release.ci_reports(GREEN);
             let reasons = ["exact version bump"];
 
-            if !merged && change == BumpChange::AppendComment("README.md") {
-                assert_refused(&release, "0.2.0", &reasons);
-            } else {
-                assert_refused_by(
-                    &release,
-                    &format!("merged {merged}, {change:?}"),
-                    &reasons,
-                    || release.run("0.2.0"),
-                );
-            }
+            assert_refused_by(
+                &release,
+                &format!("merged {merged}, {change:?}"),
+                &reasons,
+                || release.run("0.2.0"),
+            );
         }
     }
 }
@@ -2122,7 +2129,7 @@ fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
 }
 
 #[test]
-fn review_resumed_branch_without_pr_with_extra_changes_is_refused() {
+fn a_resumed_branch_without_pr_with_extra_changes_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
     release.push_change_to_bump("0.2.0", BumpChange::AddedFile);
@@ -2139,7 +2146,7 @@ fn review_resumed_branch_without_pr_with_extra_changes_is_refused() {
 }
 
 #[test]
-fn review_tagged_resumed_pr_with_extra_changes_is_refused() {
+fn a_tagged_resumed_pr_with_extra_changes_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
     let head = release.push_change_to_bump("0.2.0", BumpChange::AddedFile);

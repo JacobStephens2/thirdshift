@@ -154,7 +154,7 @@ impl Cut {
             Some(&Version::parse(&self.version)?),
             self.previous.as_deref(),
         )?;
-        let selection::Candidate::Ready { base, .. } = candidate else {
+        let selection::Candidate::Ready { base } = candidate else {
             return Ok(());
         };
         if base == self.base || git_run(git, &["merge-base", &base, &self.base])? != self.base {
@@ -213,10 +213,9 @@ pub(super) fn discover(
     git: &Git,
     launch: &Git,
     github: &GitHub,
-    wanted: Option<&str>,
-    pinned: Option<Bump>,
+    request: &Request<'_>,
 ) -> Result<Discovery> {
-    match inspect(git, launch, github, wanted, pinned) {
+    match inspect(git, launch, github, request) {
         Ok(discovery) => Ok(discovery),
         Err(error) if !interrupt::requested() => Ok(Discovery::Blocked(format!(
             "unfinished release discovery: {error:#}"
@@ -225,13 +224,8 @@ pub(super) fn discover(
     }
 }
 
-fn inspect(
-    git: &Git,
-    launch: &Git,
-    github: &GitHub,
-    wanted: Option<&str>,
-    pinned: Option<Bump>,
-) -> Result<Discovery> {
+fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> Result<Discovery> {
+    let (wanted, pinned) = (request.version, request.bump);
     let prs = github.release_prs()?;
     let refs = git_run(
         git,
@@ -341,7 +335,7 @@ fn inspect(
     }
     if live.len() > 1 {
         return Ok(Discovery::Blocked(format!(
-            "multiple unfinished releases: {}; finish or remove the obsolete cuts before retrying",
+            "multiple unfinished releases: {}; finish or remove the obsolete releases before retrying",
             live.values()
                 .map(|entry| entry.version.as_str())
                 .collect::<Vec<_>>()
@@ -359,6 +353,14 @@ fn inspect(
     )) = live.into_iter().next()
     else {
         return Ok(match pinned_cut(launch, git, wanted, previous.clone()) {
+            // The pin names a version chosen for an Experiment, perhaps by
+            // hand: a Pass that skips the Experiment must not publish it.
+            Ok(Some(cut)) if wanted.is_none() && !request.with_experiment => {
+                Discovery::Blocked(format!(
+                    "unfinished local release {} awaits its Experiment; resume it with thirdshift release {} --with-experiment",
+                    cut.version, cut.version
+                ))
+            }
             Ok(Some(cut)) => Discovery::Resume(Box::new(cut)),
             Ok(None) => Discovery::Fresh { previous },
             Err(error) => Discovery::Blocked(format!("unfinished local release: {error:#}")),

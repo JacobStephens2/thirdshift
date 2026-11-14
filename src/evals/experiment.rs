@@ -240,6 +240,20 @@ pub(crate) fn for_release(
     execute(options, repository, false)
 }
 
+/// Results contain private Grader evidence, unlike the public Command facts:
+/// print them without copying them into the factory's logs. The standalone
+/// command prints them on stdout; a Release run shows them on stderr, beside
+/// its progress, before it asks whether to release anyway.
+fn print_results(experiment: &store::Stored, json: bool, render: bool) -> Result<()> {
+    let results = experiment.render(json)?;
+    if render {
+        println!("{results}");
+    } else {
+        eprintln!("{results}");
+    }
+    Ok(())
+}
+
 fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<View>> {
     interrupt::install()?;
     let git = Git::new(repository);
@@ -392,9 +406,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
     }
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
-        if render {
-            println!("{}", experiment.render(options.json)?);
-        }
+        print_results(&experiment, options.json, render)?;
         if render {
             logs::start_notice::skipped(format!(
                 "Experiment {} is already completed",
@@ -531,11 +543,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
         retention::repositories(&experiment);
-        // Results contain private Grader evidence, unlike the public Command
-        // facts. Print them without copying them into the factory's logs.
-        if render {
-            println!("{}", experiment.render(options.json)?);
-        }
+        print_results(&experiment, options.json, render)?;
     }
     let outcome = if interrupt::requested() {
         "interrupted"

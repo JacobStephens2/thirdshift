@@ -171,9 +171,11 @@ subtrees and cleans up its recorded children even on a failed assertion.
 Linux Release commands started through `tests/release.rs`'s `Release` fixture,
 and the release-notes helper tests, use `FixtureChild` from the same
 child-lifetime helper. Each such command has a 120-second wait bound, with
-stdout and stderr included in a timeout panic. The command-line contract cases
-in `tests/release/native.rs` run the binary directly without that bound. File-backed input and output keep inherited
-descriptors and large input from blocking that wait.
+stdout and stderr included in a timeout panic; the cases in
+`tests/release/native.rs` run the binary through the same helper. Cases whose
+Release run carries a release Experiment's Trials and Graders use the
+Experiment's 300-second bound instead. File-backed input and output keep
+inherited descriptors and large input from blocking that wait.
 
 A dedicated guardian process acts as a Linux subreaper for each command. Normal
 completion, timeout and assertion unwinding kill and reap its owned descendants,

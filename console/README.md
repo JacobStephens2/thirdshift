@@ -387,8 +387,9 @@ The page reads like a terminal crontab: one monospace line per entry, schedule
 then command, with schedules highlighted in the current Theme. Long lines scroll
 horizontally within the listing; focus it to scroll with the arrow keys.
 No matching entries or no crontab shows an empty view; an unavailable `crontab`
-command or a read failure reports an error. Release commands with an explicit
-version are recognized as Release runs. Run now offers confirmed starts of
+command or a read failure reports an error. `thirdshift release` entries, the
+scheduled versionless Pass and those with a bump flag or an explicit version,
+are recognized as Release runs. Run now offers confirmed starts of
 supported cron Passes; the inventory leaves the crontab unchanged.
 
 Scores (`/scores`, or `g q`) lists the sample by week and each criterion's

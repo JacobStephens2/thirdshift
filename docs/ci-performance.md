@@ -15,10 +15,12 @@ GitHub's one-pending-run concurrency limit. Publication dependencies and tag
 triggers are generated unchanged.
 
 Release runs for paths that can affect packaged artifacts (`src/`, `skills/`,
-Cargo manifests, toolchain, README/license), and for pipeline changes
-(`.github/workflows/`, `scripts/`, `dist-workspace.toml`). Site, docs, generated
-prompt copies and tests alone do not change the artifacts. Adding another
-packaged input requires updating `RELEASE_PATHS` in the generator.
+`processes/`, Cargo manifests, toolchain, README/license), and for pipeline
+changes (`.github/workflows/`, `scripts/`, `dist-workspace.toml`). Site, docs,
+generated prompt copies and tests alone do not change the artifacts. Adding
+another packaged input requires updating `RELEASE_PATHS` in the generator and
+the Release Pass's shipped-path filter in `src/release/selection.rs`, which
+decides whether a scheduled `thirdshift release` has anything to publish.
 
 At implementation time, `gh api repos/JacobStephens2/thirdshift/branches/main/protection`
 returned 404 “Branch not protected”, and `gh api repos/JacobStephens2/thirdshift/rules/branches/main`

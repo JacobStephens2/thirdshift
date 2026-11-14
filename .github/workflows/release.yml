@@ -62,7 +62,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Run 'dist plan' (or host) to determine what tasks we need to do
   release-tag-guard:
     permissions:
       contents: read
@@ -85,6 +84,7 @@ jobs:
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           python3 scripts/release-tag-guard.py
 
+  # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
     needs: [release-tag-guard]
     permissions:

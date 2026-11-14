@@ -1,4 +1,4 @@
-//! The installed binary's Release run, using the same real origin as the legacy flow.
+//! The installed binary's Release run against a real bare origin and fake `gh` and Harnesses.
 #[test]
 fn native_pass_quietly_skips_human_blocked_superseded_cuts() {
     for blocker in ["draft", "foreign"] {
@@ -29,7 +29,7 @@ fn native_pass_quietly_skips_human_blocked_superseded_cuts() {
         }
         let before = release.origin_refs();
         for _ in 0..2 {
-            let output = command(&release, "").output().unwrap();
+            let output = with_input(&mut command(&release, ""), "");
             assert!(output.status.success(), "{blocker}: {}", stderr(&output));
             assert!(output.stdout.is_empty(), "{blocker}: {}", stdout(&output));
             assert!(output.stderr.is_empty(), "{blocker}: {}", stderr(&output));
@@ -78,7 +78,7 @@ fn a_forged_supersedes_trailer_cannot_drop_another_unfinished_release() {
     );
     let before = release.origin_refs();
 
-    let output = command(&release, "").output().unwrap();
+    let output = with_input(&mut command(&release, ""), "");
 
     assert!(
         release.origin_tag("v0.3.0").is_none() && release.origin_tag("v0.2.0").is_none(),
@@ -142,11 +142,12 @@ pub(super) fn command(release: &Release, version: &str) -> Command {
 #[test]
 fn release_review_requires_a_terminal_before_setup_or_git() {
     let release = Release::new();
-    let output = command(&release, "0.2.0")
-        .arg("--review")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
+    let output = with_input(
+        command(&release, "0.2.0")
+            .arg("--review")
+            .stdin(std::process::Stdio::null()),
+        "",
+    );
     assert!(!output.status.success());
     assert!(
         stderr(&output).contains("--review requires a terminal"),
@@ -165,7 +166,7 @@ fn native_resume_adopts_exact_bump_branches_and_open_prs() {
             release.open_bump_pr("0.2.0");
         }
         release.ci_reports(GREEN);
-        let output = command(&release, "0.2.0").output().unwrap();
+        let output = with_input(&mut command(&release, "0.2.0"), "");
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(release.origin_tag("v0.2.0"), Some(head));
         assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
@@ -188,7 +189,7 @@ fn native_pass_skips_human_blocked_releases_and_direct_mode_names_recovery() {
         }
         let before = release.origin_refs();
         for _ in 0..2 {
-            let output = command(&release, "").output().unwrap();
+            let output = with_input(&mut command(&release, ""), "");
             assert!(output.status.success(), "{}", stderr(&output));
             assert!(output.stdout.is_empty());
             assert!(output.stderr.is_empty(), "{}", stderr(&output));
@@ -205,7 +206,7 @@ fn native_pass_skips_human_blocked_releases_and_direct_mode_names_recovery() {
             "{activity}"
         );
         assert!(activity.contains("0.2.0"), "{activity}");
-        let output = command(&release, "0.2.0").output().unwrap();
+        let output = with_input(&mut command(&release, "0.2.0"), "");
         assert!(!output.status.success());
         assert!(stderr(&output).contains("0.2.0"), "{}", stderr(&output));
         assert_eq!(release.origin_refs(), before);
@@ -216,7 +217,7 @@ fn native_pass_skips_human_blocked_releases_and_direct_mode_names_recovery() {
 fn native_direct_mode_refuses_a_different_unfinished_release() {
     let release = Release::new();
     release.push_bump("0.2.0");
-    let output = command(&release, "0.3.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.3.0"), "");
     assert!(!output.status.success());
     assert!(
         stderr(&output).contains("thirdshift release 0.2.0"),
@@ -234,10 +235,7 @@ fn native_with_experiment_uses_the_engine_without_cargo_on_the_launch_directory(
         &release.bin().join("cargo"),
         "#!/bin/sh\necho 'cargo must not be run' >&2\nexit 93\n",
     );
-    let output = command(&release, "0.2.0")
-        .arg("--with-experiment")
-        .output()
-        .unwrap();
+    let output = with_input(command(&release, "0.2.0").arg("--with-experiment"), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         stderr(&output).contains("no Eval suite touched"),
@@ -253,13 +251,15 @@ fn native_with_experiment_uses_the_engine_without_cargo_on_the_launch_directory(
 
 #[test]
 fn native_failed_unpublished_release_recuts_and_published_tags_never_move() {
-    for published in [false, true] {
+    // A draft GitHub Release is unpublished: its tag may still be recut.
+    for (published, draft) in [(false, false), (false, true), (true, false)] {
         let release = Release::new();
         release.ci_reports(GREEN);
         let mut failed = failed_release();
         failed["published"] = json!(published);
+        failed["draft"] = json!(draft);
         release.release_workflow(failed);
-        let output = command(&release, "0.2.0").output().unwrap();
+        let output = with_input(&mut command(&release, "0.2.0"), "");
         assert!(!output.status.success(), "{}", stderr(&output));
         let old = release.origin_tag("v0.2.0").unwrap();
         release.merge_pr("newer", "New content after failed workflow", "");
@@ -267,7 +267,7 @@ fn native_failed_unpublished_release_recuts_and_published_tags_never_move() {
         release.main_ci("completed", "success");
         release.release_workflow(json!({}));
         release.ci_reports(GREEN);
-        let output = command(&release, "0.2.0").output().unwrap();
+        let output = with_input(&mut command(&release, "0.2.0"), "");
         assert!(output.status.success(), "{}", stderr(&output));
         let head = release.origin_tag("v0.2.0").unwrap();
         if published {
@@ -285,14 +285,14 @@ fn native_recovery_honors_a_higher_requested_bump() {
     let release = Release::new();
     release.ci_reports(GREEN);
     release.release_workflow(failed_release());
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(!output.status.success(), "{}", stderr(&output));
     release.merge_pr("newer", "New content for recut", "");
     let base = release.origin(&["rev-parse", "main"]);
     release.main_ci("completed", "success");
     release.release_workflow(json!({}));
     release.ci_reports(GREEN);
-    let output = command(&release, "").arg("--major").output().unwrap();
+    let output = with_input(command(&release, "").arg("--major"), "");
     assert!(output.status.success(), "{}", stderr(&output));
     let head = release.origin_tag("v1.0.0").unwrap();
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
@@ -306,10 +306,10 @@ fn native_publication_outage_skips_a_pass_and_refuses_direct_recovery() {
     release.push_bump("0.2.0");
     release.gh(&["fake", "fails", "release view"]);
     let before = release.origin_refs();
-    let output = command(&release, "").output().unwrap();
+    let output = with_input(&mut command(&release, ""), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(output.stderr.is_empty(), "{}", stderr(&output));
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(!output.status.success());
     assert!(
         stderr(&output).contains("cannot verify GitHub Release publication"),
@@ -366,7 +366,7 @@ fn native_conflict_runs_one_in_process_fix_and_revalidates_the_repaired_tree() {
     release.agent_runs(&format!(
         "git fetch origin prepared-repair\ngit reset --hard {repaired}\ngit push origin HEAD:release-0.2.0\ngh fake pr release-0.2.0 mergeable '\"MERGEABLE\"'\ngh fake checks {repaired} '{GREEN}'\n"
     ));
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
     assert_eq!(
@@ -390,7 +390,7 @@ fn native_failed_fix_leaves_a_draft_and_no_tag_then_a_pass_skips_it() {
     release.open_bump_pr("0.2.0");
     release.ci_reports(RED);
     release.agent_runs("exit 1");
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(!output.status.success(), "{}", stderr(&output));
     assert!(
         stderr(&output).contains("targeted Fix run"),
@@ -399,7 +399,7 @@ fn native_failed_fix_leaves_a_draft_and_no_tag_then_a_pass_skips_it() {
     );
     assert!(release.origin_tag("v0.2.0").is_none());
     assert_eq!(release.pr("release-0.2.0")["isDraft"], true);
-    let output = command(&release, "").output().unwrap();
+    let output = with_input(&mut command(&release, ""), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(output.stderr.is_empty(), "{}", stderr(&output));
 }
@@ -409,7 +409,7 @@ fn release_pass_skips_non_shipped_changes_quietly_and_records_each_firing() {
     let release = Release::new();
     let before = release.origin_refs();
     for _ in 0..2 {
-        let output = command(&release, "").output().unwrap();
+        let output = with_input(&mut command(&release, ""), "");
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(output.stdout.is_empty(), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
@@ -443,7 +443,7 @@ fn release_version_and_bump_flags_are_mutually_exclusive_before_startup() {
     ] {
         let release = Release::new();
         let mut run = command(&release, "");
-        let output = run.args(arguments).output().unwrap();
+        let output = with_input(run.args(arguments), "");
         assert!(!output.status.success());
         assert!(
             stderr(&output).contains("mutually exclusive"),
@@ -506,7 +506,7 @@ fn release_pass_admission_gates_skip_quietly_before_any_cut() {
         };
         let before = release.origin_refs();
         for _ in 0..2 {
-            let output = run.output().unwrap();
+            let output = with_input(&mut run, "");
             assert!(output.status.success(), "{gate}: {}", stderr(&output));
             assert!(
                 output.stdout.is_empty() && output.stderr.is_empty(),
@@ -544,7 +544,7 @@ fn release_pass_nothing_changed_and_red_shipped_ci_are_quiet_skips() {
             "main push CI (ci.yml)"
         };
         let before = release.origin_refs();
-        let output = run.output().unwrap();
+        let output = with_input(&mut run, "");
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(
             output.stdout.is_empty() && output.stderr.is_empty(),
@@ -577,7 +577,7 @@ fn release_pass_selects_older_green_shipped_content_or_waits_for_pending_ci() {
         if !older_green {
             release.main_ci_on(&green, "completed", "failure", 0);
         }
-        let output = command(&release, "").arg("--patch").output().unwrap();
+        let output = with_input(command(&release, "").arg("--patch"), "");
         assert!(output.status.success(), "{}", stderr(&output));
         let head = release.pr_head("release-0.1.1");
         assert_eq!(
@@ -626,6 +626,10 @@ fn release_pass_reports_pending_main_ci_before_it_finishes() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    // A waiting Pass is live work: in Working, and reachable by Stop.
+    let live = record(&release);
+    assert!(live["outcome"].is_null(), "{live}");
+    assert_eq!(inbox(&release)["commands"][0]["group"], "working");
     release.main_ci("completed", "success");
     let deadline = Instant::now() + support::WAIT_BOUND;
     loop {
@@ -636,6 +640,65 @@ fn release_pass_reports_pending_main_ci_before_it_finishes() {
         assert!(Instant::now() < deadline, "Release Pass did not finish");
         std::thread::sleep(Duration::from_millis(20));
     }
+    assert_eq!(record(&release)["outcome"], "merged");
+}
+
+#[test]
+fn a_release_pass_that_waited_for_main_ci_records_its_later_skip() {
+    use std::time::{Duration, Instant};
+    let release = Release::new();
+    shipped(&release);
+    release.main_ci_on(
+        &release.origin(&["rev-parse", "main"]),
+        "completed",
+        "failure",
+        100000,
+    );
+    let mut run = command(&release, "");
+    run.arg("--patch");
+    let path = release.root().join("pending-main-output");
+    let output = fs::File::create(&path).unwrap();
+    run.stdout(output.try_clone().unwrap()).stderr(output);
+    let owned = support::child_lifetime::OwnedRuns::new();
+    let mut child = owned.spawn(&mut run);
+    // This covers binary startup, isolated Git preparation and the first CI read.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !fs::read_to_string(&path)
+        .unwrap()
+        .contains("waiting for main push CI")
+    {
+        assert!(
+            child.try_wait().is_none(),
+            "{}",
+            fs::read_to_string(&path).unwrap()
+        );
+        assert!(Instant::now() < deadline, "main CI wait never began");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    release.main_ci("completed", "failure");
+    let deadline = Instant::now() + support::WAIT_BOUND;
+    loop {
+        if let Some(status) = child.try_wait() {
+            assert!(status.success(), "{}", fs::read_to_string(&path).unwrap());
+            break;
+        }
+        assert!(Instant::now() < deadline, "Release Pass did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let ended = record(&release);
+    assert_eq!(ended["outcome"], "skipped", "{ended}");
+    assert!(
+        ended["cause"]
+            .as_str()
+            .is_some_and(|cause| cause.contains("main push CI")),
+        "{ended}"
+    );
+    assert_ne!(inbox(&release)["commands"][0]["group"], "working");
+    assert!(
+        release
+            .origin(&["for-each-ref", "refs/heads/release-*"])
+            .is_empty()
+    );
 }
 
 #[test]
@@ -655,6 +718,9 @@ fn release_pass_filters_shipped_sources_assets_skills_and_pipeline_paths() {
         ("site/index.html", false),
         (".agents/skills/notes/SKILL.md", false),
         ("tests/release.rs", false),
+        // The Day shift's ruleset wizard and the workflow generator ship nothing.
+        ("scripts/setup-release-tags.sh", false),
+        ("scripts/generate-release.py", false),
     ] {
         let release = Release::new();
         let contributor = release.contributor();
@@ -666,7 +732,7 @@ fn release_pass_filters_shipped_sources_assets_skills_and_pipeline_paths() {
         git(&contributor, &["push", "-q", "origin", "HEAD:main"]);
         release.main_ci("completed", "success");
         release.ci_reports(GREEN);
-        let output = command(&release, "").arg("--patch").output().unwrap();
+        let output = with_input(command(&release, "").arg("--patch"), "");
         assert!(output.status.success(), "{path}: {}", stderr(&output));
         assert_eq!(
             release.origin_tag("v0.1.1").is_some(),
@@ -765,10 +831,10 @@ fn release_pass_selects_minor_or_patch_and_summary_in_one_sandboxed_session() {
             &json!({"bump":choice,"summary":"Automatic summary (#2)."}).to_string(),
             true,
         );
-        let output = command(&release, "")
-            .env("HOST_RELEASE_SECRET", "stay outside")
-            .output()
-            .unwrap();
+        let output = with_input(
+            command(&release, "").env("HOST_RELEASE_SECRET", "stay outside"),
+            "",
+        );
         assert!(output.status.success(), "{}", stderr(&output));
         let pr = release.pr(&format!("release-{version}"));
         assert!(
@@ -821,7 +887,7 @@ fn release_pass_automatic_selection_never_chooses_major_and_falls_back_once() {
         } else {
             release.summary_says(" ");
         }
-        let output = command(&release, "").output().unwrap();
+        let output = with_input(&mut command(&release, ""), "");
         assert!(output.status.success(), "{}", stderr(&output));
         let pr = release.pr("release-0.1.1");
         let body = pr["body"].as_str().unwrap();
@@ -851,7 +917,7 @@ fn release_pass_pinned_bumps_write_only_a_summary() {
         let release = Release::new();
         shipped(&release);
         sandbox_summary(&release);
-        let output = command(&release, "").arg(flag).output().unwrap();
+        let output = with_input(command(&release, "").arg(flag), "");
         assert!(output.status.success(), "{}", stderr(&output));
         let pr = release.pr(&format!("release-{version}"));
         assert!(
@@ -865,11 +931,11 @@ fn release_pass_pinned_bumps_write_only_a_summary() {
 }
 
 #[test]
-fn review_blank_minor_summary_falls_back_to_patch() {
+fn a_blank_minor_summary_falls_back_to_patch() {
     let release = Release::new();
     shipped(&release);
     sandbox_reply(&release, r#"{"bump":"minor","summary":" "}"#, true);
-    let output = command(&release, "").output().unwrap();
+    let output = with_input(&mut command(&release, ""), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         release.origin_tag("v0.1.1").is_some(),
@@ -895,10 +961,7 @@ fn native_release_publishes_green_content_without_reading_the_launch_tree() {
     fs::write(release.maintainer().join("untracked.txt"), "leave alone\n").unwrap();
     let before = git(&release.maintainer(), &["status", "--porcelain"]);
     let main = release.origin(&["rev-parse", "main"]);
-    let output = run
-        .env("HOST_RELEASE_SECRET", "must stay outside")
-        .output()
-        .unwrap();
+    let output = with_input(run.env("HOST_RELEASE_SECRET", "must stay outside"), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         git(&release.maintainer(), &["status", "--porcelain"]),
@@ -987,7 +1050,7 @@ fn native_release_summary_failure_keeps_generated_notes_outside_markers() {
     let release = Release::new();
     release.summary_says(" ");
     release.ci_reports(GREEN);
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("release summary unavailable"));
     let pr = release.pr("release-0.2.0");
@@ -1013,10 +1076,10 @@ fn native_release_summary_failure_keeps_generated_notes_outside_markers() {
 fn native_release_refuses_factory_sessions_before_any_push() {
     let release = Release::new();
     let before = release.origin_refs();
-    let output = command(&release, "0.2.0")
-        .env("THIRDSHIFT_SESSION", "test-session")
-        .output()
-        .unwrap();
+    let output = with_input(
+        command(&release, "0.2.0").env("THIRDSHIFT_SESSION", "test-session"),
+        "",
+    );
     assert!(!output.status.success(), "{output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("inside a factory Session"),
@@ -1030,7 +1093,7 @@ fn native_release_rejects_versions_and_wrong_origins_before_any_push() {
     for version in ["0.1.0", "0.0.9", "01.2.3", "1.2", "v1.2.3", "1.2.3-rc.1"] {
         let release = Release::new();
         let before = release.origin_refs();
-        let output = command(&release, version).output().unwrap();
+        let output = with_input(&mut command(&release, version), "");
         assert!(!output.status.success(), "{version}: {output:?}");
         assert_eq!(release.origin_refs(), before, "{version}");
     }
@@ -1045,7 +1108,7 @@ fn native_release_rejects_versions_and_wrong_origins_before_any_push() {
         ],
     );
     let before = release.origin_refs();
-    let output = run.output().unwrap();
+    let output = with_input(&mut run, "");
     assert!(!output.status.success(), "{output:?}");
     assert!(
         stderr(&output).contains("release requires origin"),
@@ -1060,10 +1123,7 @@ fn native_release_parent_record_and_competing_locks_refuse_cleanly() {
     for environment in ["THIRDSHIFT_SESSION", "THIRDSHIFT_PARENT_RECORD"] {
         let release = Release::new();
         let before = release.origin_refs();
-        let output = command(&release, "0.2.0")
-            .env(environment, "held")
-            .output()
-            .unwrap();
+        let output = with_input(command(&release, "0.2.0").env(environment, "held"), "");
         assert!(!output.status.success());
         assert!(stderr(&output).contains("inside a factory Session"));
         assert_eq!(release.origin_refs(), before);
@@ -1073,7 +1133,7 @@ fn native_release_parent_record_and_competing_locks_refuse_cleanly() {
     let lock = fs::File::create(release.root().join("home/.thirdshift/release.lock")).unwrap();
     lock.lock().unwrap();
     let before = release.origin_refs();
-    let output = run.output().unwrap();
+    let output = with_input(&mut run, "");
     assert!(!output.status.success());
     assert!(
         stderr(&output).contains("machine-local release lock"),
@@ -1085,7 +1145,7 @@ fn native_release_parent_record_and_competing_locks_refuse_cleanly() {
     let token = release.origin(&["rev-parse", "main"]);
     release.origin(&["update-ref", "refs/thirdshift/reservations/release", &token]);
     let before = release.origin_refs();
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(!output.status.success());
     assert!(
         stderr(&output).contains("origin release reservation"),
@@ -1112,7 +1172,7 @@ fn native_release_selects_older_green_main_and_waits_for_pending_main() {
             release.main_ci_on(&green, "completed", "failure", 0);
         }
         release.ci_reports(GREEN);
-        let output = command(&release, "0.2.0").output().unwrap();
+        let output = with_input(&mut command(&release, "0.2.0"), "");
         assert!(output.status.success(), "{}", stderr(&output));
         let expected = if older_green { green } else { tip };
         let head = release.pr_head("release-0.2.0");
@@ -1132,7 +1192,7 @@ fn native_release_all_red_main_fails_without_publishing_a_branch_or_tag() {
     let release = Release::new();
     release.main_ci("completed", "failure");
     let before = release.origin_refs();
-    let output = command(&release, "0.2.0").output().unwrap();
+    let output = with_input(&mut command(&release, "0.2.0"), "");
     assert!(!output.status.success(), "{output:?}");
     assert!(
         stderr(&output).contains("no candidate main commit has successful push CI"),
@@ -1153,12 +1213,13 @@ fn native_release_email_unless_merged_suppresses_success_and_emails_unmerged_pub
         }
         let resend =
             support::resend::ResendStandIn::replying(200, r#"{"id":"release-notification"}"#);
-        let output = command(&release, "0.2.0")
-            .args(["--email-unless-merged", "maintainer@example.test"])
-            .env("RESEND_API_KEY", "re_test_release")
-            .env("THIRDSHIFT_RESEND_URL", resend.url())
-            .output()
-            .unwrap();
+        let output = with_input(
+            command(&release, "0.2.0")
+                .args(["--email-unless-merged", "maintainer@example.test"])
+                .env("RESEND_API_KEY", "re_test_release")
+                .env("THIRDSHIFT_RESEND_URL", resend.url()),
+            "",
+        );
         assert_eq!(output.status.success(), merge, "{}", stderr(&output));
         assert_eq!(resend.requests().len(), if merge { 0 } else { 1 });
         assert_eq!(
@@ -1237,7 +1298,15 @@ fn native_release_stop_releases_locks_reservation_and_live_label() {
         .output()
         .unwrap();
     assert!(stopped.status.success(), "{}", stderr(&stopped));
-    assert!(!child.wait().success());
+    let deadline = Instant::now() + support::WAIT_BOUND;
+    let status = loop {
+        if let Some(status) = child.try_wait() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "stopped Release run did not end");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(!status.success());
     assert!(
         release
             .origin(&["for-each-ref", "refs/thirdshift/reservations/release"])
@@ -1267,7 +1336,7 @@ fn native_release_refuses_a_blocking_review_without_a_merge_attempt() {
             "fake", "on-ci-read", "1",
             &format!("gh fake checks \"$FAKE_CI_SHA\" '{GREEN}'\ngh fake pr release-0.2.0 reviewDecision '\"{decision}\"'"),
         ]);
-        let output = command(&release, "0.2.0").output().unwrap();
+        let output = with_input(&mut command(&release, "0.2.0"), "");
         assert!(!output.status.success(), "{decision}: {}", stderr(&output));
         assert_eq!(
             release.merge_calls().len(),
@@ -1294,7 +1363,7 @@ fn native_release_does_not_execute_launch_checkout_hooks() {
         &release.maintainer(),
         &["config", "core.hooksPath", hooks.to_str().unwrap()],
     );
-    let output = run.output().unwrap();
+    let output = with_input(&mut run, "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         !marker.exists(),
@@ -1345,10 +1414,34 @@ fn native_release_does_not_execute_launch_repository_filters() {
         !marker.exists(),
         "fixture setup executed a filter or fsmonitor"
     );
-    let output = run.output().unwrap();
+    let output = with_input(&mut run, "");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         !marker.exists(),
         "Release run executed a filter or fsmonitor from the Launch directory repository"
     );
+}
+
+#[test]
+fn a_skipped_release_pass_sends_no_run_notification_even_with_email() {
+    let release = Release::new();
+    shipped(&release);
+    release.main_ci("completed", "failure");
+    let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"release-skip"}"#);
+    let output = with_input(
+        command(&release, "")
+            .args(["--email", "maintainer@example.test"])
+            .env("RESEND_API_KEY", "re_test_release")
+            .env("THIRDSHIFT_RESEND_URL", resend.url()),
+        "",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let activity = fs::read_to_string(
+        release
+            .root()
+            .join("home/.thirdshift/logs/JacobStephens2/thirdshift/activity.log"),
+    )
+    .unwrap();
+    assert!(activity.contains("Release run skipped:"), "{activity}");
+    assert!(resend.requests().is_empty());
 }

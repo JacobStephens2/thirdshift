@@ -68,6 +68,16 @@ pub fn grace_period() -> Duration {
     millis_from_env("THIRDSHIFT_CI_GRACE_MS").unwrap_or(Duration::from_secs(60))
 }
 
+/// A Release run's grace for its bump PR's workflows to appear, for GitHub to
+/// settle mergeability, and for the release workflow to start after the tag.
+const RELEASE_GRACE: Duration = Duration::from_secs(300);
+
+/// [`grace_period`] for a Release run's waits: five minutes, under the same
+/// `THIRDSHIFT_CI_GRACE_MS` override.
+pub fn release_grace_period() -> Duration {
+    millis_from_env("THIRDSHIFT_CI_GRACE_MS").unwrap_or(RELEASE_GRACE)
+}
+
 /// A GitHub wait's cadence, reset whenever its observed state changes.
 /// Ten seconds for the first minute, thirty through minute four, then sixty.
 /// The existing test override scales both the intervals and their age thresholds.
@@ -138,6 +148,11 @@ pub(crate) fn sleep(duration: Duration) -> Result<()> {
 mod tests {
     use super::*;
     use crate::github::{Check, Conclusion};
+
+    #[test]
+    fn release_bump_waits_allow_five_minutes_for_github_to_report() {
+        assert_eq!(RELEASE_GRACE, Duration::from_secs(300));
+    }
 
     #[test]
     fn unchanged_github_waits_grow_to_a_sixty_second_ceiling() {

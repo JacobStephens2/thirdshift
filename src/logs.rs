@@ -427,6 +427,17 @@ pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
     record().custom_process()
 }
 
+/// Keep a live Command record while a Pass waits before it starts work, as
+/// a Release run Pass does for pending main CI: it shows in Working and Stop
+/// can reach it. [`started`] or [`skipped`] ends it.
+pub(crate) fn waiting() {
+    if record().needs_preflight_repo() {
+        let repo = crate::launch::repo().ok();
+        record().preflight_repo(repo);
+    }
+    record().waiting();
+}
+
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
 /// Activity log line of its kind there already says so. Nothing is shown:
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
@@ -486,7 +497,7 @@ pub(crate) fn waiting_for(commands: &[String]) {
 
 /// Temporarily overlay the active stage without resetting its timing.
 pub(crate) fn quota_wait(until: Option<&str>) {
-    if until.is_some() && record().needs_quota_repo() {
+    if until.is_some() && record().needs_preflight_repo() {
         let repo = crate::launch::repo().ok();
         record().preflight_repo(repo);
     }

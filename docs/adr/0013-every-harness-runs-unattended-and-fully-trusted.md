@@ -16,6 +16,8 @@ The worktree is the only boundary. This generalises the Codex part of ADR 0012. 
 
 Exception (#1711): a Triage run with `--read-machine`, or in a repository the User config's `triage.read_machine` names, wraps the ordinary Harness invocation in a Bubblewrap filesystem sandbox. It can read the host filesystem, with only its throwaway worktree writable. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. A sandbox startup failure fails the Command; there is no unsandboxed fallback. Without either, Triage keeps its ordinary launch and worktree-only prompt. Harness approval and trust flags stay fixed.
 
+Exception (#653): a Release run's summary and bump-selection Session reads untrusted pull-request text, so it runs tool-less inside the fresh-home Bubblewrap sandbox, with no host filesystem read access: only the Harness binary and credentials and an empty temporary directory are bound, and traffic goes through the provider-allowlisting proxy. Its Session trace is recorded under the Release run. A sandbox startup failure, as on stock Ubuntu, is a warning: the release continues with a `patch` bump when the bump was automatic, and GitHub's generated notes outside the empty summary markers.
+
 ## Considered Options
 
 - **Each CLI's own sandbox.** Rejected. On stock Ubuntu (`kernel.apparmor_restrict_unprivileged_userns = 1`), bubblewrap can't start, so every sandboxed command fails under Codex and Muse. The sandboxes of agy and Grok make the main checkout's `.git` read-only, which blocks commits. A sandboxed mode for machines where it works would be a separate issue.

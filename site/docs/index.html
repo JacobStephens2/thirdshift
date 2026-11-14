@@ -496,8 +496,8 @@ thirdshift update --machine server
 machines are refused. Omitting <code>--machine</code> selects local work. A configured
 Fleet name always selects its owner, even when the name matches the local
 hostname; local choices then say <code>(local)</code>. An unpaired local hostname also
-selects local work. <code>/api/v1/start-options</code> requires <code>run</code> and returns known
-repositories and startable Passes; <code>whoami</code> accepts any authenticated scope so
+selects local work. <code>/api/v1/start-options</code> requires <code>run</code> or <code>admin</code> and
+returns known repositories and the Passes those scopes may start; <code>whoami</code> accepts any authenticated scope so
 <code>run</code>-only and <code>admin</code>-only tokens can pair without general read access.</p>
 <p>Open a remote row to see its Command details in the same Console, including
 child Ticket runs and stages. Waterfall, Full Command log and Session trace
@@ -1099,7 +1099,7 @@ which also starts a Spec run when the issue has Tickets. Every request names
 </tr>
 <tr>
 <td><code>release</code></td>
-<td>Requires <code>admin</code> scope; optional <code>version</code> (<code>X.Y.Z</code>) or <code>bump</code> (<code>major</code>, <code>minor</code>, <code>patch</code>), mutually exclusive; omit both for automatic minor/patch selection; optional <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>; repository must be <code>JacobStephens2/thirdshift</code></td>
+<td>Requires <code>admin</code> scope; optional <code>version</code> (<code>X.Y.Z</code>) or <code>bump</code> (<code>major</code>, <code>minor</code>, <code>patch</code>), mutually exclusive; omit both for automatic minor/patch selection; optional <code>with_experiment</code> boolean; optional <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>; repository must be <code>JacobStephens2/thirdshift</code></td>
 </tr>
 </tbody></table>
 <p><code>POST /api/v1/start</code> is an alias of this path. Release starts require <code>admin</code>
@@ -4070,13 +4070,19 @@ error names <code>gh pr ready &lt;url&gt;</code>; the GitHub Release stays publi
 start one in-process targeted Fix run with <code>--no-merge --no-base-fix</code>. Every
 adopted head must still have the exact tree of its main merge-base plus the Cargo
 version bump. A draft, unresolved failure or conflict stops before tagging.
-When the content base changes, requested Experiments and release notes refresh.</p>
+When the content base changes, requested Experiments and release notes refresh.
+Bump PR workflows have five minutes to appear, as does GitHub&#39;s mergeability
+report after checks pass and the release workflow after the tag push; queued
+and running checks keep waiting.</p>
 <p>Experiments are off by default. <code>--with-experiment</code> pins the selected content
 commit across interruptions and runs or resumes the release Experiment from the
 running binary, on touched Eval suites against the last published release tag.
 Pending rechecks and leak decisions wait with progress lines. A failed or
-inconclusive Verdict requires <code>release anyway? [y/N]</code> on a terminal; unattended
-runs fail. Console Start&#39;s <strong>Run release Experiment</strong> checkbox and the admin-only
+inconclusive Verdict prints the Experiment&#39;s per-suite results, Advisory suites
+included, on stderr, then requires <code>release anyway? [y/N]</code> on a terminal;
+unattended runs fail. A Release Pass without <code>--with-experiment</code> never
+publishes a pinned version: it skips, naming
+<code>thirdshift release &lt;version&gt; --with-experiment</code> to resume it. Console Start&#39;s <strong>Run release Experiment</strong> checkbox and the admin-only
 start API&#39;s <code>with_experiment</code> boolean select the same behavior.</p>
 <p><code>--review</code> requires terminal stdin and is checked before Setup or network work.
 It prints the summary and offers accept, <code>$EDITOR</code> edit or cancel. It is a
@@ -4092,14 +4098,17 @@ embedded Factory skills or Processes, Cargo manifest/lockfile, dist or Rust
 toolchain configuration, <code>README.md</code>, <code>LICENSE</code>, release/publish workflows or
 release scripts. Documentation, website, Day shift agent skills and tests alone
 do not trigger a release. The newest eligible green commit is selected
-immediately, even when a newer candidate is still waiting for CI.</p>
+immediately, even when a newer candidate is still waiting for CI. A Pass that
+waits for pending main push CI appears in Working and <code>thirdshift stop</code> reaches
+it; if every candidate then ends non-green, its record ends <code>skipped</code>.</p>
 <p>Without a bump flag, the same fresh-home sandboxed, traced Session chooses
 <code>minor</code> or <code>patch</code> and writes the summary from merged pull requests and the two
 candidate versions. New CLI commands/flags, Console pages/actions, config keys
 and user-visible contract changes call for minor; fixes and internal refinements
 call for patch. Automatic selection never chooses major: invalid output or a
 failed Session falls back to patch, using generated notes when the summary is
-unusable. <code>--major</code>, <code>--minor</code> and <code>--patch</code> pin the bump and ask only for a summary.</p>
+unusable. Those notes go outside the bump PR&#39;s empty summary markers, so the
+GitHub Release lists them once. <code>--major</code>, <code>--minor</code> and <code>--patch</code> pin the bump and ask only for a summary.</p>
 <p>Use <code>--harness</code>, <code>--model</code>, <code>--effort</code>, <code>--email</code>, <code>--email-unless-merged</code> or
 <code>--no-email</code> as on other Commands. A machine-local release lock and atomic
 origin reservation serialize releases independently of the Command limit;

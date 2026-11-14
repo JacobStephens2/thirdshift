@@ -161,84 +161,83 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
         };
         let github = GitHub::new();
         let mut automatic_summary = None;
-        let mut cut =
-            match recovery::discover(git, &launch, &github, request.version, request.bump)? {
-                recovery::Discovery::Blocked(reason) => {
-                    if pass {
-                        return skipped(&repo, reason);
-                    }
-                    anyhow::bail!("{reason}");
+        let mut cut = match recovery::discover(git, &launch, &github, &request)? {
+            recovery::Discovery::Blocked(reason) => {
+                if pass {
+                    return skipped(&repo, reason);
                 }
-                recovery::Discovery::Resume(cut) => {
-                    if pass {
-                        logs::started(logs::Work::ReleaseRun(&repo), choice);
-                    }
-                    *cut
+                anyhow::bail!("{reason}");
+            }
+            recovery::Discovery::Resume(cut) => {
+                if pass {
+                    logs::started(logs::Work::ReleaseRun(&repo), choice);
                 }
-                recovery::Discovery::Fresh { previous } => {
-                    if let (Some(wanted), Some(version)) = (&explicit, request.version) {
-                        validate_version(git, wanted)?;
-                        refuse_tag_on_origin(git, version)?;
-                    }
-                    let (base, _) = match selection::candidate(
-                        git,
-                        &github,
-                        explicit.as_ref(),
-                        previous.as_deref(),
-                    )? {
-                        selection::Candidate::Ready { base, previous } => (base, previous),
-                        selection::Candidate::Skipped(reason) => return skipped(&repo, reason),
-                    };
-                    if pass {
-                        logs::started(logs::Work::ReleaseRun(&repo), choice);
-                    }
-                    let version = if let Some(version) = request.version {
-                        version.to_owned()
+                *cut
+            }
+            recovery::Discovery::Fresh { previous } => {
+                if let (Some(wanted), Some(version)) = (&explicit, request.version) {
+                    validate_version(git, wanted)?;
+                    refuse_tag_on_origin(git, version)?;
+                }
+                let base = match selection::candidate(
+                    git,
+                    &github,
+                    explicit.as_ref(),
+                    previous.as_deref(),
+                )? {
+                    selection::Candidate::Ready { base } => base,
+                    selection::Candidate::Skipped(reason) => return skipped(&repo, reason),
+                };
+                if pass {
+                    logs::started(logs::Work::ReleaseRun(&repo), choice);
+                }
+                let version = if let Some(version) = request.version {
+                    version.to_owned()
+                } else {
+                    let current = main_version(git)?;
+                    if let Some(bump) = request.bump {
+                        current.bumped(bump)?
                     } else {
-                        let current = main_version(git)?;
-                        if let Some(bump) = request.bump {
-                            current.bumped(bump)?
+                        let minor = current.bumped(Bump::Minor)?;
+                        let patch = current.bumped(Bump::Patch)?;
+                        let input = summary::selection_input(
+                            git,
+                            &github,
+                            &base,
+                            previous.as_deref(),
+                            &minor,
+                            &patch,
+                        )?;
+                        let selected = summary::select(choice, &repo, &input, &mut trace)?;
+                        automatic_summary = Some(selected.summary);
+                        if selected.bump == Bump::Minor {
+                            minor
                         } else {
-                            let minor = current.bumped(Bump::Minor)?;
-                            let patch = current.bumped(Bump::Patch)?;
-                            let input = summary::selection_input(
-                                git,
-                                &github,
-                                &base,
-                                previous.as_deref(),
-                                &minor,
-                                &patch,
-                            )?;
-                            let selected = summary::select(choice, &repo, &input, &mut trace)?;
-                            automatic_summary = Some(selected.summary);
-                            if selected.bump == Bump::Minor {
-                                minor
-                            } else {
-                                patch
-                            }
+                            patch
                         }
-                    };
-                    validate_version(git, &Version::parse(&version)?)?;
-                    refuse_tag_on_origin(git, &version)?;
-                    ensure!(
-                        git_run(&launch, &["tag", "--list", &format!("v{version}")])?.is_empty(),
-                        "v{version} already exists locally"
-                    );
-                    recovery::Cut {
-                        version,
-                        base,
-                        previous,
-                        head: String::new(),
-                        pr: None,
-                        tagged: None,
-                        published: false,
-                        recut: false,
-                        supersedes: None,
-                        expected_branch: None,
-                        expected_tag: None,
                     }
+                };
+                validate_version(git, &Version::parse(&version)?)?;
+                refuse_tag_on_origin(git, &version)?;
+                ensure!(
+                    git_run(&launch, &["tag", "--list", &format!("v{version}")])?.is_empty(),
+                    "v{version} already exists locally"
+                );
+                recovery::Cut {
+                    version,
+                    base,
+                    previous,
+                    head: String::new(),
+                    pr: None,
+                    tagged: None,
+                    published: false,
+                    recut: false,
+                    supersedes: None,
+                    expected_branch: None,
+                    expected_tag: None,
                 }
-            };
+            }
+        };
         if request.with_experiment && !cut.published {
             let pin = format!("refs/thirdshift/release-candidates/{}", cut.version);
             git_run(&launch, &["fetch", "--quiet", "origin", &cut.base])?;
@@ -418,7 +417,7 @@ fn wait_for_release(github: &GitHub, head: &str) -> Result<()> {
             }
         } else {
             ensure!(
-                started.elapsed() < poll::grace_period(),
+                started.elapsed() < poll::release_grace_period(),
                 "release workflow did not appear; tag is left for the Day shift"
             );
         }

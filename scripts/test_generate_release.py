@@ -23,7 +23,8 @@ class GenerateRelease(unittest.TestCase):
             (root / "dist-workspace.toml").write_text('[dist]\ncargo-dist-version = "0.33.0"\nallow-dirty = ["ci"]\n')
             upstream = (
                 "name: Release\non:\n  pull_request:\n  push:\n    tags: ['v*']\n"
-                "\njobs:\n  plan:\n    runs-on: ubuntu-24.04\n"
+                "\njobs:\n  # Run 'dist plan' (or host) to determine what tasks we need to do\n"
+                "  plan:\n    runs-on: ubuntu-24.04\n"
                 "  build-local-artifacts:\n    runs-on: ubuntu-24.04\n"
                 "    steps:\n      - name: Install dependencies\n        run: echo install\n"
                 "  build-global-artifacts:\n    runs-on: ubuntu-24.04\n"
@@ -67,6 +68,12 @@ class GenerateRelease(unittest.TestCase):
             self.assertIn("python3 scripts/release-tag-guard.py", expected)
             self.assertIn("fetch-depth: 0", expected)
             self.assertIn("  plan:\n    needs: [release-tag-guard]\n", expected)
+            # The guard goes above plan's comment, which describes plan.
+            self.assertIn(
+                "\njobs:\n  release-tag-guard:\n", expected)
+            self.assertIn(
+                "\n  # Run 'dist plan' (or host) to determine what tasks we need to do\n"
+                "  plan:\n", expected)
             self.assertIn(
                 "  plan:\n    needs: [release-tag-guard]\n    permissions:\n      \"actions\": \"write\"\n"
                 "      \"contents\": \"read\"\n    timeout-minutes: 5\n"
