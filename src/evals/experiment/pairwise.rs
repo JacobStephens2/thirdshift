@@ -704,47 +704,91 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
 
 /// Retained diffs and check diagnostics can name an outside workflow even
 /// though its Setup and prepared metadata are confined to the reveal.
-fn runner_identities(description: &super::Description) -> Vec<String> {
-    let mut identities = Vec::new();
+#[derive(Default)]
+struct RunnerIdentities {
+    attribution: Vec<String>,
+    role_metadata: Vec<String>,
+}
+
+fn runner_identities(description: &super::Description) -> RunnerIdentities {
+    let mut identities = RunnerIdentities::default();
     for arm in [Arm::Baseline, Arm::Candidate] {
         let setup = description.setup(arm);
-        identities.extend(setup.runner.iter().chain(&setup.runner_digest).cloned());
+        identities
+            .attribution
+            .extend(setup.runner.iter().chain(&setup.runner_digest).cloned());
         if let Some(runner) = description.runner(arm) {
             for (role, choice) in &runner.manifest.roles {
-                identities.extend([role.clone(), choice.model.clone()]);
-                identities.extend(choice.effort.iter().cloned());
+                identities
+                    .role_metadata
+                    .extend([role.clone(), choice.model.clone()]);
+                identities
+                    .role_metadata
+                    .extend(choice.effort.iter().cloned());
             }
             for git in runner.provenance.values() {
-                identities.push(git.commit.clone());
-                identities.extend(git.origin.iter().cloned());
+                identities.attribution.push(git.commit.clone());
+                identities.attribution.extend(git.origin.iter().cloned());
             }
         }
     }
-    identities.retain(|value| !value.is_empty());
-    // Redact a full identity before any other identity that is its prefix.
-    identities.sort_by_key(|value| std::cmp::Reverse(value.len()));
-    identities.dedup();
+    for values in [&mut identities.attribution, &mut identities.role_metadata] {
+        values.retain(|value| !value.is_empty());
+        // Redact a full identity before any other identity that is its prefix.
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        values.dedup();
+    }
     identities
 }
 
-fn blind_runner_side(side: &mut pairs::Side, identities: &[String]) {
-    let blind = |text: &mut String| {
-        for identity in identities {
+fn blind_runner_side(side: &mut pairs::Side, identities: &RunnerIdentities) {
+    if identities.attribution.is_empty() {
+        return;
+    }
+    let blind = |text: &mut String, values: &[String]| {
+        for identity in values {
             *text = text.replace(identity, "[withheld]");
         }
     };
     for file in &mut side.diff {
-        blind(&mut file.path);
-        blind(&mut file.patch);
+        // A role or effort can also be an ordinary source identifier. Remove
+        // added attribution fields, preserving code such as highest_score.
+        file.patch = file
+            .patch
+            .lines()
+            .filter(|line| {
+                let Some(added) = line.strip_prefix('+').filter(|_| !line.starts_with("+++"))
+                else {
+                    return true;
+                };
+                let normalized = added
+                    .trim()
+                    .trim_start_matches(['#', '>', '-', ' '])
+                    .replace(['*', '_', '`'], "")
+                    .to_ascii_lowercase();
+                !["runner", "runner digest", "roles", "role"]
+                    .iter()
+                    .any(|key| {
+                        normalized
+                            .strip_prefix(key)
+                            .is_some_and(|rest| rest.trim_start().starts_with([':', '=']))
+                    })
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        blind(&mut file.path, &identities.attribution);
+        blind(&mut file.patch, &identities.attribution);
     }
     for file in &mut side.test_files {
-        blind(file);
+        blind(file, &identities.attribution);
     }
     for check in side.base.iter_mut().chain(&mut side.cross) {
         for argument in check.command.iter_mut().flatten() {
-            blind(argument);
+            blind(argument, &identities.attribution);
+            blind(argument, &identities.role_metadata);
         }
-        blind(&mut check.reason);
+        blind(&mut check.reason, &identities.attribution);
+        blind(&mut check.reason, &identities.role_metadata);
     }
 }
 

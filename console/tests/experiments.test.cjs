@@ -119,6 +119,35 @@ test('Custom runner identity in retained pair evidence stays blind', async t => 
   } finally { await context.close(); }
 });
 
+test('blinding runner roles and effort preserves ordinary source evidence', async t => {
+  const folder = await customRunner.save(home);
+  t.after(async () => {
+    await fixture.save(home, fixture.record());
+    for (const name of ['results', 'pairs']) await rm(join(folder, name), { recursive: true, force: true });
+  });
+  const path = join(folder, 'pairs', `${customRunner.pair}.json`);
+  const pair = JSON.parse(await readFile(path, 'utf8'));
+  const patches = ['+if score > high_watermark { return score; }\n', '+def highest_score(scores):\n+    return max(scores)\n'];
+  pair.baseline.diff[0].patch = patches[0];
+  pair.candidate.diff[0].patch = patches[1];
+  pair.baseline.diff[0].path = 'tests/test_highest.py';
+  pair.baseline.test_files = ['tests/test_highest.py'];
+  await writeFile(path, JSON.stringify(pair));
+  const value = customRunner.record();
+  value.prepared.baseline.runner.manifest.roles.test = { model: 'role-model', effort: 'high' };
+  await fixture.save(home, value);
+  const context = await browser.newContext();
+  try {
+    const response = await context.request.get(`${origin}/api/v1/experiments/${fixture.id}/pairs/${customRunner.pair}`);
+    assert.equal(response.status(), 200);
+    const page = await response.json();
+    const diffs = [page.a, page.b].flatMap(side => side.diff);
+    assert.deepEqual(diffs.map(diff => diff.patch).sort(), patches.sort());
+    assert.ok(diffs.some(diff => diff.path === 'tests/test_highest.py'));
+    assert.ok([page.a, page.b].some(side => side.test_files.includes('tests/test_highest.py')));
+  } finally { await context.close(); }
+});
+
 test('the Inbox names the Commands blocking a waiting Experiment', async t => {
   const folder = join(home, '.thirdshift/logs/acme/widgets/commands/experiment');
   await mkdir(folder, { recursive: true });
