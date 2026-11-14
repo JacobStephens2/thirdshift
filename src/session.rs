@@ -18,9 +18,11 @@ pub(crate) use crate::harness::claude::claude_args;
 #[cfg(test)]
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
 use crate::harness::interpretation::{Ended, SafeguardRefusal, SessionFailure};
-use crate::harness::{Adapter, Choice};
+use crate::harness::{Adapter, Choice, ChosenBy};
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
+use crate::plan_usage::Router;
+use crate::plan_usage::router::Picked;
 use crate::progress;
 use crate::prompt;
 use crate::skills;
@@ -51,6 +53,29 @@ pub enum Purpose {
     SecurityPublishing,
     /// A guidance review retains security checks without delegating auditors.
     SecurityReview,
+}
+
+impl Purpose {
+    /// A Security run's, Security fix publishing's or Security review's
+    /// session: it walks the Security routes, and ends incomplete with
+    /// killed work.
+    fn is_security(self) -> bool {
+        match self {
+            Self::Security | Self::SecurityPublishing | Self::SecurityReview => true,
+            Self::Ordinary | Self::CodeReview => false,
+        }
+    }
+
+    /// The launch policy of a session given `prompt`: the shared
+    /// review-report contract identifies code review sessions before
+    /// expansion.
+    fn of_prompt(prompt: &str) -> Self {
+        if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
+            Self::CodeReview
+        } else {
+            Self::Ordinary
+        }
+    }
 }
 
 /// Where Session traces go: beside the owning Command log in
@@ -232,6 +257,8 @@ impl<'a> Sessions<'a> {
         {
             return (Err(error), None);
         }
+        // A prepared sandbox binds its own Harness's files: its sessions
+        // stay on that Harness.
         let on_machine = OnMachine {
             worktree: worktree.to_path_buf(),
             harness: harness.clone(),
@@ -240,6 +267,7 @@ impl<'a> Sessions<'a> {
             security_review_default: None,
             recording: logs.recording().clone(),
             sandbox: Some(sandbox.clone()),
+            router: Router::pinned(),
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -268,14 +296,23 @@ impl<'a> Sessions<'a> {
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
+        let router = router(harness, security_review, security_review_default);
         let security_review =
             security_review.map(|choice| (choice.clone(), choice.harness.adapter()));
-        let linked = std::iter::once(adapter)
-            .chain(security_review.as_ref().map(|(_, adapter)| *adapter))
-            .try_for_each(|adapter| {
-                skills::link_into(worktree, adapter)?;
-                adapter.link_instruction_fallback(worktree)
-            });
+        // Every route's Factory skills, so a Step that switches Harnesses
+        // finds its own.
+        let mut adapters: Vec<&'static dyn Adapter> = vec![adapter];
+        adapters.extend(security_review.as_ref().map(|(_, adapter)| *adapter));
+        for routed in router.harnesses() {
+            let routed = routed.adapter();
+            if !adapters.iter().any(|linked| linked.name() == routed.name()) {
+                adapters.push(routed);
+            }
+        }
+        let linked = adapters.into_iter().try_for_each(|adapter| {
+            skills::link_into(worktree, adapter)?;
+            adapter.link_instruction_fallback(worktree)
+        });
         if let Err(error) = linked {
             return (Err(error), None);
         }
@@ -287,6 +324,7 @@ impl<'a> Sessions<'a> {
             security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
             sandbox: None,
+            router,
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -340,14 +378,7 @@ impl<'a> Sessions<'a> {
     /// succeeds, leaving the steps that follow to decide the outcome.
     /// Returns the final message while retaining the prompt's launch policy.
     pub fn run(&self, kind: Kind, prompt: &str) -> Result<Option<String>> {
-        // The shared review-report contract identifies code review sessions
-        // before expansion. Retain that policy even if report setup fails.
-        let purpose = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
-            Purpose::CodeReview
-        } else {
-            Purpose::Ordinary
-        };
-        self.run_to_final_message(purpose, kind, prompt)
+        self.run_implementation(kind, prompt, None)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
@@ -368,6 +399,39 @@ impl<'a> Sessions<'a> {
     /// The same session and Resume policy, retaining the Harness session ID
     /// for a Trial's result as well as its final message.
     pub fn run_to_end(&self, purpose: Purpose, kind: Kind, prompt: &str) -> Result<Ended> {
+        self.run_step(purpose, kind, prompt, None)
+    }
+
+    /// Run an implement session as [`Sessions::run`] does. When Plan usage
+    /// moves it to another route after work began, `continuation` is asked,
+    /// given whether the session made commits, for the prompt it starts
+    /// again with: the existing Continuation prompt, so no prompt says why.
+    /// The prompt's launch policy holds even if report setup fails.
+    pub fn run_implementation(
+        &self,
+        kind: Kind,
+        prompt: &str,
+        continuation: Option<ContinueWith<'_>>,
+    ) -> Result<Option<String>> {
+        self.run_step(Purpose::of_prompt(prompt), kind, prompt, continuation)
+            .map(|ended| ended.final_message)
+    }
+
+    /// One session Step: its session, and its Resume if it gets one. On a
+    /// Command routed by the User config's routes, the Step starts on its
+    /// first route that could take it now, and when a session stops on
+    /// structured Plan-usage evidence, starts again, as a fresh session, on
+    /// the next route it has not tried. A session that stopped after work
+    /// began has its uncommitted changes discarded first, its commits kept;
+    /// an implement session starts again on what `continuation` gives. A
+    /// cybersecurity safeguard refusal never routes.
+    fn run_step(
+        &self,
+        purpose: Purpose,
+        kind: Kind,
+        prompt: &str,
+        mut continuation: Option<ContinueWith<'_>>,
+    ) -> Result<Ended> {
         // Progress lines name the session by its kind's token.
         let label = kind.token();
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -383,21 +447,183 @@ impl<'a> Sessions<'a> {
         } else {
             None
         };
-        let first = self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref());
-        let kind = if let Err(error) = &first
+        let security = purpose.is_security();
+        let routes = self.outside.borrow().routes(security);
+        if routes.len() < 2 {
+            return self.unrouted(purpose, kind, prompt, reports.as_ref());
+        }
+        let at_start = self.outside.borrow_mut().worktree_at_start()?;
+        let mut tried = Vec::new();
+        let mut current = self
+            .take_route(purpose, &label, &routes, &mut tried, false)?
+            .unwrap_or(0);
+        let mut prompt = prompt.to_owned();
+        let mut logged = Logged::of(kind);
+        loop {
+            let error = match self.attempt(purpose, &label, logged, &prompt, reports.as_ref()) {
+                Ok(ended) => return Ok(ended),
+                Err(error) => error,
+            };
+            let Some(failure) = error.downcast_ref::<SessionFailure>() else {
+                return Err(error);
+            };
+            // A Security session that could not start on `security.harness`
+            // falls back as a Security review always has.
+            let started = !failure.before_first_turn;
+            let unstarted_security = security
+                && routes[current].chosen_by == ChosenBy::SecurityConfig
+                && current == 0
+                && !started
+                && failure
+                    .diagnostic
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty());
+            if error.is::<SafeguardRefusal>()
+                || !(failure.plan_usage_exhausted || unstarted_security)
+            {
+                return Err(error);
+            }
+            let from = &routes[current];
+            let stopped = format!(
+                "{label}: {} {}",
+                from.harness.name(),
+                if failure.plan_usage_exhausted {
+                    "stopped at its Plan usage limit"
+                } else {
+                    "could not start"
+                }
+            );
+            let reason = failure
+                .diagnostic
+                .as_deref()
+                .unwrap_or_default()
+                .to_string();
+            let plan_usage = failure.plan_usage_exhausted;
+            tried.push(current);
+            let Some(next) = self.take_route(purpose, &label, &routes, &mut tried, true)? else {
+                self.step(format!("{stopped}; no other route is available"));
+                return Err(error);
+            };
+            let to = &routes[next];
+            if plan_usage || kind != Kind::SecurityReview {
+                self.step(format!(
+                    "{stopped}; starting the Step again as a fresh session on {to}"
+                ));
+            } else if matches!(to.chosen_by, ChosenBy::UserConfig | ChosenBy::Default) {
+                crate::harness::warn_review_fallback(from.harness, to.harness, &reason);
+            } else {
+                crate::harness::warn_review_reroute(from.harness, to.harness, &reason);
+            }
+            if started && let Some(at_start) = &at_start {
+                let committed = self.outside.borrow_mut().reset(at_start)?;
+                self.step(format!(
+                    "{label}: kept the session's commits and discarded its uncommitted changes"
+                ));
+                if let Some(continue_with) = continuation.as_deref_mut()
+                    && let Some(next) = continue_with(committed)?
+                {
+                    prompt = next;
+                }
+            }
+            current = next;
+            // Each later attempt has its own Session trace. A Security
+            // review's first move keeps its long-standing
+            // `security-review-fallback` name; later ones number from there.
+            logged = match (kind, logged.kind) {
+                (Kind::SecurityReview, Kind::SecurityReview) => {
+                    Logged::of(Kind::SecurityReviewFallback)
+                }
+                _ => logged.on_route(logged.route + 1),
+            };
+        }
+    }
+
+    /// Switch this purpose's sessions to the first of `routes` not in
+    /// `tried` that could take a session now, by machine-local Plan usage,
+    /// and return its index. A route whose CLI can't run is tried and
+    /// passed. At the start of a Step with no route available, the Step
+    /// starts on its first route; `after_a_stop`, none left means the stop
+    /// stands.
+    fn take_route(
+        &self,
+        purpose: Purpose,
+        label: &str,
+        routes: &[Choice],
+        tried: &mut Vec<usize>,
+        after_a_stop: bool,
+    ) -> Result<Option<usize>> {
+        let security = purpose.is_security();
+        loop {
+            let picked = self.outside.borrow_mut().pick(security, tried);
+            let Some(Picked { index, passed }) = picked else {
+                if after_a_stop {
+                    return Ok(None);
+                }
+                self.outside.borrow_mut().switch(purpose, &routes[0])?;
+                return Ok(Some(0));
+            };
+            let choice = &routes[index];
+            if let Err(error) = self.outside.borrow_mut().switch(purpose, choice) {
+                crate::interrupt::check()?;
+                let reason = format!("{error:#}")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.step(format!(
+                    "{label}: route {choice} can't be used ({reason}); passing it"
+                ));
+                tried.push(index);
+                continue;
+            }
+            if !after_a_stop && (index > 0 || !passed.is_empty()) {
+                self.step(format!(
+                    "{label}: on {choice}, routed by Plan usage: {}",
+                    passed.join("; ")
+                ));
+            }
+            return Ok(Some(index));
+        }
+    }
+
+    /// A Step with no routes to take: its session, retried once on the
+    /// default Harness if it is a Security review that could not start.
+    fn unrouted(
+        &self,
+        purpose: Purpose,
+        kind: Kind,
+        prompt: &str,
+        reports: Option<&ReviewReports>,
+    ) -> Result<Ended> {
+        let label = kind.token();
+        let first = self.attempt(purpose, &label, Logged::of(kind), prompt, reports);
+        if let Err(error) = &first
             && kind == Kind::SecurityReview
             && matches!(purpose, Purpose::SecurityReview)
             && self.outside.borrow_mut().fallback_review(error)?
         {
-            Kind::SecurityReviewFallback
-        } else {
-            kind
-        };
-        let mut ended = if kind == Kind::SecurityReviewFallback {
-            self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref())?
-        } else {
-            first?
-        };
+            return self.attempt(
+                purpose,
+                &label,
+                Logged::of(Kind::SecurityReviewFallback),
+                prompt,
+                reports,
+            );
+        }
+        first
+    }
+
+    /// One attempt at a Step on one route: the session logged as `logged`,
+    /// and its Resume once if it ended with background work killed. Its
+    /// progress lines name the Step by `label`.
+    fn attempt(
+        &self,
+        purpose: Purpose,
+        label: &str,
+        logged: Logged,
+        prompt: &str,
+        reports: Option<&ReviewReports>,
+    ) -> Result<Ended> {
+        let mut ended = self.start(purpose, logged, None, prompt, reports)?;
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
@@ -411,10 +637,13 @@ impl<'a> Sessions<'a> {
             ended = self
                 .start(
                     purpose,
-                    Logged::resume_of(kind),
+                    Logged {
+                        resume: true,
+                        ..logged
+                    },
                     Some(session_id),
                     &resume_prompt,
-                    reports.as_ref(),
+                    reports,
                 )
                 .map_err(|mut error| {
                     // Work was observed before this Resume, even if its first
@@ -428,10 +657,7 @@ impl<'a> Sessions<'a> {
         }
         if !ended.killed.is_empty() {
             let ending = ending_with(&ended.killed_work());
-            if matches!(
-                purpose,
-                Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview
-            ) {
+            if purpose.is_security() {
                 return Err(anyhow!(
                     "{label}: the {ended_last} {ending}; Security session incomplete"
                 ));
@@ -506,6 +732,31 @@ trait Outside {
     fn fallback_review(&mut self, _error: &anyhow::Error) -> Result<bool> {
         Ok(false)
     }
+    /// What each route of Security sessions, when `security`, else of
+    /// ordinary ones, runs on, in order: fewer than two when pinned.
+    fn routes(&self, _security: bool) -> Vec<Choice> {
+        Vec::new()
+    }
+    /// The first route not in `tried` that could take a session now.
+    fn pick(&mut self, _security: bool, _tried: &[usize]) -> Option<Picked> {
+        None
+    }
+    /// Run this purpose's sessions on `choice` from now on, once its CLI
+    /// is checked.
+    fn switch(&mut self, _purpose: Purpose, _choice: &Choice) -> Result<()> {
+        Ok(())
+    }
+    /// The worktree as a routed Step finds it, for [`Outside::reset`]; none
+    /// where its uncommitted changes must never be discarded.
+    fn worktree_at_start(&mut self) -> Result<Option<AtStart>> {
+        Ok(None)
+    }
+    /// Discard the worktree's uncommitted changes, keeping its commits, and
+    /// merge a conflicted merge the Step found in progress again. True when
+    /// commits were made since `at_start`.
+    fn reset(&mut self, _at_start: &AtStart) -> Result<bool> {
+        Ok(false)
+    }
     /// Run a session given `prompt`, labelled by its kind's token `label`,
     /// continuing the session with id `resume`, if any, its stream logged to
     /// `log`. Returns what it ended with once it has exited cleanly, its turn
@@ -522,9 +773,46 @@ trait Outside {
     fn step(&mut self, line: String);
 }
 
+/// Asked, once a routed implement session's uncommitted changes are
+/// discarded, whether it made commits; gives the prompt it starts again
+/// with, if not its own.
+pub type ContinueWith<'a> = &'a mut dyn FnMut(bool) -> Result<Option<String>>;
+
+/// The worktree as a routed Step found it: its commit, and the pinned
+/// commit and message of a conflicted merge in progress, as a conflict
+/// Repair starts with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AtStart {
+    head: Option<String>,
+    merge: Option<(String, String)>,
+}
+
+/// The routes the Command's sessions may take, as the User config sets
+/// them: none in unit tests, which never read the machine's User config.
+fn router(
+    harness: &Choice,
+    security_review: Option<&Choice>,
+    security_review_default: Option<&Choice>,
+) -> Router {
+    if cfg!(test) {
+        return Router::pinned();
+    }
+    match crate::config::UserConfig::load() {
+        Ok(config) => Router::of(
+            &config.harness,
+            &config.routing,
+            harness,
+            security_review,
+            security_review_default,
+        ),
+        Err(_) => Router::pinned(),
+    }
+}
+
 /// Sessions run by the Command's `harness`'s CLI in `worktree`, where it
 /// finds the Factory skills, and progress lines printed on stderr. A
 /// Security review runs on `security_review`'s instead, if it is given.
+/// Plan usage may move a Step to another of `router`'s routes.
 struct OnMachine {
     worktree: PathBuf,
     harness: Choice,
@@ -533,9 +821,108 @@ struct OnMachine {
     security_review_default: Option<Choice>,
     recording: recording::Recording,
     sandbox: Option<crate::sandbox::Launch>,
+    router: Router,
+}
+
+impl OnMachine {
+    /// What this purpose's sessions run on now: a Security review's on
+    /// `security_review` when it is given, every other on `harness`.
+    fn current(&self, purpose: Purpose) -> (&Choice, &'static dyn Adapter) {
+        match (purpose, &self.security_review) {
+            (Purpose::SecurityReview, Some((review, adapter))) => (review, *adapter),
+            _ => (&self.harness, self.adapter),
+        }
+    }
 }
 
 impl Outside for OnMachine {
+    fn routes(&self, security: bool) -> Vec<Choice> {
+        self.router
+            .candidates(security)
+            .iter()
+            .map(|candidate| candidate.choice.clone())
+            .collect()
+    }
+
+    fn pick(&mut self, security: bool, tried: &[usize]) -> Option<Picked> {
+        self.router.pick(security, tried)
+    }
+
+    fn switch(&mut self, purpose: Purpose, choice: &Choice) -> Result<()> {
+        if self.current(purpose).0.runs_as(choice) {
+            return Ok(());
+        }
+        let mut checked = choice.clone();
+        checked.check_without_probe()?;
+        let adapter = checked.harness.adapter();
+        match purpose {
+            Purpose::SecurityReview => self.security_review = Some((checked, adapter)),
+            Purpose::Ordinary
+            | Purpose::CodeReview
+            | Purpose::Security
+            | Purpose::SecurityPublishing => {
+                self.harness = checked;
+                self.adapter = adapter;
+            }
+        }
+        Ok(())
+    }
+
+    fn worktree_at_start(&mut self) -> Result<Option<AtStart>> {
+        let git = crate::git::Git::new(&self.worktree);
+        // Only a linked worktree thirdshift owns, never a person's checkout.
+        let git_dir = PathBuf::from(git.run(&["rev-parse", "--absolute-git-dir"])?);
+        let linked = git_dir.canonicalize()? != git.common_dir()?.canonicalize()?;
+        if !linked {
+            return Ok(None);
+        }
+        let head = git.run_optional(&["rev-parse", "--verify", "-q", "HEAD"])?;
+        let merge = match git.run_optional(&["rev-parse", "-q", "--verify", "MERGE_HEAD"])? {
+            Some(commit) => {
+                let path = git.run(&["rev-parse", "--git-path", "MERGE_MSG"])?;
+                let message = std::fs::read_to_string(self.worktree.join(path))
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|line| !line.starts_with('#'))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_string();
+                let message = if message.is_empty() {
+                    format!("Merge {commit}")
+                } else {
+                    message
+                };
+                Some((commit, message))
+            }
+            None => None,
+        };
+        Ok(Some(AtStart { head, merge }))
+    }
+
+    fn reset(&mut self, at_start: &AtStart) -> Result<bool> {
+        let git = crate::git::Git::new(&self.worktree);
+        if git.merge_in_progress()? {
+            git.run(&["merge", "--abort"])?;
+        }
+        // Ignored files stay: `.git/info/exclude` keeps the factory's
+        // handover files and linked skills out of `clean`'s reach.
+        git.run(&["reset", "--hard", "HEAD"])?;
+        git.run(&["clean", "-fd"])?;
+        if let Some((commit, message)) = &at_start.merge
+            && !git.succeeds(&["merge-base", "--is-ancestor", commit, "HEAD"])?
+        {
+            // The conflict Repair's next route starts from the same
+            // conflicted merge of the same pinned commit.
+            let merged =
+                git.run_optional(&["merge", "--no-edit", "--ff", "-m", message, commit])?;
+            if merged.is_none() && !git.merge_in_progress()? {
+                anyhow::bail!("could not merge {commit} again for the next route");
+            }
+        }
+        Ok(git.run_optional(&["rev-parse", "--verify", "-q", "HEAD"])? != at_start.head)
+    }
+
     fn fallback_review(&mut self, error: &anyhow::Error) -> Result<bool> {
         crate::interrupt::check()?;
         let Some(failure) = error.downcast_ref::<SessionFailure>() else {
@@ -577,16 +964,14 @@ impl Outside for OnMachine {
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let (harness, adapter) = match (purpose, &self.security_review) {
-            (Purpose::SecurityReview, Some((choice, adapter))) => {
-                progress::step(format!(
-                    "{label}: on {choice}, chosen by {}",
-                    choice.chosen_by
-                ));
-                (choice, *adapter)
-            }
-            _ => (&self.harness, self.adapter),
-        };
+        let (harness, adapter) = self.current(purpose);
+        if matches!(purpose, Purpose::SecurityReview) && self.security_review.is_some() {
+            progress::step(format!(
+                "{label}: on {harness}, chosen by {}",
+                harness.chosen_by
+            ));
+        }
+        crate::logs::session_choice(harness);
         let (mut invocation, policy) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
@@ -902,6 +1287,239 @@ mod tests {
             .iter()
             .filter(|call| matches!(call, Call::Session { .. }))
             .collect()
+    }
+
+    /// Sessions routed across `routes`, of which those at `unavailable`
+    /// can't take a session at a Step's start, ending as scripted. Each
+    /// switch names the Harness switched to, and each reset says so.
+    struct Routed {
+        scripted: Scripted,
+        routes: Vec<Choice>,
+        unavailable: Vec<usize>,
+        committed: bool,
+        moves: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Outside for Routed {
+        fn routes(&self, _security: bool) -> Vec<Choice> {
+            self.routes.clone()
+        }
+        fn pick(&mut self, _security: bool, tried: &[usize]) -> Option<Picked> {
+            let index = (0..self.routes.len())
+                .find(|index| !tried.contains(index) && !self.unavailable.contains(index))?;
+            Some(Picked {
+                index,
+                passed: self
+                    .unavailable
+                    .iter()
+                    .filter(|unavailable| **unavailable < index)
+                    .map(|unavailable| {
+                        format!(
+                            "{} is in cooldown",
+                            self.routes[*unavailable].harness.name()
+                        )
+                    })
+                    .collect(),
+            })
+        }
+        fn switch(&mut self, _purpose: Purpose, choice: &Choice) -> Result<()> {
+            self.moves
+                .borrow_mut()
+                .push(format!("on {}", choice.harness.name()));
+            Ok(())
+        }
+        fn worktree_at_start(&mut self) -> Result<Option<AtStart>> {
+            Ok(Some(AtStart {
+                head: Some("start".into()),
+                merge: None,
+            }))
+        }
+        fn reset(&mut self, _at_start: &AtStart) -> Result<bool> {
+            self.moves.borrow_mut().push("reset".into());
+            Ok(self.committed)
+        }
+        fn run_session(
+            &mut self,
+            purpose: Purpose,
+            kind: &str,
+            resume: Option<&str>,
+            prompt: &str,
+            log: &Path,
+        ) -> Result<Ended> {
+            self.scripted
+                .run_session(purpose, kind, resume, prompt, log)
+        }
+        fn step(&mut self, line: String) {
+            self.scripted.step(line);
+        }
+    }
+
+    /// Claude Code, then Codex, as `harness.routes` lists them.
+    fn claude_then_codex() -> Vec<Choice> {
+        [
+            crate::harness::Harness::Claude,
+            crate::harness::Harness::Codex,
+        ]
+        .map(|harness| Choice {
+            harness,
+            model: None,
+            effort: None,
+            chosen_by: crate::harness::ChosenBy::Routes,
+        })
+        .to_vec()
+    }
+
+    /// Take an implement Step, given `continuation`, through `routes`, of
+    /// which `unavailable` can't start it, whose sessions end as `endings`.
+    /// Returns what it came to, every call, and every switch and reset.
+    fn route(
+        routes: Vec<Choice>,
+        unavailable: Vec<usize>,
+        committed: bool,
+        endings: Vec<Result<Ended>>,
+    ) -> (Result<Option<String>>, Vec<Call>, Vec<String>) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let moves = Rc::new(RefCell::new(Vec::new()));
+        let routed = Routed {
+            scripted: Scripted {
+                endings: endings.into(),
+                calls: Rc::clone(&calls),
+            },
+            routes,
+            unavailable,
+            committed,
+            moves: Rc::clone(&moves),
+        };
+        let logs = logs();
+        let (taken, _) = Sessions::taking(
+            &logs,
+            Path::new("/unused"),
+            Box::new(routed),
+            || Ok(()),
+            |sessions| {
+                // The Continuation prompt, once the session made commits.
+                let mut continue_with = |committed: bool| -> Result<Option<String>> {
+                    Ok(committed.then(|| "go on".to_string()))
+                };
+                sessions.run_implementation(Kind::Implementation, "do it", Some(&mut continue_with))
+            },
+        );
+        (taken, calls.take(), moves.take())
+    }
+
+    fn limit(before_first_turn: bool) -> Result<Ended> {
+        Err(SessionFailure::plan_usage_limit("claude", before_first_turn).into())
+    }
+
+    #[test]
+    fn a_step_starts_on_its_first_route_that_can_take_it() {
+        let (taken, calls, moves) = route(
+            claude_then_codex(),
+            vec![0],
+            false,
+            vec![ended(None, &[], "done")],
+        );
+        assert_eq!(taken.unwrap().as_deref(), Some("done"));
+        assert_eq!(moves, ["on codex"]);
+        assert_eq!(sessions_run(&calls), [&session("implement", None, "do it")]);
+        assert!(calls.iter().any(|call| matches!(call,
+            Call::Step(line) if line.contains("routed by Plan usage: claude is in cooldown"))));
+    }
+
+    #[test]
+    fn a_limit_before_the_first_turn_starts_the_step_again_on_the_next_route_untouched() {
+        let (taken, calls, moves) = route(
+            claude_then_codex(),
+            vec![],
+            false,
+            vec![limit(true), ended(None, &[], "done")],
+        );
+        assert_eq!(taken.unwrap().as_deref(), Some("done"));
+        assert_eq!(moves, ["on claude", "on codex"]);
+        assert_eq!(
+            sessions_run(&calls),
+            [
+                &session("implement", None, "do it"),
+                &session("implement-route-2", None, "do it"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_limit_after_work_keeps_commits_discards_the_rest_and_implements_on_as_a_continuation() {
+        for (committed, prompt) in [(true, "go on"), (false, "do it")] {
+            let (taken, calls, moves) = route(
+                claude_then_codex(),
+                vec![],
+                committed,
+                vec![limit(false), ended(None, &[], "done")],
+            );
+            assert_eq!(taken.unwrap().as_deref(), Some("done"));
+            // The next route is taken before the reset: with none left,
+            // the worktree stays as it was for Failed run preservation.
+            assert_eq!(moves, ["on claude", "on codex", "reset"]);
+            assert_eq!(
+                sessions_run(&calls),
+                [
+                    &session("implement", None, "do it"),
+                    &session("implement-route-2", None, prompt),
+                ],
+                "{committed}"
+            );
+            // No prompt says why: the Continuation prompt is unchanged.
+            for call in &calls {
+                if let Call::Session { prompt, .. } = call {
+                    assert!(!prompt.to_lowercase().contains("limit"), "{prompt}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_route_is_tried_once_and_other_failures_never_route() {
+        let (taken, calls, _) = route(
+            claude_then_codex(),
+            vec![],
+            false,
+            vec![limit(true), limit(true)],
+        );
+        let failure = taken.unwrap_err();
+        assert!(
+            failure
+                .downcast_ref::<SessionFailure>()
+                .unwrap()
+                .plan_usage_exhausted
+        );
+        assert_eq!(sessions_run(&calls).len(), 2);
+        assert!(calls.iter().any(|call| matches!(call,
+            Call::Step(line) if line.ends_with("no other route is available"))));
+
+        let refused = anyhow::Error::new(SessionFailure::plan_usage_limit("claude", true))
+            .context(SafeguardRefusal::ClaudeCyber);
+        for failure in [
+            anyhow::Error::new(SessionFailure::exited("claude", 1)),
+            anyhow!("claude exited 429: rate limited"),
+            refused,
+        ] {
+            let (taken, calls, moves) =
+                route(claude_then_codex(), vec![], false, vec![Err(failure)]);
+            assert!(taken.is_err());
+            assert_eq!(sessions_run(&calls).len(), 1);
+            assert_eq!(moves, ["on claude"]);
+        }
+    }
+
+    #[test]
+    fn a_single_route_is_pinned_and_never_switches() {
+        let (taken, calls, moves) = route(
+            claude_then_codex()[..1].to_vec(),
+            vec![0],
+            false,
+            vec![limit(true)],
+        );
+        assert!(taken.is_err());
+        assert!(moves.is_empty());
+        assert_eq!(sessions_run(&calls).len(), 1);
     }
 
     /// How a session that left `cargo test` running is said to have ended.

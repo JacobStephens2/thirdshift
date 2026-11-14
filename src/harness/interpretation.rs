@@ -34,6 +34,10 @@ pub struct Interpretation {
     plan_limit: Option<limits::Limit>,
     /// Plan usage seen since the recorder last took it.
     plan_usage: Vec<crate::plan_usage::Observation>,
+    /// Whether a structured wire frame said the subscription refused
+    /// included work: sticky once seen, since the recorder takes the
+    /// observations themselves.
+    plan_usage_exhausted: bool,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -190,6 +194,7 @@ enum Failure {
         refusal: Option<SafeguardRefusal>,
         before_first_turn: bool,
         session_id: Option<String>,
+        plan_usage_exhausted: bool,
     },
 }
 
@@ -205,6 +210,10 @@ pub struct SessionFailure {
     pub session_id: Option<String>,
     /// Kernel or manager evidence supplied by the Session's execution owner.
     pub oom_killed: bool,
+    /// A structured Harness wire frame, never agent-writable text, said the
+    /// subscription's Plan usage refused included work during the session:
+    /// the failure a Step may be routed away from.
+    pub plan_usage_exhausted: bool,
     status: ExitStatus,
 }
 
@@ -256,6 +265,7 @@ impl SessionFailure {
             before_first_turn: self.before_first_turn,
             session_id: None,
             oom_killed: self.oom_killed,
+            plan_usage_exhausted: self.plan_usage_exhausted,
             status: self.status,
         }
         .to_string()
@@ -279,7 +289,19 @@ impl SessionFailure {
             before_first_turn: false,
             session_id: None,
             oom_killed: false,
+            plan_usage_exhausted: false,
             status: ExitStatus::from_raw(code << 8),
+        }
+    }
+
+    /// A session of `harness` stopped at its Plan usage limit, before its
+    /// first turn or after work began.
+    #[cfg(test)]
+    pub fn plan_usage_limit(harness: &'static str, before_first_turn: bool) -> Self {
+        Self {
+            before_first_turn,
+            plan_usage_exhausted: true,
+            ..Self::exited(harness, 1)
         }
     }
 }
@@ -294,6 +316,7 @@ impl Failure {
                 refusal,
                 before_first_turn,
                 session_id,
+                plan_usage_exhausted,
             } => {
                 let error = anyhow::Error::new(SessionFailure {
                     harness: cli,
@@ -302,6 +325,7 @@ impl Failure {
                     before_first_turn,
                     session_id,
                     oom_killed: false,
+                    plan_usage_exhausted,
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -324,6 +348,7 @@ impl Interpretation {
             work_started: false,
             plan_limit: None,
             plan_usage: Vec::new(),
+            plan_usage_exhausted: false,
         }
     }
 
@@ -396,6 +421,7 @@ impl Interpretation {
     }
 
     fn note_plan_usage(&mut self, observation: crate::plan_usage::Observation) {
+        self.plan_usage_exhausted |= observation.exhausted.is_some();
         self.plan_usage.push(observation);
     }
 
@@ -506,6 +532,7 @@ impl Interpretation {
                         before_first_turn: !self.work_started
                             && !facts.report.events.iter().any(work_started),
                         session_id: facts.ended.session_id,
+                        plan_usage_exhausted: self.plan_usage_exhausted,
                     })
                 } else {
                     Ok(facts.ended)

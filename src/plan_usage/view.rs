@@ -54,7 +54,7 @@ pub enum Availability {
 }
 
 impl Availability {
-    fn usable(self) -> bool {
+    pub(super) fn usable(self) -> bool {
         matches!(self, Self::Available | Self::Revalidating)
     }
 
@@ -156,7 +156,7 @@ fn configured(config: &UserConfig) -> Vec<(Setting, Option<usize>, Route)> {
 
 impl State {
     /// Whether `route` could take a session on this Harness now.
-    fn availability(
+    pub(super) fn availability(
         &self,
         route: &Route,
         routing: &Routing,

@@ -1222,16 +1222,23 @@ pub(super) fn run_implement(
         issue,
         run.base,
         checkout,
-        delivery::Opening {
-            session: delivery::OpeningSession::Implementation,
-            prompt: crate::implement::prompt(issue, run.base, selection),
-        },
+        crate::implement::opening(issue, run.base, selection),
         Some(&labels),
     )?;
     let mut pr = PullRequest::new(issue, checkout.branch(), run.base, GitHub::new());
     run_session_step(run, worktree, step, |sessions, index| {
-        let completed = crate::implement::run(issue, &opening, |prompt| {
-            let message = sessions.run(session::Kind::ProcessStep(index), prompt)?;
+        let completed = crate::implement::run(issue, &opening, |prompt, continuation| {
+            let mut continue_with = |committed: bool| match continuation {
+                Some(continuation) => {
+                    crate::implement::continue_with(continuation, committed, run.base, &mut pr)
+                }
+                None => Ok(None),
+            };
+            let message = sessions.run_implementation(
+                session::Kind::ProcessStep(index),
+                prompt,
+                Some(&mut continue_with),
+            )?;
             pr.ensure_actionable(false)?;
             Ok(message)
         })?;
