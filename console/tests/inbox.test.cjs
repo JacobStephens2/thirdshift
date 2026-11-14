@@ -1831,8 +1831,8 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
       const path = join(dir, `${number}-fixture.command.json`);
       paths.push(path);
       const url = `https://github.com/acme/widgets/pull/${number}`;
-      await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', outcome: 'ready for review',
-        cause: null, tickets: [], pull_request: url,
+      await replaceRecord(path, JSON.stringify({ ...base, kind: number === 232 ? 'Spec run' : 'Run', outcome: 'ready for review',
+        cause: null, tickets: number === 232 ? base.tickets : [], pull_request: url,
         issue: number === 229 ? null : { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'A distinct issue title that must not replace the PR title' } }));
       // Undefined represents an old cache; null represents an unread PR.
       if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable,
@@ -1844,7 +1844,7 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
     for (const javaScriptEnabled of [true, false]) {
       const page = await pageFor(t, { javaScriptEnabled });
       await page.goto(`${origin}/?section=ready-for-review`);
-      for (const width of [1440, 768, 390]) {
+      for (const width of [1440, 1000, 900, 768, 390]) {
         await page.setViewportSize({ width, height: 900 });
         for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
           await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -1876,6 +1876,15 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
               assert.equal(seen.clipped, false, `${width}: ${label} must be readable`);
               assert.equal(seen.fits, true, `${width}: ${label} must fit`);
             }
+            const overlap = await row.locator('.row-head').evaluate(head => {
+              const checks = head.querySelector('.pr-checks').getBoundingClientRect();
+              return [...head.querySelectorAll('.command-kind, .ticket-progress')].some(node => {
+                const field = node.getBoundingClientRect();
+                return field.left < checks.right && field.right > checks.left &&
+                  field.top < checks.bottom && field.bottom > checks.top;
+              });
+            });
+            assert.equal(overlap, false, `${width}: PR checks must not overlap Command kind or Ticket progress`);
           }
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
