@@ -277,6 +277,9 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         if include_local && let Some(wait) = status.github_quota_wait {
             println!("{wait}");
         }
+        if include_local && let Some(banner) = crate::plan_usage::banner(&config) {
+            println!("{banner}");
+        }
     }
     Ok(())
 }

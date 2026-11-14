@@ -351,6 +351,12 @@ fn start<O: Outside>(
         &base,
         asks.tickets_at_once,
     );
+    if let Err(failed) = &outcome
+        && crate::session::limits::plan_usage_paused(&failed.error).is_some()
+    {
+        // A Paused Command's record keeps the command that continues it.
+        logs::resumable(&crate::args::continuation(issue, asks, is_spec));
+    }
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {

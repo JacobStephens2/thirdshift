@@ -271,6 +271,27 @@ Each top-level `commands` entry adds the computed `group` (`needs you`, `ready f
 
 `children` recursively contains the immediate child Ticket runs in separate processes, with the same fields as their parent. A Pickup's `dispatched` contains its Ticket run or Spec run. A Spec's `tickets` is its complete roster in issue-number order; each entry has `issue` (`number`, `url`, nullable `title`), `state` (`running`, `merged`, `failed`, `waiting`, or `not started`) and `blockers` (the named open blocking issues, with the same issue fields). Match a Ticket's `issue.url` to the Ticket run in that Spec's `children` for its stage, age, liveness and Base fix descendants. Tickets without a Ticket run remain in the roster. Completed child Ticket runs stay in the tree while its Command is listed. A killed child's `state: "died"` remains independent of the Spec's Ticket accounting. `parent_record` links each child to its parent's exact file; `parent_dispatch`, when present, names the dispatched issue's URL within that file. A top-level Command has null for both. Records from before these fields existed read as having no children or Tickets.
 
+A live factory Command (a Ticket run, Spec run, Architect run, Pickup run,
+Security run, Review run, Fix run, Triage run or Custom process) whose every
+allowed route has no Plan usage also ends with outcome `paused`, without
+sleeping: a session Step about to start finds every route held, or a session
+stops at its Harness's own structured limit with no route left to try. Only
+structured Harness wire frames and official non-billed reads count, never text
+an agent wrote. Its record keeps the stopping Harness's `limit` and, as
+`resume_command`, the Continuation for an issue, else the command that started
+it; work already pushed stays on its branch, and it exits `75`. A Spec run
+whose Ticket pauses starts no queued Ticket while running ones finish, then
+pauses, and a Run whose Base fix pauses pauses with it. Its Claim comes off without
+`agent-failed`, putting `ready-for-agent` back if the Claim took it off, unless
+an account that is not a Trusted account edited the issue since its last
+Trusted `ready-for-agent` labelling, which leaves `needs-triage`; a Security
+fix still gets `agent-failed`, and a paused Triage run puts `needs-triage`
+back. When the Claim put `ready-for-agent` back, the record has
+`retaken_by_pickup: true` and the row goes to Done, since a later Pickup run
+continues it once Plan usage allows; its Run notification is saved but not
+emailed under `email.unless_merged`. Every other Paused Command waits in Needs
+you as Paused and is emailed when Run notifications are on.
+
 An Experiment or Scoring run stopped at a plan-limit warning or rejection has
 outcome `paused`, shown as Paused in Needs you. Its `resume_command` continues
 the same work without repeating finished Trials or Scores. Its `limit` object
@@ -280,7 +301,7 @@ and Command details name the window, utilization and local reset time, and the
 Console offers the resume command to copy. Without a reset the cause keeps its
 earlier wording. A later Command starting the same Experiment or Scoring work
 takes the paused row out of Needs you; Dismissal also works. Pauses count as
-neither successes nor failures and send no failure email. Resuming automatically
+neither successes nor failures. Resuming automatically
 is separate. Older `failed` records keep their recorded outcome. See the
 [checked result contract](experiment-results.md#paused-command-records).
 
@@ -3827,6 +3848,7 @@ The `PATH` line, the `cd` and `base main` and the logins are as in [On a schedul
 Most passes are skipped, and that is what paces frequent Architect runs. A pass is skipped while:
 
 - **GitHub is in a Quota wait or below the reserve**: every Pass checks the machine's Quota wait record, then `gh api rate_limit`, before any other GitHub work or taking a Command-limit slot. Either fewer than 500 REST requests or fewer than 500 GraphQL points records a Quota wait until that resource resets. This covers Pickup, Architect, Security, Triage without a Report or issue, Review with `--author`, Fix without a pull request, and a Custom process without an issue, whether started by cron or by a person. A quota check that fails for a reason other than exhaustion lets the Pass proceed. A quota skip exits `0`, prints nothing on stdout and sends no Run notification. Its Activity log reason, `skipped: GitHub Quota wait until <time> (<resource>: <n> left)`, is recorded only when it changes for that kind;
+- **no route has Plan usage**: after the quota check, every Pass reads this machine's saved **Plan usage** for each route its sessions may take: `[harness] routes` when the command names no Harness, Model or Effort (a Security run's Security routes), else the one Harness it would run on, which holds only at a confirmed limit, never at a `max_utilization` reserve. When every route is in cooldown after a structured limit or at its ceiling, the Pass skips without sleeping, before any other GitHub work or Command-limit slot. It exits `0`, prints nothing on stdout and sends no Run notification. Its Activity log reason, `skipped: no allowed route has available Plan usage: <harness> in cooldown (<window>) until <time>; …`, is recorded only when it changes for that kind, and each named Custom process compares its own last reason. `status` and the Console Inbox show `Plan usage: every configured route is unavailable, so scheduled Passes skip: …; earliest reset <time>` while every route a Command with no Harness flags would take is held;
 - **a run is still going**: the repository is at its Command limit, a Pass's Spec run or Ticket run counted, or another Architect run is running there ([The Command limit](#the-command-limit));
 - **an Architect plan is open**: one whose pull request waits for review, one whose run failed, or one published with `--plan-only` and not yet built ([One Architect plan at a time](#one-architect-plan-at-a-time));
 - **an Architect idea waits for triage**, since the factory has run out of Strong ideas ([An Architect idea waits for triage](#an-architect-idea-waits-for-triage));

@@ -61,6 +61,44 @@ pub struct Observation {
     pub exhausted: Option<Exhausted>,
 }
 
+impl Observation {
+    /// The refusal this observation reports, as a Paused Command's record
+    /// keeps it: the Harness, the Plan window that stopped work, its
+    /// utilization as a fraction, and its reset. None when it reports no
+    /// refusal.
+    pub(crate) fn limit(&self) -> Option<crate::session::limits::Limit> {
+        let exhausted = self.exhausted.as_ref()?;
+        let window = exhausted
+            .window
+            .as_deref()
+            .and_then(|name| self.windows.iter().find(|window| window.name == name));
+        let window = window.or_else(|| {
+            self.windows.iter().max_by(|a, b| {
+                a.used_percent
+                    .unwrap_or_default()
+                    .total_cmp(&b.used_percent.unwrap_or_default())
+            })
+        });
+        Some(crate::session::limits::Limit::of(
+            self.harness,
+            exhaustion_window(exhausted, window),
+            window.and_then(|window| window.used_percent),
+            exhausted
+                .resets_at
+                .or_else(|| window.and_then(|window| window.resets_at)),
+        ))
+    }
+}
+
+/// The name of the Plan window that stopped work: the refusal's own, else
+/// the fullest window reported beside it.
+fn exhaustion_window(exhausted: &Exhausted, window: Option<&Window>) -> Option<String> {
+    exhausted
+        .window
+        .clone()
+        .or_else(|| window.map(|window| window.name.clone()))
+}
+
 /// The Harnesses whose subscriptions Plan usage watches. OpenCode and Kimi
 /// Code run on API keys, not subscriptions.
 pub const SUBSCRIPTION: [Harness; 5] = [

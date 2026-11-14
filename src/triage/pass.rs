@@ -42,7 +42,7 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base, config.command_limit, Sharing::UpToTheLimit)? {
+    } = match launch::start(base, config.command_limit, Sharing::UpToTheLimit, harness)? {
         Start::Clear(launch) => launch,
         Start::NotAdmitted(running) => return Ok(skipped(&running.repo, &running)),
     };

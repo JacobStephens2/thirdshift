@@ -1454,3 +1454,44 @@ fn one_line_rows_carry_a_gist_of_outcome_and_what_a_title_less_pass_did() {
         "{heads:#?}"
     );
 }
+
+#[test]
+fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
+    use serde_json::json;
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut retaken = record(home.path(), 7, Some("paused"), 0);
+    retaken["kind"] = json!("Run");
+    retaken["retaken_by_pickup"] = json!(true);
+    retaken["cause"] = json!("no allowed route has available Plan usage: claude five-hour window");
+    super::write_record(home.path(), 7, &retaken);
+    let mut waiting = record(home.path(), 8, Some("paused"), 0);
+    waiting["kind"] = json!("Run");
+    super::write_record(home.path(), 8, &waiting);
+    // The default Harness is installed, and held until its reset.
+    let bin = home.path().join("console-fixture-bin");
+    fs::create_dir_all(&bin).unwrap();
+    super::support::write_executable(&bin.join("claude"), "#!/bin/sh\nexit 0\n");
+    let now = chrono::Utc::now().to_rfc3339();
+    fs::write(
+        home.path().join(".thirdshift/plan-usage.json"),
+        json!({"harnesses": {"claude": {"observed_at": now,
+            "cooldown": {"since": now, "until": "2096-10-02T07:06:40Z", "window": "five_hour"}}}})
+        .to_string(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let inbox = console.get("/").text().unwrap();
+    let needs = section(&inbox, "needs you");
+    assert!(needs.contains("widgets#8"), "{needs}");
+    assert!(!needs.contains("widgets#7"), "{needs}");
+    assert!(section(&inbox, "done").contains("widgets#7"), "{inbox}");
+    assert!(
+        inbox.contains(
+            "<p class=\"plan-usage-exhausted\" role=\"status\">Plan usage: every configured route \
+             is unavailable, so scheduled Passes skip: claude in cooldown (five_hour) until \
+             2096-10-02T07:06:40Z; earliest reset 2096-10-02T07:06:40Z</p>"
+        ),
+        "{inbox}"
+    );
+}

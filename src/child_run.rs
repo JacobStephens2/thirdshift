@@ -576,6 +576,12 @@ pub enum Ended {
         log: Option<String>,
         local_work: Vec<String>,
     },
+    /// It ended as a Paused Command, as its exit code said: no route it may
+    /// take had available Plan usage. Neither success nor failure.
+    Paused {
+        log: Option<String>,
+        local_work: Vec<String>,
+    },
     /// Ended by an interrupt passed on to it.
     Interrupted { local_work: Vec<String> },
 }
@@ -932,6 +938,12 @@ impl Handle {
                 base_fix: ending.base_fix,
             },
             Err(_) if interrupt::requested() => Ended::Interrupted { local_work },
+            Err(failure) if status.code() == Some(i32::from(run_ending::PAUSED_EXIT)) => {
+                Ended::Paused {
+                    log: failure.log,
+                    local_work,
+                }
+            }
             Err(failure) => Ended::Failed {
                 cause: failure
                     .cause

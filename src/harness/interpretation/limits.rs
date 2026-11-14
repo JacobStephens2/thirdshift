@@ -38,11 +38,34 @@ impl Limit {
         .accepted()
     }
 
+    /// A limit on `harness`, from a Plan window's `used_percent` (0 to
+    /// 100), with only the facts safe to store and print.
+    pub(crate) fn of(
+        harness: crate::harness::Harness,
+        window: Option<String>,
+        used_percent: Option<f64>,
+        resets_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Self {
+        Self {
+            harness: Some(harness.name().to_owned()),
+            window,
+            utilization: used_percent.map(|used| used / 100.0),
+            resets_at: resets_at
+                .map(|reset| reset.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        }
+        .accepted()
+    }
+
     /// Keep only facts safe to store and print. A sandboxed Trial can write
     /// the Codex session file this parses, and the plan-limit signal repeats
     /// those strings into the operator's terminal and Command record.
     pub(crate) fn accepted(mut self) -> Self {
-        if !matches!(self.harness.as_deref(), Some("claude" | "codex")) {
+        let subscription = self
+            .harness
+            .as_deref()
+            .and_then(crate::harness::Harness::named)
+            .is_some_and(crate::plan_usage::observation::subscription);
+        if !subscription {
             self.harness = None;
         }
         let window = self

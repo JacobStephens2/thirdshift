@@ -646,9 +646,10 @@ EVENTS
             &["--email", "me@example.com", &scenario.issue_url(7)],
             Some(KEY),
         );
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        // A structured usage limit ends the Run as a Paused Command.
+        assert_eq!(result.code, Some(75), "{}", result.stderr);
         let request = the_one_request(&resend);
-        assert!(subject(&request).ends_with(": failed"), "{request:?}");
+        assert!(subject(&request).ends_with(": paused"), "{request:?}");
         let prefix = if exit == 0 {
             "claude's turn failed"
         } else {
@@ -656,7 +657,11 @@ EVENTS
         };
         let cause = format!("{prefix}: {MESSAGE}");
         assert_contains(&result.stderr, &cause);
-        assert_contains(text(&request), &format!("Cause:        {cause}"));
+        assert_contains(
+            text(&request),
+            "Cause:        no allowed route has available Plan usage: claude seven-day window",
+        );
+        assert_contains(text(&request), &cause);
         assert_contains(
             text(&request),
             "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
@@ -698,8 +703,10 @@ fn a_muse_usage_failure_is_explained_in_the_saved_and_emailed_notification() {
         Some(KEY),
     );
 
-    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    // A structured usage limit ends the Run as a Paused Command.
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
     let request = the_one_request(&resend);
+    assert!(subject(&request).ends_with(": paused"), "{request:?}");
     assert_contains(text(&request), CAUSE);
     assert_contains(
         text(&request),

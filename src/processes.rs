@@ -667,7 +667,10 @@ fn run(command: &ProcessRun) -> Result<String> {
             logs::skipped_process(&repo, name, &choice, reason);
             String::new()
         };
-        if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
+        let harness = Choice::of(&command.asked, &config.harness);
+        if let Some(skipped) =
+            command_limit::early_skip(&repo, config.command_limit, &harness, false)
+        {
             return Ok(skip(&skipped));
         }
         let base = match launch::checked_out_base() {
@@ -758,7 +761,7 @@ fn run(command: &ProcessRun) -> Result<String> {
 /// A stop after the email check and before any Step is still a failed Process.
 fn failed_before_steps(notification: RunNotification, error: anyhow::Error) -> anyhow::Error {
     let cause = format!("{error:#}");
-    let outcome = failure_outcome();
+    let outcome = failure_outcome(&error);
     logs::ended(outcome);
     logs::complete(outcome, Some(&cause));
     notify(
@@ -1288,7 +1291,7 @@ fn finish_step(
             progress::step(format_args!(
                 "step {}: {duration} {}: {} ({})",
                 step.log_name(),
-                failure_outcome(),
+                failure_outcome(&error),
                 one_line(&error),
                 step.log_context()
             ));
@@ -1810,13 +1813,16 @@ fn worktree_path<'a>(worktrees: &'a [OwnedWorktree], name: Option<&str>) -> &'a 
 fn classify(result: &Result<String>) -> (&'static str, Option<String>) {
     match result {
         Ok(_) => ("succeeded", None),
-        Err(error) => (failure_outcome(), Some(one_line(error))),
+        Err(error) => (failure_outcome(error), Some(one_line(error))),
     }
 }
 
-fn failure_outcome() -> &'static str {
+/// `interrupted`, `paused` for a Paused Command, or `failed`.
+fn failure_outcome(error: &anyhow::Error) -> &'static str {
     if interrupt::requested() {
         "interrupted"
+    } else if session::limits::plan_usage_paused(error).is_some() {
+        "paused"
     } else {
         "failed"
     }

@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use chrono::{TimeDelta, Utc};
 
+pub mod exhaustion;
 pub(crate) mod fleet;
 pub(crate) mod observation;
 mod read;
@@ -21,6 +22,7 @@ pub mod router;
 mod store;
 mod view;
 
+pub use exhaustion::Exhaustion;
 pub use observation::Observation;
 pub use route::Routing;
 pub use router::Router;
@@ -250,6 +252,130 @@ fn refresh_for_routing(store: &Store, harnesses: &[Harness]) -> Result<()> {
     read_into(store, &stale)
 }
 
+/// Whether a Pass whose sessions would run on `harness`, a Security run's
+/// when `security`, finds every route it may take unavailable by this
+/// machine's Plan usage, refreshing a stale snapshot of a Harness whose
+/// read reports Plan windows first. Only a choice the User config's routes
+/// made walks them; any other is that Harness alone, held only at confirmed
+/// exhaustion. Never asks a Fleet peer, and none in unit tests.
+pub fn pass_exhaustion(
+    config: &UserConfig,
+    harness: &Choice,
+    security: bool,
+) -> Option<Exhaustion> {
+    if cfg!(test) {
+        return None;
+    }
+    let routes = allowed_routes(config, harness, security);
+    let store = Store::machine().ok()?;
+    let harnesses: Vec<Harness> = routes.iter().map(|route| route.harness).collect();
+    let _ = refresh_for_routing(&store, &harnesses);
+    let saved = store.read().ok()?;
+    exhaustion::judge(
+        &routes,
+        &config.routing,
+        &saved,
+        Harness::installed,
+        Utc::now(),
+    )
+}
+
+/// The routes a Pass on `harness` may take, in order.
+fn allowed_routes(config: &UserConfig, harness: &Choice, security: bool) -> Vec<route::Route> {
+    let router = Router::of(
+        &config.harness,
+        &config.routing,
+        harness,
+        Choice::of_security_review(config.security_harness, &config.harness).as_ref(),
+        Some(&Choice::of(
+            &crate::harness::Asked::default(),
+            &config.harness,
+        )),
+    );
+    router.allowed(security, harness.harness)
+}
+
+/// Whether every route a factory Command started with no Harness flags
+/// would take on this machine is unavailable by its saved Plan usage, so
+/// scheduled Passes are skipping: `harness.routes`, else `harness.default`
+/// alone. Reads only the saved snapshot, never a Harness or a Fleet peer,
+/// and none in unit tests.
+pub fn machine_exhaustion(config: &UserConfig) -> Option<Exhaustion> {
+    if cfg!(test) {
+        return None;
+    }
+    let routes = if config.routing.routes.is_empty() {
+        vec![exhaustion::pinned(
+            config.harness.default.unwrap_or(Harness::Claude),
+        )]
+    } else {
+        config.routing.routes.clone()
+    };
+    let saved = Store::machine().ok()?.read().ok()?;
+    exhaustion::judge(
+        &routes,
+        &config.routing,
+        &saved,
+        Harness::installed,
+        Utc::now(),
+    )
+}
+
+/// The latest Plan usage limit still holding a Harness on this machine, as
+/// a Paused Command's record keeps it, for a Spec run whose Ticket's child
+/// Run, or a Run whose Base fix, paused and reports only that it did: the
+/// most recent cooldown, else what holds the routes a Command with no
+/// Harness flags would take. None in unit tests.
+pub(crate) fn latest_limit() -> Option<crate::session::limits::Limit> {
+    if cfg!(test) {
+        return None;
+    }
+    let saved = Store::machine().ok()?.read().ok()?;
+    let now = Utc::now();
+    let cooled = saved
+        .iter()
+        .filter_map(|(name, state)| Some((Harness::named(name)?, state)))
+        .filter_map(|(harness, state)| Some((harness, state, state.cooldown.as_ref()?)))
+        .filter(|(_, _, cooldown)| cooldown.until > now)
+        .max_by_key(|(_, _, cooldown)| cooldown.since);
+    match cooled {
+        Some((harness, state, cooldown)) => {
+            let used = cooldown.window.as_deref().and_then(|window| {
+                state
+                    .windows
+                    .iter()
+                    .find(|kept| kept.name == window)
+                    .and_then(|kept| kept.used_percent)
+            });
+            Some(crate::session::limits::Limit::of(
+                harness,
+                cooldown.window.clone(),
+                used,
+                Some(cooldown.until),
+            ))
+        }
+        None => machine_exhaustion(&UserConfig::load().ok()?).map(|ex| ex.limit()),
+    }
+}
+
+/// The status banner for a machine whose every configured default route
+/// is unavailable by Plan usage: the routes held and the earliest known
+/// reset.
+pub fn banner(config: &UserConfig) -> Option<String> {
+    let exhaustion = machine_exhaustion(config)?;
+    let mut line = format!(
+        "Plan usage: every configured route is unavailable, so scheduled Passes skip: {}",
+        exhaustion.routes()
+    );
+    if let Some(reset) = exhaustion.earliest_reset() {
+        line.push_str(&format!(
+            "; earliest reset {}",
+            reset.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        ));
+    }
+    Some(line)
+}
+
 /// `thirdshift plan-usage`.
 pub fn execute(action: Action) -> Result<String> {
     match action {
@@ -277,5 +403,37 @@ pub fn execute(action: Action) -> Result<String> {
                 Ok(shown.to_string())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn machine_exhaustion_reads_nothing_in_unit_tests() {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap();
+        let path = home.join(".thirdshift/plan-usage.json");
+        // Leave a machine's real snapshot alone; with none, write a held
+        // default Harness that a read would find.
+        let written = !path.exists();
+        if written {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                r#"{"harnesses":{"claude":{"cooldown":{"since":"2026-01-01T00:00:00Z","until":"2096-10-02T07:06:40Z","window":"five_hour"}}}}"#,
+            )
+            .unwrap();
+        }
+        let config =
+            crate::config::UserConfig::parse("", &home.join(".thirdshift/config.toml"), &home)
+                .unwrap();
+        let found = machine_exhaustion(&config);
+        if written {
+            std::fs::remove_file(&path).unwrap();
+        }
+        assert!(found.is_none(), "{found:?}");
     }
 }

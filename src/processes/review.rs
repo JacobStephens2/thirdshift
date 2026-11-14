@@ -31,7 +31,10 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
                 progress::step(reason);
                 String::new()
             };
-            if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
+            let harness = command.flags.harness(&config);
+            if let Some(skipped) =
+                command_limit::early_skip(&repo, config.command_limit, &harness, false)
+            {
                 return Ok(skip(&skipped));
             }
             if let Some(running) = command_limit::hold_pass(
@@ -570,16 +573,10 @@ impl ReviewProcess {
             Ok(last)
         })();
         skills::remove_written();
-        let outcome = if result.is_ok() {
-            if delivered {
-                "ready for review"
-            } else {
-                "succeeded"
-            }
-        } else if interrupt::requested() {
-            "interrupted"
-        } else {
-            "failed"
+        let outcome = match &result {
+            Ok(_) if delivered => "ready for review",
+            Ok(_) => "succeeded",
+            Err(error) => failure_outcome(error),
         };
         let account = Account {
             recovery: None,

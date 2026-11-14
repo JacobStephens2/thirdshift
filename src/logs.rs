@@ -513,6 +513,18 @@ pub(crate) fn resumable(command: &str) {
     record().resumable(command);
 }
 
+/// A Paused Command's Claim put `ready-for-agent` back: a later Pickup run
+/// retakes its issue once Plan usage allows.
+pub(crate) fn retaken_by_pickup() {
+    record().retaken_by_pickup();
+}
+
+/// Whether this Command's record says a later Pickup run retakes it: its
+/// Claim put `ready-for-agent` back when it paused.
+pub(crate) fn recorded_retaken_by_pickup() -> bool {
+    record().recorded_retaken_by_pickup()
+}
+
 pub(crate) fn paused(limit: &crate::session::limits::Limit) {
     record().paused(limit);
 }
@@ -521,9 +533,14 @@ pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
     complete(outcome, cause);
 }
 
-/// Record how a Command with no Run account ended, such as a Process.
+/// Record how a Command with no Run account ended, such as a Process. A
+/// Paused Command with no resume command recorded keeps this one.
 pub fn complete(outcome: &str, cause: Option<&str>) {
-    record().outcome(outcome, cause);
+    let mut record = record();
+    if outcome == "paused" {
+        record.resumable_by_this_command();
+    }
+    record.outcome(outcome, cause);
 }
 
 /// The Stop given to this Command, if interruption is being handled.
