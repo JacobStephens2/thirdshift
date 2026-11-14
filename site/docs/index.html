@@ -1396,7 +1396,14 @@ environment; missing credentials void the Trial as <code>session_unavailable</co
 One provider-only HTTPS proxy and PATH wrappers disable Harness web search.
 Declared provider families also count in Grader panel voting and stand-in
 checks. See the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation">Custom runner contract</a>.
-Session recording follows in #2191.</p>
+Custom runner sessions stream live through the request&#39;s <code>record_command</code>
+argv prefix, followed by <code>--role &lt;role&gt; -- &lt;harness&gt; [args...]</code>, or import from
+<code>output_dir/sessions.json</code>. Both produce standard OTLP Session traces, priced
+from frozen Experiment prices and available in Trial Peek and Waterfall.
+Live 85% quota warnings pause the Experiment. Web-search tool calls void a
+Trial as <code>web_search</code>; provider traffic without recorded sessions, missing
+Harness sessions, or a declared provider/Harness runner delivering without
+sessions voids it as <code>accounting_gap</code>.</p>
 <p>Console clients can start the same Experiment with <code>POST /api/v1/start</code> (also
 served at <code>/api/v1/runs</code>), putting <code>baseline_runner</code>, <code>candidate_runner</code> and
 <code>suite</code> in the request&#39;s <code>experiment</code> object. The CLI&#39;s per-Arm conflicts and

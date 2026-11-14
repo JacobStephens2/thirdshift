@@ -138,7 +138,20 @@ impl Trace {
         })
     }
 
-    pub(super) fn with_trial_role(mut self, role: Option<&str>) -> io::Result<Self> {
+    pub(crate) fn with_started_at(mut self, started: u64) -> Self {
+        self.session.start_time_unix_nano = started;
+        self
+    }
+
+    pub(crate) fn with_harness(mut self, harness: &str) -> Self {
+        let attr = attribute("thirdshift.harness", harness);
+        set(&mut self.resource.attributes, attr.clone());
+        set(&mut self.session.attributes, attr);
+        self.version = None;
+        self
+    }
+
+    pub(crate) fn with_trial_role(mut self, role: Option<&str>) -> io::Result<Self> {
         if let Some(role) = role {
             let attr = attribute("thirdshift.trial.role", role);
             set(&mut self.resource.attributes, attr.clone());

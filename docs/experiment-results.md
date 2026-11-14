@@ -276,7 +276,14 @@ text and Console reports mention exclusions only when the count is nonzero.
 
 `accounting` reports each Trial's cost and active attempt time, its sessions with
 their attempt indices, observed Models, and the role of the Step that started
-them. Resumes and fallback sessions belong to that same Step. Arm totals and
+them. Custom runner roles come from `record_command --role` or the session's
+`role` in `output_dir/sessions.json`; both live Harness recordings and imported
+Harness/SDK records become the same OTLP Session traces. Their costs use frozen
+prices, ignoring runner-reported USD. Provider traffic without Session evidence,
+unrecorded Harness runs across the proxy and declared provider/Harness runners
+finishing `delivered` or `stopped_to_ask` without sessions are accounting gaps.
+Normalized web-search tool calls void a Trial as `web_search`.
+Resumes and fallback sessions belong to that same Step. Arm totals and
 `roles` include all spent attempts, including Voids. A missing session usage
 measurement (input or output), unknown observed Model, or missing frozen price
 leaves cost null and makes a Trial Void with an `accounting_gap` cause naming
@@ -309,6 +316,8 @@ trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
 pairs/<pair-id>.json             # one pair's diffs, base-tests and cross-tests (evidence)
 reviews/<pair-id>/<n>.json       # one append-only blind pairwise record
 trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
+  session/                       # host-owned OTLP Session traces (read-only in Custom runner sandbox)
+  output/                        # Custom runner result.json, sessions.json and source streams
 ```
 
 Trial result files have the `TrialResult` shape below, governed by their parent
@@ -566,7 +575,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "role": "off|beside|counted", "readers": ["string"], "sample": "integer?", "overlap": "integer"
   },
   "Agreement": {"compared": "integer", "agreed": "integer"},
-  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
+  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked|web_search",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
     "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"], "leaks?": ["LeakHit"]

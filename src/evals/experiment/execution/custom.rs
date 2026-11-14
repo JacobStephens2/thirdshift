@@ -14,11 +14,111 @@ use super::super::{Task, arms, store};
 use crate::process::{self, Control, Interruption};
 use crate::trial::{Outcome, Output, VoidCause};
 
+mod recording;
+pub(crate) mod sessions;
+pub(super) use recording::Recorder;
+
+pub(super) fn collect(
+    recorder: &mut Recorder,
+    runner: &arms::Runner,
+    traffic: &crate::proxy::Accounting,
+    output: &mut Output,
+    signal: &Path,
+) -> Result<()> {
+    match recorder.collect() {
+        Ok(imported) => {
+            if let Some(limit) = recorder.limit.as_ref().or(imported.usage_limit.as_ref()) {
+                crate::session::limits::notify(signal, limit)?;
+                output.outcome = Outcome::Void;
+                output.void_cause = Some(VoidCause::UsageLimit);
+                output.cause = Some(crate::session::limits::Reached(limit.clone()).to_string());
+            } else if recorder.web_search || imported.web_search {
+                output.outcome = Outcome::Void;
+                output.void_cause = Some(VoidCause::WebSearch);
+                output.cause = Some("Session transcript contains a web-search tool call".into());
+            } else if output.outcome != Outcome::Void {
+                let sessions = recorder.sessions + imported.sessions;
+                let harness_sessions = recorder.sessions + imported.harness_sessions;
+                let crossed: Vec<_> = traffic
+                    .harness_invocations
+                    .iter()
+                    .filter(|run| run.provider_connections > 0)
+                    .collect();
+                let declared =
+                    !runner.manifest.harnesses.is_empty() || !runner.manifest.providers.is_empty();
+                if (sessions == 0
+                    && (traffic.provider_connections > 0
+                        || (declared
+                            && matches!(
+                                output.outcome,
+                                Outcome::Delivered | Outcome::StoppedToAsk
+                            ))))
+                    || harness_sessions < crossed.len()
+                {
+                    output.outcome = Outcome::Void;
+                    output.void_cause = Some(VoidCause::AccountingGap);
+                    output.cause = Some(format!(
+                        "accounting gap: {sessions} recorded sessions, {harness_sessions} Harness sessions, {} provider connections, {} Harness runs across the proxy ({})",
+                        traffic.provider_connections,
+                        crossed.len(),
+                        crossed
+                            .iter()
+                            .map(|run| run.harness.name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+        }
+        Err(error) if output.outcome != Outcome::Void => {
+            output.outcome = Outcome::Void;
+            output.void_cause = Some(VoidCause::AccountingGap);
+            output.cause = Some(format!(
+                "accounting gap: invalid Custom runner Session evidence: {error:#}"
+            ));
+        }
+        Err(_) => {}
+    }
+    Ok(())
+}
+
+/// Inspect the normalized facts, shared by native and Custom-runner Trials.
+pub(super) fn web_search(attempt: &Path) -> Result<bool> {
+    use crate::otlp_jsonl::{AnyValue, Logs, Reader};
+    for session in
+        super::super::trial_sessions::attempt(&super::super::trial_results::files::Native, attempt)?
+            .sessions
+    {
+        let Some(path) = session.logs else { continue };
+        for request in Reader::<_, Logs>::new(std::io::BufReader::new(fs::File::open(path)?)) {
+            for record in request?
+                .resource_logs
+                .into_iter()
+                .flat_map(|resource| resource.scope_logs)
+                .flat_map(|scope| scope.log_records)
+            {
+                for attribute in record.attributes {
+                    if attribute.key == "thirdshift.events"
+                        && let Some(AnyValue::String(events)) = attribute.value
+                        && sessions::web_search(&serde_json::from_str::<
+                            Vec<crate::harness::interpretation::event::Event>,
+                        >(&events)?)
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub(super) fn prepare(
     runner: &arms::Runner,
     task: &Task,
     repository: &Path,
     attempt: &Path,
+    record_command: &[String],
 ) -> Result<()> {
     let runner_dir = runner.install(attempt)?;
     let inputs = task
@@ -27,6 +127,7 @@ pub(super) fn prepare(
         .as_ref()
         .context("missing Trial inputs")?;
     fs::create_dir_all(attempt.join("session"))?;
+    fs::create_dir_all(attempt.join("output"))?;
     let git = crate::git::Git::new(repository);
     crate::skills::exclude(&git, &format!("/{}", crate::prompt::ISSUE_FILE))?;
     let exclude = git.run(&["rev-parse", "--git-path", "info/exclude"])?;
@@ -43,10 +144,8 @@ pub(super) fn prepare(
         &json!({
             "version": 1, "repository": repository, "issue_file": repository.join(crate::prompt::ISSUE_FILE),
             "issue_url": inputs.issue_url, "base": inputs.base, "branch": inputs.branch,
-            "runner_dir": runner_dir, "output_dir": attempt.join("session"),
-            // #2191 supplies the live recorder; retaining the field makes the
-            // version-1 request usable by runners that do not record CLI sessions.
-            "record_command": null
+            "runner_dir": runner_dir, "output_dir": attempt.join("output"),
+            "record_command": record_command
         }),
     )
 }
@@ -131,7 +230,7 @@ struct ResultDocument {
 pub(super) fn result(process: &ProcessOutput, attempt: &Path, elapsed: u128) -> Output {
     let result = (|| -> Result<Output> {
         let document: ResultDocument = serde_json::from_slice(
-            &fs::read(attempt.join("session/result.json"))
+            &fs::read(attempt.join("output/result.json"))
                 .context("missing or unreadable Custom runner result.json")?,
         )
         .context("invalid Custom runner result.json")?;
