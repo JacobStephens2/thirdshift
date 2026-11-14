@@ -757,6 +757,38 @@ test('folded Inbox groups keep live counts and choices through folders, hiding a
   }
 });
 
+test('Done and Resolved explain themselves on a phone, empty or populated, through live refresh', async t => {
+  const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const help = group => page.locator(`#inbox > [data-group="${group}"] > .section-help`);
+  const fits = async group => {
+    const box = await help(group).boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
+    assert.equal(await help(group).evaluate(node => node.scrollWidth <= node.clientWidth), true);
+  };
+  try {
+    await page.goto(`${origin}/?section=resolved`);
+    await help('resolved').waitFor({ state: 'visible' });
+    assert.match(await help('resolved').textContent(), /^Older Commands with nothing waiting for you/);
+    await fits('resolved');
+    await page.goto(`${origin}/?section=done`);
+    const done = page.locator('#inbox > [data-group="done"]');
+    const count = Number(await done.locator(':scope > summary .count').textContent());
+    await help('done').waitFor({ state: 'visible' });
+    await fits('done');
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="done"] > summary .count').textContent === String(expected), count + 1);
+    await help('done').waitFor({ state: 'visible' });
+    assert.equal(await help('done').textContent(), 'Ended within the last 24 hours, with nothing waiting for you.');
+    await fits('done');
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('every Inbox section folder has a native disclosure without JavaScript', async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   await page.goto(origin);
@@ -1511,6 +1543,94 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
     await rm(fired, { force: true });
     await rm(ready, { force: true });
     await writeFile(config, '[console]\nport = 0\n');
+  }
+});
+
+test("skipped Passes stay folded during live Commands and preserve toggles across updates", { skip: process.platform !== 'linux' }, async t => {
+  const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const url = 'https://github.com/acme/widgets/issues/1234567890123456789012345678901234567890';
+  const reasons = [
+    'Architect run skipped: at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1',
+    'Fix run skipped: no eligible pull request targeting main on acme/widgets',
+    'Pickup run skipped: no Ready issue on acme/widgets',
+    'Review run skipped: GitHub Quota wait until 2026-01-01 12:17 EST (core: 499 left)',
+    `Triage run skipped: waiting on ${url} <script>unsafe</script> ${'reason'.repeat(60)}`,
+  ];
+  const recorded = reasons.map(reason => `2026-01-01 12:00:00 ${reason}\n`).join('');
+  Object.assign(fixture, { process_id: server.pid, process_start: start, ended_at: null, outcome: null, cause: null, tickets: [] });
+  await replaceRecord(path, JSON.stringify(fixture));
+  try {
+    for (const javaScriptEnabled of [false, true]) {
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+        await replaceRecord(activity, recorded);
+        const page = await pageFor(t, { javaScriptEnabled, viewport });
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.goto(`${origin}/?section=overview`);
+        await page.getByText('1 active run', { exact: true }).waitFor();
+        assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
+        const passes = page.getByRole('complementary', { name: 'Idle Passes' });
+        const messages = passes.locator('p');
+        await messages.first().waitFor({ state: 'hidden' });
+        const summary = passes.locator('summary');
+        assert.equal(await summary.count(), 1);
+        // A prior row selection must not steal Space/Enter from the disclosure.
+        if (javaScriptEnabled) {
+          await page.keyboard.press('j');
+          await page.locator('.is-selected').first().waitFor();
+        }
+        await summary.focus();
+        await page.keyboard.press('Space');
+        await messages.first().waitFor({ state: 'visible' });
+        assert.equal(await messages.count(), reasons.length);
+        for (const reason of reasons) {
+          const expected = reason.replace(' skipped:', ' idle on acme/widgets:');
+          await passes.getByText(expected, { exact: true }).waitFor();
+        }
+        assert.equal(await passes.getByRole('link').getAttribute('href'), url);
+        assert.equal(await passes.locator('script').count(), 0);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        if (javaScriptEnabled) {
+          await page.evaluate(() => { window.visitMarker = 'same live Inbox'; });
+          await replaceRecord(activity, `${recorded}2026-01-01 12:01:00 Pickup run skipped: updated while open\n`);
+          await passes.getByText('Pickup run idle on acme/widgets: updated while open', { exact: true }).waitFor();
+          assert.equal(await messages.count(), reasons.length);
+        }
+        await summary.focus();
+        await page.keyboard.press('Enter');
+        await messages.first().waitFor({ state: 'hidden' });
+        if (javaScriptEnabled) {
+          await replaceRecord(activity, `${recorded}2026-01-01 12:02:00 Pickup run skipped: updated while closed\n`);
+          const updated = passes.getByText('Pickup run idle on acme/widgets: updated while closed', { exact: true });
+          await updated.waitFor({ state: 'attached' });
+          await updated.waitFor({ state: 'hidden' });
+          await summary.click();
+          await updated.waitFor();
+          assert.equal(await page.evaluate(() => window.visitMarker), 'same live Inbox');
+        } else {
+          await summary.click();
+          await messages.first().waitFor({ state: 'visible' });
+        }
+        await page.reload();
+        await messages.first().waitFor({ state: 'hidden' });
+        assert.deepEqual(errors, []);
+        await page.close();
+      }
+    }
+    await rm(activity);
+    const page = await pageFor(t);
+    await page.goto(`${origin}/?section=overview`);
+    await page.getByText('1 active run', { exact: true }).waitFor();
+    assert.equal(await page.locator('#idle-passes').count(), 0);
+    assert.equal(await page.getByRole('complementary', { name: 'Idle Passes' }).count(), 0);
+  } finally {
+    await replaceRecord(path, original);
+    await rm(activity, { force: true });
   }
 });
 

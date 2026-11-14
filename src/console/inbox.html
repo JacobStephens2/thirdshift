@@ -70,13 +70,21 @@
     {% for section in inbox.sections %}
     <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.in_overview(section.group) %} data-overview{% endif %}{% if !self.shown(section.group) %} hidden{% endif %} open>
       <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>
+      {# Retention is each owning machine's inbox.days, which Fleet machines may set differently, so no length is shown. #}
+      {% if section.group == "done" %}<p class="section-help">Ended within the last 24 hours, with nothing waiting for you.</p>
+      {% else if section.group == "resolved" %}<p class="section-help">Older Commands with nothing waiting for you, kept here until their retention period ends. Retention counts from when the Command ended or its waiting work was dealt with: dismissed, settled on GitHub or handed to a later Command on the same issue or pull request. Its length is <code>inbox.days</code> in the owning machine's User config. After it, rows stay in the owning machine's <a href="/history">History</a>.</p>{% endif %}
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">{% for item in section.rows %}{{ self.row(item, true)|safe }}{% endfor %}</ul>
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}
-    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass.line()|linkify }}</p>{% endfor %}</aside>{% endif %}
+    {% if !self.idle() && !inbox.idle_passes.is_empty() %}
+    <aside aria-label="Idle Passes"><details id="idle-passes">
+      <summary>Last recorded skipped Passes:</summary>
+      {% for pass in inbox.idle_passes %}<p>{{ pass.line()|linkify }}</p>{% endfor %}
+    </details></aside>
+    {% endif %}
     {% if !self.idle() && !inbox.pass_starts.is_empty() %}<aside aria-label="Last fired Passes">{% for pass in inbox.pass_starts %}<p>{% include "console/pass_start.html" %}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>

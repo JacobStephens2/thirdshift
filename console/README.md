@@ -220,7 +220,9 @@ updates, folder changes and reloads when storage is available. Without storage,
 folding still works through live updates. Keyboard row navigation skips folded
 rows, and the same controls work in every Theme and on phones. Without
 JavaScript, groups start open and their native disclosures still work.
-The folders on the left can filter to one section, including Done and Resolved.
+The folders on the left can filter to one section, including Done and Resolved,
+each of which says under its heading what it holds; Resolved adds when its
+retention starts and that its length is the owning machine's `inbox.days`.
 Rows show state, subject, title, gist and age. Compact Done headers also identify
 their Command kind on desktop and phone, with or without JavaScript, in
 every Theme and across the Fleet. Stored `Run` kinds display as `Ticket run`;
@@ -330,6 +332,13 @@ keep the reason's original recorded time while updating the last-fired time.
 These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. A live Command in
 Needs you, or in a hidden section, still counts as running.
+
+While Commands are live, retained skipped Pass reasons appear below the Inbox
+sections under the same **Last recorded skipped Passes** disclosure, closed on
+each page load. Open it to read the full reasons and their links; live updates
+refresh the messages while keeping your open or closed state. With no recorded
+skipped Passes, no empty disclosure appears. The control also works by keyboard
+and without JavaScript.
 
 Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
