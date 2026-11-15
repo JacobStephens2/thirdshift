@@ -81,9 +81,53 @@ pub(crate) struct RunnerHarness {
     pub families: BTreeSet<String>,
 }
 
+/// The part of a Custom runner's inputs a static problem belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Check {
+    Manifest,
+    Files,
+    Harnesses,
+    Logins,
+    Providers,
+    Roles,
+}
+
+impl Check {
+    pub const ALL: [Self; 6] = [
+        Self::Manifest,
+        Self::Files,
+        Self::Harnesses,
+        Self::Logins,
+        Self::Providers,
+        Self::Roles,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Manifest => "manifest",
+            Self::Files => "files",
+            Self::Harnesses => "harnesses",
+            Self::Logins => "logins",
+            Self::Providers => "providers",
+            Self::Roles => "roles",
+        }
+    }
+}
+
+/// Where `freeze` sends each problem: the first one ends an ordinary freeze,
+/// while `evals check-runner` collects them all.
+pub(crate) type ProblemSink<'a> = dyn FnMut(Check, anyhow::Error) -> Result<()> + 'a;
+
 impl Runner {
     pub fn freeze(name: &str, directory: &Path) -> Result<Self> {
-        let path = if name.ends_with(".toml") {
+        Self::freeze_reporting(name, directory, &mut |_, error| Err(error))?
+            .context("Custom runner manifest could not be read")
+    }
+
+    /// Resolve a runner name or `.toml` path to its manifest file.
+    pub fn manifest_path(name: &str) -> Result<PathBuf> {
+        if name.ends_with(".toml") {
             PathBuf::from(name)
         } else {
             crate::evals::format::name(name)?;
@@ -92,81 +136,88 @@ impl Runner {
                 .join(format!("{name}.toml"))
         }
         .canonicalize()
-        .with_context(|| format!("cannot resolve Custom runner {name}"))?;
-        let bytes = fs::read(&path)?;
-        let manifest: Manifest = toml::from_str(std::str::from_utf8(&bytes)?)?;
-        ensure!(
-            !manifest.command.is_empty() && !manifest.command[0].is_empty(),
-            "Custom runner command must contain a program"
-        );
-        ensure!(
-            manifest.command.iter().all(|arg| !arg.contains('\0')),
-            "Custom runner command contains NUL"
-        );
-        ensure!(
-            manifest
-                .git_exclude
-                .iter()
-                .all(|pattern| !pattern.contains(['\n', '\r', '\0'])),
-            "git_exclude patterns must each be one line"
-        );
+        .with_context(|| format!("cannot resolve Custom runner {name}"))
+    }
+
+    /// Freeze every input that passes, reporting each one that does not.
+    /// Returns `None` only when no manifest could be read; the Runner it does
+    /// return is complete only when nothing was reported.
+    pub fn freeze_reporting(
+        name: &str,
+        directory: &Path,
+        report: &mut ProblemSink<'_>,
+    ) -> Result<Option<Self>> {
+        let loaded = (|| -> Result<_> {
+            let path = Self::manifest_path(name)?;
+            let bytes = fs::read(&path)?;
+            let manifest: Manifest = toml::from_str(std::str::from_utf8(&bytes)?)?;
+            ensure!(
+                !manifest.command.is_empty() && !manifest.command[0].is_empty(),
+                "Custom runner command must contain a program"
+            );
+            ensure!(
+                manifest.command.iter().all(|arg| !arg.contains('\0')),
+                "Custom runner command contains NUL"
+            );
+            ensure!(
+                manifest
+                    .git_exclude
+                    .iter()
+                    .all(|pattern| !pattern.contains(['\n', '\r', '\0'])),
+                "git_exclude patterns must each be one line"
+            );
+            Ok((path, bytes, manifest))
+        })();
+        let (path, bytes, manifest) = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                report(Check::Manifest, error)?;
+                return Ok(None);
+            }
+        };
         fs::create_dir_all(directory.join("bundle"))?;
         fs::create_dir_all(directory.join("home"))?;
         fs::write(directory.join("manifest.toml"), &bytes)?;
         let mut provenance = BTreeMap::new();
         let mut harnesses = BTreeMap::new();
         for (name, models) in &manifest.harnesses {
-            let harness = Harness::named(name)
-                .with_context(|| format!("unknown Custom runner Harness {name}"))?;
-            ensure!(
-                !matches!(harness, Harness::OpenCode | Harness::Kimi) || !models.is_empty(),
-                "Custom runner {name} requires explicit Models for provider host resolution"
-            );
-            let binary = super::fixed_harness(harness)?;
-            let mut hosts = BTreeSet::new();
-            let mut families = BTreeSet::new();
-            let models: Vec<Option<&str>> = if models.is_empty() {
-                vec![None]
-            } else {
-                models.iter().map(|model| Some(model.as_str())).collect()
-            };
-            for model in models {
-                let allowed = proxy::allowed_hosts(harness, model)?;
-                families.insert(proxy::harness_family(harness, model, &allowed));
-                hosts.extend(allowed);
+            match pin(name, models) {
+                Ok(pinned) => {
+                    harnesses.insert(name.clone(), pinned);
+                }
+                Err(error) => report(Check::Harnesses, error)?,
             }
-            harnesses.insert(
-                name.clone(),
-                RunnerHarness {
-                    binary,
-                    hosts,
-                    families,
-                },
-            );
         }
         if let Some(origin) = source_provenance(&path)? {
             provenance.insert("manifest.toml".into(), origin);
         }
+        let parent = path.parent().context("runner manifest has no parent")?;
         for (source, target) in &manifest.files {
-            let source_path = path
-                .parent()
-                .context("runner manifest has no parent")?
-                .join(source)
-                .canonicalize()?;
-            let destination = directory.join(target.path()?);
-            copy(&source_path, &destination, 0)?;
-            if let Some(origin) = source_provenance(&source_path)? {
-                provenance.insert(source.clone(), origin);
+            let copied = (|| -> Result<_> {
+                let destination = directory.join(target.path()?);
+                let source_path = parent
+                    .join(source)
+                    .canonicalize()
+                    .with_context(|| format!("cannot find Custom runner file {source}"))?;
+                copy(&source_path, &destination, 0)?;
+                source_provenance(&source_path)
+            })();
+            match copied {
+                Ok(Some(origin)) => {
+                    provenance.insert(source.clone(), origin);
+                }
+                Ok(None) => {}
+                Err(error) => report(Check::Files, error.context(format!("file {source}")))?,
             }
         }
-        Ok(Self {
+        Ok(Some(Self {
             name: name.into(),
             directory: directory.to_path_buf(),
             manifest,
             files: tree_hashes(directory)?,
             provenance,
             harnesses,
-        })
+        }))
     }
 
     pub fn source_digest(name: &str) -> Result<String> {
@@ -222,6 +273,34 @@ impl Runner {
         }
         Ok(runner_dir)
     }
+}
+
+/// Pin one declared Harness and the provider hosts its Models reach.
+fn pin(name: &str, models: &[String]) -> Result<RunnerHarness> {
+    let harness =
+        Harness::named(name).with_context(|| format!("unknown Custom runner Harness {name}"))?;
+    ensure!(
+        !matches!(harness, Harness::OpenCode | Harness::Kimi) || !models.is_empty(),
+        "Custom runner {name} requires explicit Models for provider host resolution"
+    );
+    let binary = super::fixed_harness(harness)?;
+    let mut hosts = BTreeSet::new();
+    let mut families = BTreeSet::new();
+    let models: Vec<Option<&str>> = if models.is_empty() {
+        vec![None]
+    } else {
+        models.iter().map(|model| Some(model.as_str())).collect()
+    };
+    for model in models {
+        let allowed = proxy::allowed_hosts(harness, model)?;
+        families.insert(proxy::harness_family(harness, model, &allowed));
+        hosts.extend(allowed);
+    }
+    Ok(RunnerHarness {
+        binary,
+        hosts,
+        families,
+    })
 }
 
 fn source_provenance(path: &Path) -> Result<Option<Provenance>> {

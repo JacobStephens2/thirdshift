@@ -59,37 +59,8 @@ pub(crate) fn prepare(
             secrets: Secrets::from(&credentials),
             adapter_env: vec![],
         };
-        match harness {
-            Harness::Claude => {
-                let token = credentials
-                    .claude_setup_token()
-                    .ok_or_else(|| no_login("declared claude has no Trials setup token"))?;
-                env.set_str(CLAUDE_TOKEN_ENV, &token);
-            }
-            Harness::Codex => required_login(
-                &request,
-                &mut env,
-                Some("CODEX_HOME"),
-                ".codex",
-                "auth.json",
-            )?,
-            Harness::Muse => required_login(
-                &request,
-                &mut env,
-                Some("XDG_CONFIG_HOME"),
-                ".config",
-                "muse/auth.json",
-            )?,
-            Harness::Agy => required_login(
-                &request,
-                &mut env,
-                None,
-                ".gemini/antigravity-cli",
-                "antigravity-oauth-token",
-            )?,
-            Harness::Grok => grok = Some(grok_into(&request)?),
-            Harness::OpenCode => opencode(runner, &credentials, &mut env)?,
-            Harness::Kimi => kimi(runner, &request, &mut env, &declared.hosts)?,
+        if let Some(guard) = login(runner, &request, &credentials, &mut env, &declared.hosts)? {
+            grok = Some(guard);
         }
         for (key, value) in harness.adapter().environment() {
             env.set_str(key, value);
@@ -99,10 +70,10 @@ pub(crate) fn prepare(
         binaries.push((name, harness, binary));
     }
     for provider in &runner.manifest.providers {
-        let key = credentials.provider_key(*provider).ok_or_else(|| {
-            no_login(format!("missing [providers].{} Trial key", provider.name()))
-        })?;
-        env.set_str(provider.environment(), key);
+        env.set_str(
+            provider.environment(),
+            provider_key(&credentials, *provider)?,
+        );
         allowed.extend(provider.hosts().iter().map(|host| host.to_string()));
     }
     // Preserve missing-login classification even on hosts that cannot start
@@ -137,6 +108,114 @@ pub(crate) fn prepare(
         grok,
         &allowed.into_iter().collect::<Vec<_>>(),
     )
+}
+
+/// Install the login one declared Harness needs into the fresh home.
+fn login(
+    runner: &Runner,
+    request: &Request<'_>,
+    credentials: &Credentials,
+    env: &mut Environment,
+    hosts: &BTreeSet<String>,
+) -> Result<Option<GrokGuard>> {
+    match request.harness {
+        Harness::Claude => {
+            let token = credentials
+                .claude_setup_token()
+                .ok_or_else(|| no_login("declared claude has no Trials setup token"))?;
+            env.set_str(CLAUDE_TOKEN_ENV, &token);
+        }
+        Harness::Codex => {
+            required_login(request, env, Some("CODEX_HOME"), ".codex", "auth.json")?;
+        }
+        Harness::Muse => required_login(
+            request,
+            env,
+            Some("XDG_CONFIG_HOME"),
+            ".config",
+            "muse/auth.json",
+        )?,
+        Harness::Agy => required_login(
+            request,
+            env,
+            None,
+            ".gemini/antigravity-cli",
+            "antigravity-oauth-token",
+        )?,
+        Harness::Grok => return grok_into(request).map(Some),
+        Harness::OpenCode => opencode(runner, credentials, env)?,
+        Harness::Kimi => kimi(runner, request, env, hosts)?,
+    }
+    Ok(None)
+}
+
+fn provider_key(credentials: &Credentials, provider: proxy::Provider) -> Result<&str> {
+    credentials
+        .provider_key(provider)
+        .ok_or_else(|| no_login(format!("missing [providers].{} Trial key", provider.name())))
+}
+
+/// What `prepare` would refuse for want of a login or a `[providers]` key,
+/// each declaration checked on its own in a throwaway fresh home. Grok's
+/// login is only looked for, without waiting on a live Grok Trial's lock.
+pub(crate) fn missing_logins(runner: &Runner, home: &Path) -> Result<MissingLogins> {
+    let mut missing = MissingLogins::default();
+    let credentials = match Credentials::read() {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            missing.harnesses.push(format!("{error:#}"));
+            return Ok(missing);
+        }
+    };
+    let scratch = tempfile::Builder::new()
+        .prefix("check-runner-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let fresh_home = scratch.path().join("home");
+    fs::create_dir_all(&fresh_home)?;
+    for (name, declared) in &runner.harnesses {
+        let harness = Harness::named(name).context("unknown frozen Harness")?;
+        let request = Request {
+            harness,
+            model: None,
+            repository: scratch.path(),
+            skills_dir: scratch.path(),
+            harness_binary: &declared.binary.path,
+            home,
+            fresh_home: &fresh_home,
+            secrets: Secrets::from(&credentials),
+            adapter_env: vec![],
+        };
+        let result = if harness == Harness::Grok {
+            grok_login(home)
+        } else {
+            let mut env = Environment::default();
+            login(runner, &request, &credentials, &mut env, &declared.hosts).map(drop)
+        };
+        if let Err(error) = result {
+            missing.harnesses.push(diagnostic(&error));
+        }
+    }
+    for provider in &runner.manifest.providers {
+        if let Err(error) = provider_key(&credentials, *provider) {
+            missing.providers.push(diagnostic(&error));
+        }
+    }
+    Ok(missing)
+}
+
+/// A missing login's own words, without the Trial-time prefix.
+fn diagnostic(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<NoLogin>() {
+        Some(missing) => missing.diagnostic.clone(),
+        None => format!("{error:#}"),
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MissingLogins {
+    pub harnesses: Vec<String>,
+    pub providers: Vec<String>,
 }
 
 fn no_login(message: impl Into<String>) -> anyhow::Error {

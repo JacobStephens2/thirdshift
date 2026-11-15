@@ -1154,15 +1154,7 @@ fn trials_home(home: &Path) -> PathBuf {
 fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
     let home = trials_home(request.home);
     let guard = GrokGuard::acquire(request.home)?;
-    if !home.join("auth.json").is_file() {
-        return Err(anyhow::Error::new(NoLogin {
-            diagnostic: format!(
-                "Grok Trial is not logged in; sign the Trials home in once with \
-                 GROK_HOME={} grok login",
-                home.display()
-            ),
-        }));
-    }
+    grok_login(request.home)?;
     let dest = request.fresh_home.join(GROK_HOME_NAME);
     reject_fresh_symlink(request.fresh_home, &dest)?;
     fs::create_dir_all(&dest).with_context(|| {
@@ -1180,6 +1172,21 @@ fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
         }
     }
     Ok(guard)
+}
+
+/// The Trials Grok home must hold a login before any Grok Trial starts.
+fn grok_login(home: &Path) -> Result<()> {
+    let home = trials_home(home);
+    if !home.join("auth.json").is_file() {
+        return Err(anyhow::Error::new(NoLogin {
+            diagnostic: format!(
+                "Grok Trial is not logged in; sign the Trials home in once with \
+                 GROK_HOME={} grok login",
+                home.display()
+            ),
+        }));
+    }
+    Ok(())
 }
 
 /// One Grok Trial at a time: the lock is a directory beside the Trials home,

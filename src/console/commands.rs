@@ -49,6 +49,33 @@ pub(super) async fn process(Path(name): Path<String>) -> Response {
     .await
 }
 
+/// Run a CLI twin as its own process, stopping it at `timeout`. Twins that
+/// run work (a Process check, a dry-run Trial) keep their interruption
+/// handling and progress out of the Console this way.
+pub(super) fn cli_twin(
+    name: &str,
+    args: &[String],
+    directory: Option<&std::path::Path>,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output> {
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command.args(args);
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    crate::process::output_until(
+        &mut command,
+        None,
+        crate::process::Control {
+            name,
+            interruption: crate::process::Interruption::Ordinary,
+            stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+        },
+        std::time::Instant::now() + timeout,
+        &|| Ok(()),
+    )
+}
+
 pub(super) fn directory(repository: &str) -> Result<crate::launch_directories::Directory> {
     crate::launch_directories::load()?
         .directories

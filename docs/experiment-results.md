@@ -27,6 +27,10 @@ Format 13 adds Custom runners: `Setup.commit` and `Setup.harness` are nullable,
 and `runner` plus `runner_digest` identify the manifest and frozen inputs.
 Prepared Custom-runner Arms have null `commit` and `harness`, an empty `binary`
 path, and `runner` holding the frozen manifest, hashes and Git provenance.
+`thirdshift evals check-runner` reports that same `runner_digest` as `digest`.
+Its dry run creates no Experiment and none of these files; it prints its own
+version-1 report, described under
+[Checking a Custom runner](eval-tasks.md#checking-a-custom-runner).
 
 The private `experiment.json` already has `format: 1`. The CLI view projects its
 metadata and retained evidence; it is not a copy of that internal storage file.

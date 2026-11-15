@@ -123,6 +123,22 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::Evals => array(record),
         View::TouchedEvals => array(text),
         View::VerifyEval => object(json!({"safe":{"const":true}})),
+        View::CheckRunner => object(json!({
+            "version": version, "runner": text,
+            "manifest": {"type": ["string", "null"]}, "digest": {"type": ["string", "null"]},
+            "ok": {"type": "boolean"},
+            "problems": array(object(json!({
+                "check": {"enum": crate::evals::check_runner::check_names()},
+                "message": {"type": "string"}
+            }))),
+            "trial": {"oneOf": [{"type": "null"}, object(json!({
+                "suite": {"type": "string"}, "task": {"type": "string"},
+                "outcome": {"type": "string"}, "void_cause": {"type": ["string", "null"]},
+                "cause": {"type": ["string", "null"]}, "passed": {"type": "boolean"},
+                "checks": array(record.clone()), "sessions": array(record.clone()),
+                "cost_usd": {"type": ["number", "null"]}
+            }))]}
+        })),
         View::OtherAccounts | View::SetOtherAccounts => {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
@@ -376,6 +392,19 @@ fn action_body(view: View) -> Value {
                 json!({"repository":text,"base":text}),
                 vec!["repository", "base"],
             );
+        }
+        View::CheckRunner => {
+            let mut body = json_request(
+                json!({
+                    "runner": {"type":"string","description":"A Custom runner name in ~/.thirdshift/runners; a .toml file path is CLI-only."},
+                    "suite": {"type":"string","description":"With task: run one dry-run Trial on this process Eval task."},
+                    "task": text
+                }),
+                vec!["runner"],
+            );
+            body["content"]["application/json"]["schema"]["dependentRequired"] =
+                json!({"suite":["task"],"task":["suite"]});
+            return body;
         }
         View::SetOtherAccounts => return json_request(json!({"value":text}), vec!["value"]),
         View::EmailTest => return json_request(json!({"address":text}), vec![]),

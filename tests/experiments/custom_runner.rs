@@ -1,6 +1,6 @@
 use super::*;
 
-fn declarations(fixture: &Fixture, text: &str) {
+pub(super) fn declarations(fixture: &Fixture, text: &str) {
     let path = fixture
         .scenario
         .path("home/.thirdshift/runners/fixture.toml");
@@ -8,7 +8,7 @@ fn declarations(fixture: &Fixture, text: &str) {
     fs::write(path, format!("{text}\n{manifest}")).unwrap();
 }
 
-fn harness_script(fixture: &Fixture, name: &str, body: &str) {
+pub(super) fn harness_script(fixture: &Fixture, name: &str, body: &str) {
     let path = fixture.scenario.path(&format!("bin/{name}"));
     let _ = fs::remove_file(&path);
     fs::write(&path, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{name} fixture 1'; exit 0; fi\n{body}\n")).unwrap();
@@ -876,7 +876,7 @@ fn nonzero_exit_without_outer_void_evidence_fails_despite_a_runner_void_claim() 
     }
 }
 
-fn runner(fixture: &Fixture, body: &str) -> String {
+pub(super) fn runner(fixture: &Fixture, body: &str) -> String {
     let directory = fixture.scenario.path("home/.thirdshift/runners");
     fs::create_dir_all(&directory).unwrap();
     fs::write(
@@ -909,7 +909,7 @@ git_exclude = [".scratch/"]
     "fixture".into()
 }
 
-const DELIVER: &str = r#"
+pub(super) const DELIVER: &str = r#"
 subprocess.run(['git', 'config', 'user.name', 'Eval'], check=True)
 subprocess.run(['git', 'config', 'user.email', 'eval@example.invalid'], check=True)
 pathlib.Path('feature.txt').write_text('implemented\n')

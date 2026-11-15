@@ -573,6 +573,87 @@ These checks judge only an outcome the runner reports in a valid
 `result.json`: a timeout, a runner that cannot start, a crash or a missing or
 invalid `result.json` stays `failed`, as outer supervision keeps precedence.
 
+### Checking a Custom runner
+
+Check a manifest before an Experiment spends Trials on it:
+
+```sh
+thirdshift evals check-runner <name-or-file.toml> [--json]
+thirdshift evals check-runner <name-or-file.toml> --suite <suite> --task <task> [--json]
+```
+
+The static check freezes the manifest into a throwaway directory exactly as
+Arm preparation does, but reports every problem instead of stopping at the
+first. Each problem names its `check`:
+
+- `manifest`: the file cannot be resolved or parsed, has unknown fields, an
+  empty `command`, a NUL in an argument or a multi-line `git_exclude` pattern;
+- `files`: a mapped file or skill directory is missing or not a regular file or
+  directory, or its target is absolute, contains `..` or `.git`, or overlaps another;
+- `harnesses`: a declared Harness is unknown, is not on PATH, reports no
+  version, or needs Models (OpenCode, Kimi) that do not resolve to provider hosts;
+- `logins`: a declared Harness has no Trials login: Claude's
+  `claude.setup_token`, Codex, Muse or agy logins in HOME, the Trials Grok home,
+  OpenCode keys for each declared provider, or Kimi aliases and their keys;
+- `providers`: a declared direct-SDK provider has no key under `[providers]`
+  in the Credentials;
+- `roles`: a `roles` Model is missing from the embedded Trial price table.
+
+Logins are checked as a Trial would install them, in a private throwaway home;
+no secret is printed. The Grok check only looks for the Trials login, without
+waiting for a live Grok Trial's lock.
+
+`--suite` and `--task` (always together) add a dry run once every static check
+passes: one Candidate Trial of the runner on that approved or proposed `process`
+Eval task with a `[trial]` table. Review suites and other sessions are refused
+before any check runs. The Trial runs through the same execution as an
+Experiment's, inside the real Trial sandbox and memory scope: request.json,
+`git_exclude`, `record_command` recording and `sessions.json` conversion into
+OTLP traces, pricing from the embedded price table, `accounting_gap` and
+`web_search` Void checks, committed-HEAD checks and the task's offline code
+checks, with the default Bar's 30-minute timeout. It uses a private temporary
+directory, removed afterwards, and creates no Experiment record: nothing is
+written under `~/.thirdshift/evals/experiments`.
+
+`--json` prints a version-1 report:
+
+```json
+{
+  "version": 1,
+  "runner": "workflow",
+  "manifest": "/home/you/.thirdshift/runners/workflow.toml",
+  "digest": "…",
+  "ok": true,
+  "problems": [],
+  "trial": {
+    "suite": "process", "task": "example", "outcome": "delivered",
+    "void_cause": null, "cause": null, "passed": true,
+    "checks": [{"command": null, "passed": true, "reason": "Trial delivered: session completed"}],
+    "sessions": [{"role": "implement", "time_ms": 2000, "models": {"…": {}}, "cost_usd": 0.00006, "gap": null}],
+    "cost_usd": 0.00006
+  }
+}
+```
+
+`digest` is the `runner_digest` an Experiment's Setup would record; it is null
+when the manifest, files or Harnesses could not be frozen. `problems` lists
+`{"check", "message"}` objects. `trial` is null without a dry run or when a
+static check failed. `checks` holds the Trial's outcome check followed by the
+task's code checks; `passed` is its Score. Each Session gives its role, time,
+observed Models with token usage, priced cost and any accounting gap;
+`cost_usd` is null when a Session could not be priced. Without `--json` the
+same facts print as text. The command exits `0` when `ok` is true: every
+static check passed and, for a dry run, the Trial's Score passed. A failed
+check still prints its report and exits `1`. An unusable Eval task or
+argument prints only an error.
+
+The Console serves the same check at POST `/api/v1/evals/check-runner` with
+the `run` scope. Its JSON body takes `runner`, a Custom runner name from
+`~/.thirdshift/runners`, and optional `suite` and `task`; a `.toml` file path
+stays CLI-only, so the API cannot read a caller-chosen local file. It
+returns the CLI's `--json` report, whether or not `ok` is true, and refuses an
+unusable request with 422.
+
 Before its first Trial, an Experiment prepares both Arms together:
 
 ```sh

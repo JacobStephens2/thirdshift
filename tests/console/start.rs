@@ -327,6 +327,89 @@ fn api_checks_the_same_named_process_as_the_cli() {
 }
 
 #[test]
+fn api_checks_a_custom_runner_with_the_cli_report() {
+    let scenario = fixture();
+    let directory = scenario.path("home/.thirdshift/runners");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("runner.py"), "print('runner')\n").unwrap();
+    let manifest = directory.join("fixture.toml");
+    fs::write(
+        &manifest,
+        "command = [\"python3\", \"{runner_dir}/runner.py\"]\n[files]\n\"runner.py\" = \"runner.py\"\n",
+    )
+    .unwrap();
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let reader = tokens::create(&scenario.path("home"), "reader", &[]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let client = reqwest::blocking::Client::new();
+    let post = |token: &str, body: Value| {
+        client
+            .post(format!("{}/api/v1/evals/check-runner", console.address))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    for (manifest_text, code) in [
+        (None, Some(0)),
+        (Some("\"missing.py\" = \"missing.py\"\n"), Some(1)),
+    ] {
+        if let Some(text) = manifest_text {
+            let current = fs::read_to_string(&manifest).unwrap();
+            fs::write(&manifest, current + text).unwrap();
+        }
+        let expected = scenario.run(&["evals", "check-runner", "fixture", "--json"]);
+        assert_eq!(expected.code, code, "{}", expected.stderr);
+        let expected: Value = serde_json::from_str(&expected.stdout).unwrap();
+        assert_eq!(
+            api::json(post(&runner, json!({"runner":"fixture"}))),
+            expected
+        );
+    }
+    assert_eq!(post(&reader, json!({"runner":"fixture"})).status(), 403);
+    for (body, evidence) in [
+        (json!({"runner":"fixture.toml"}), "CLI-only"),
+        (
+            json!({"runner":"fixture","suite":"process"}),
+            "both --suite and --task",
+        ),
+        (
+            json!({"runner":"fixture","suite":"process","task":"absent"}),
+            "suites/process/suite.toml",
+        ),
+    ] {
+        let refused = post(&runner, body.clone());
+        assert_eq!(refused.status(), 422, "{body}");
+        let message = refused.json::<Value>().unwrap()["error"].to_string();
+        assert!(message.contains(evidence), "{body}: {message}");
+    }
+}
+
+/// A `run` token cannot make the Console read a caller-chosen local `.toml`
+/// file and echo its text back in a manifest problem (ADR 0026).
+#[test]
+fn api_check_runner_does_not_read_caller_selected_files() {
+    let scenario = fixture();
+    let secret = "dummy-check-runner-secret-6d1f";
+    let private = scenario.path("home/private");
+    fs::create_dir_all(&private).unwrap();
+    let file = private.join("tool.toml");
+    fs::write(&file, format!("api_key = \"{secret}\"\n")).unwrap();
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/evals/check-runner", console.address))
+        .bearer_auth(&runner)
+        .json(&json!({"runner": file.to_str().unwrap()}))
+        .send()
+        .unwrap();
+    let status = response.status();
+    let body = response.text().unwrap();
+    assert!(!body.contains(secret), "{status}: {body}");
+    assert_eq!(status, 422, "{body}");
+}
+
+#[test]
 fn api_test_email_uses_the_cli_sender_and_is_audited() {
     let scenario = fixture();
     let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"test-email"}"#);
