@@ -1634,3 +1634,15 @@ fn two_custom_runners_execute_outside_a_thirdshift_checkout_without_builds_or_ha
             .exists()
     );
 }
+
+#[test]
+fn custom_runner_experiment_command_record_names_no_fabricated_harness() {
+    let fixture = process::fixture();
+    runner(&fixture, DELIVER);
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    assert_eq!(record["harness"], "custom runner", "{record}");
+}

@@ -574,10 +574,12 @@ pub fn run(options: Options) -> Result<()> {
         owner: "JacobStephens2".into(),
         name: "thirdshift".into(),
     };
-    logs::started(
-        logs::Work::Experiment(&repo),
-        &experiment.description.candidate.choice(),
-    );
+    let candidate = &experiment.description.candidate;
+    if candidate.runner.is_some() {
+        logs::started_custom_runner(logs::Work::Experiment(&repo));
+    } else {
+        logs::started(logs::Work::Experiment(&repo), &candidate.choice());
+    }
     logs::experiment(&experiment.description);
     logs::resumable(experiment.details.resume_command.as_deref().unwrap());
     experiment.details.command_log = logs::command_log_path();

@@ -385,6 +385,17 @@ pub fn started(work: Work, harness: &Choice) {
     attach_quota_budget();
 }
 
+/// Record an Experiment whose Candidate arm is a Custom runner. It has no
+/// single Harness, so its Command record names the Custom runner kind
+/// instead of a default Harness it never runs.
+pub(crate) fn started_custom_runner(work: Work) {
+    started(work, &Choice::default());
+    record().name_executor(CUSTOM_RUNNER_EXECUTOR);
+}
+
+/// The Command record's `harness` for a Custom-runner Candidate arm.
+pub(crate) const CUSTOM_RUNNER_EXECUTOR: &str = "custom runner";
+
 /// Capture the Custom process's loaded source before recording its start or skip.
 pub(crate) fn process_loaded(identity: crate::processes::Identity) {
     record().process_loaded(identity);
