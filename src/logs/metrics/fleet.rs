@@ -12,13 +12,14 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use super::outcomes::{Delta, Tally};
 use super::scope::{Filters, Span, Window};
 use crate::args::MetricsArgs;
 use crate::config::{UserConfig, console::fleet::Entry};
 use crate::console::fleet::read::{Failure, Remote};
+pub(crate) use crate::console::fleet::snapshot::Status;
+use crate::console::fleet::snapshot::{Held, Slot};
 use crate::resend_key::Credentials;
 
 /// The per-machine peer-metrics cache, under the watching account's logs.
@@ -200,34 +201,6 @@ impl Machine {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum Status {
-    Ok,
-    /// Unreachable now, or no longer in the Fleet: its saved snapshot shows.
-    Cached,
-    /// Not read from here: the summary it last pushed shows, read-only.
-    Reported,
-    Unavailable,
-    Refused,
-    Incompatible,
-    LinkOnly,
-}
-
-impl std::fmt::Display for Status {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Ok => "ok",
-            Self::Cached => "cached",
-            Self::Reported => "reported",
-            Self::Unavailable => "unavailable",
-            Self::Refused => "refused",
-            Self::Incompatible => "incompatible",
-            Self::LinkOnly => "link-only",
-        })
-    }
-}
-
 #[derive(Serialize)]
 pub(crate) struct Bucket {
     pub(crate) machine: String,
@@ -315,31 +288,17 @@ struct Saved {
     views: BTreeMap<String, SavedView>,
 }
 
-/// Which saved snapshot of a machine: one person's reads, or what the
-/// machine reported itself.
-#[derive(Clone, Copy)]
-enum Slot<'a> {
-    Read(Option<&'a str>),
-    Reported,
-}
-
-impl<'a> Slot<'a> {
-    /// Whose reads the slot keeps; a reported slot keeps no person's.
-    fn person(self) -> Option<&'a str> {
-        match self {
-            Self::Read(person) => person,
-            Self::Reported => None,
-        }
+impl Held for Saved {
+    fn machine(&self) -> &str {
+        &self.machine
     }
 
-    fn reported(self) -> bool {
-        matches!(self, Self::Reported)
+    fn person(&self) -> Option<&str> {
+        self.person.as_deref()
     }
 
-    fn holds(self, saved: &Saved, name: &str) -> bool {
-        saved.machine == name
-            && saved.pushed_at.is_some() == self.reported()
-            && saved.person.as_deref() == self.person()
+    fn pushed(&self) -> bool {
+        self.pushed_at.is_some()
     }
 }
 
@@ -989,27 +948,9 @@ fn merge(
     }
 }
 
-/// A name's saved snapshot file in `slot`. Names are printable but may hold
-/// any character, so the file is named by a digest; the file names the
-/// machine, and the person or that the machine reported it.
+/// A name's saved snapshot file in `slot`.
 fn path(logs_dir: &Path, name: &str, slot: Slot<'_>) -> PathBuf {
-    let mut digest = Sha256::new();
-    digest.update(name.as_bytes());
-    match slot {
-        Slot::Read(None) => {}
-        Slot::Read(Some(person)) => {
-            digest.update([0]);
-            digest.update(person.as_bytes());
-        }
-        // No printable name or person holds a 1 byte.
-        Slot::Reported => digest.update([1]),
-    }
-    let digest = digest.finalize();
-    let hex: String = digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    logs_dir.join(CACHE).join(format!("{hex}.json"))
+    slot.path(logs_dir, CACHE, name)
 }
 
 fn read_saved(path: &Path) -> Option<Saved> {

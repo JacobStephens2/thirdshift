@@ -92,6 +92,7 @@ pub enum Command {
     Resources {
         json: bool,
     },
+    PlanUsage(crate::plan_usage::Action),
     Console {
         no_sign_in: bool,
     },
@@ -181,8 +182,7 @@ pub enum Command {
         follow: bool,
         json: bool,
     },
-    /// Internal interface for scripts/release.sh: prompt on stdin.
-    ReleaseSummary,
+    Release(ReleaseArgs),
     Skill {
         name: String,
         issue: Option<IssueInput>,
@@ -346,12 +346,18 @@ pub fn continuation(issue: &IssueUrl, asks: &crate::asks::Asks, is_spec: bool) -
         goal: Some(asks.goal),
         parallel: is_spec.then_some(asks.tickets_at_once),
         base_fix: Some(asks.base_fix.clone()),
-        harness: harness::Asked {
-            harness: Some(asks.harness.harness),
-            model_and_effort: crate::harness::ModelAndEffort {
-                model: asks.harness.model.clone(),
-                effort: asks.harness.effort.clone(),
-            },
+        // A Command routed by `harness.routes` continues routed, not pinned
+        // to the route its first Step happened to take.
+        harness: if asks.harness.chosen_by == harness::ChosenBy::Routes {
+            harness::Asked::default()
+        } else {
+            harness::Asked {
+                harness: Some(asks.harness.harness),
+                model_and_effort: crate::harness::ModelAndEffort {
+                    model: asks.harness.model.clone(),
+                    effort: asks.harness.effort.clone(),
+                },
+            }
         },
         security_fix: Some(if asks.security_fix {
             crate::security::FixAsk::Allow
@@ -938,6 +944,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 json,
             });
         }
+        Some("plan-usage") => return plan_usage(&args[1..]).map(Command::PlanUsage),
         Some("resources") => {
             return match &args[1..] {
                 [] => Ok(Command::Resources { json: false }),
@@ -971,12 +978,6 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 local,
             });
         }
-        Some("--release-summary") => {
-            return match &args[1..] {
-                [] => Ok(Command::ReleaseSummary),
-                [extra, ..] => bail!("unexpected argument after --release-summary: {extra}"),
-            };
-        }
         Some("skill") => {
             return match &args[1..] {
                 [name] => Ok(Command::Skill {
@@ -1006,6 +1007,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
         Some("triage") => return parse_triage(&args[1..]).map(Command::Triage),
+        Some("release") => return parse_release(&args[1..]).map(Command::Release),
         Some("pickup") => return parse_pass(&args[1..], "pickup").map(Command::Pickup),
         Some("secure") => return parse_pass(&args[1..], "secure").map(Command::Secure),
         _ => {}
@@ -1032,6 +1034,53 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     })))
+}
+
+/// `plan-usage [--fleet | --machine <name> | --local] [--json]`,
+/// `plan-usage --clear [<harness>] [--json]` or `plan-usage --push
+/// [<destination>]`, in any order. Clearing and pushing act on this machine
+/// alone.
+fn plan_usage(args: &[String]) -> Result<crate::plan_usage::Action> {
+    use crate::plan_usage::{Action, Selection};
+    let usage = "usage: thirdshift plan-usage [--fleet | --machine <name> | --local] [--json] | --clear [<harness>] [--json] | --push [<destination>]";
+    let (mut json, mut clear, mut harness) = (false, false, None);
+    let (mut push, mut destination) = (false, None);
+    let mut selection = Selection::Default;
+    let mut words = args.iter().peekable();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--json" if !json => json = true,
+            "--clear" if !clear => {
+                clear = true;
+                if let Some(name) = words.next_if(|name| !name.starts_with('-')) {
+                    harness = Some(crate::plan_usage::subscription_named(name)?);
+                }
+            }
+            "--push" if !push => {
+                push = true;
+                destination = words.next_if(|name| !name.starts_with('-')).cloned();
+            }
+            "--fleet" if selection == Selection::Default => selection = Selection::Fleet,
+            "--local" if selection == Selection::Default => selection = Selection::Local,
+            "--machine" if selection == Selection::Default => {
+                let name = words.next().context("--machine needs a Fleet name")?;
+                crate::config::console::fleet::validate_name(name)?;
+                selection = Selection::Machine(name.clone());
+            }
+            _ => bail!("{usage}"),
+        }
+    }
+    let shows = json || selection != Selection::Default;
+    Ok(match (clear, push) {
+        (true, true) => bail!("{usage}"),
+        (true, false) if selection != Selection::Default => bail!(
+            "--clear forgets this machine's cooldowns; run it on the Fleet machine or its Console\n{usage}"
+        ),
+        (true, false) => Action::Clear { harness, json },
+        (false, true) if shows => bail!("{usage}"),
+        (false, true) => Action::Push { destination },
+        (false, false) => Action::Show { selection, json },
+    })
 }
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {
@@ -1261,6 +1310,7 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
         } else if take_harness_flag(&mut flags.harness, arg, &mut words)?
             || take_email_flag(&mut flags.email, arg, &mut words)?
             || take_security_review_flag(&mut flags, arg)?
+            || take_merge_flag(&mut flags.goal, arg)?
         {
         } else if pull_request.is_none() {
             pull_request = Some(crate::review::PullRequestUrl::parse(arg)?);
@@ -1273,6 +1323,10 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
         (None, Some(login)) => crate::review::Target::Author(login),
         _ => bail!("usage: thirdshift review <PR URL> | --author <login> [--recommend-only]"),
     };
+    ensure!(
+        !recommend_only || flags.goal != Some(Goal::Merged),
+        "--recommend-only cannot be combined with merge"
+    );
     Ok(ReviewArgs {
         target,
         flags,
@@ -1321,7 +1375,15 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
 }
 
 pub(crate) fn fix_retry(pr_url: &str, flags: &Flags) -> String {
-    let mut words = vec!["thirdshift".into(), "fix".into(), pr_url.into()];
+    pull_request_retry("fix", pr_url, flags)
+}
+
+pub(crate) fn review_retry(pr_url: &str, flags: &Flags) -> String {
+    pull_request_retry("review", pr_url, flags)
+}
+
+fn pull_request_retry(command: &str, pr_url: &str, flags: &Flags) -> String {
+    let mut words = vec!["thirdshift".into(), command.into(), pr_url.into()];
     public_flag_words(flags, &mut words);
     shell_command(words)
 }
@@ -1546,6 +1608,68 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
         base,
         flags,
         plan_only,
+    })
+}
+
+pub struct ReleaseArgs {
+    pub version: Option<String>,
+    pub bump: Option<crate::release::Bump>,
+    pub with_experiment: bool,
+    pub review: bool,
+    pub harness: harness::Asked,
+    pub email: Option<NotificationAsk>,
+}
+
+fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
+    let mut version = None;
+    let mut bump = None;
+    let mut with_experiment = false;
+    let mut review = false;
+    let mut harness = harness::Asked::default();
+    let mut email = None;
+    let mut rest = args.iter().peekable();
+    while let Some(arg) = rest.next() {
+        if take_email_flag(&mut email, arg, &mut rest)?
+            || take_harness_flag(&mut harness, arg, &mut rest)?
+        {
+            continue;
+        }
+        match arg.as_str() {
+            "--with-experiment" => {
+                with_experiment = true;
+                continue;
+            }
+            "--review" => {
+                review = true;
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(level) = crate::release::Bump::from_flag(arg) {
+            ensure!(
+                bump.is_none() && version.is_none(),
+                "release version and bump flags are mutually exclusive"
+            );
+            bump = Some(level);
+            continue;
+        }
+        ensure!(
+            bump.is_none() || arg.starts_with('-'),
+            "release version and bump flags are mutually exclusive"
+        );
+        ensure!(
+            version.is_none() && !arg.starts_with('-'),
+            "unexpected argument after release: {arg}"
+        );
+        version = Some(arg.clone());
+    }
+    Ok(ReleaseArgs {
+        version,
+        bump,
+        with_experiment,
+        review,
+        harness,
+        email,
     })
 }
 

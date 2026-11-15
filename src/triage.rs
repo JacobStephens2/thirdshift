@@ -293,10 +293,24 @@ fn investigate(
     mut claim: Option<existing::Claim<'_>>,
 ) -> Result<Ended, FailedRun> {
     let target = input.issue();
-    let finding_notification = target
-        .map(|issue| existing::finding_notification(issue, &GitHub::new()))
-        .transpose()?
-        .flatten();
+    let existing::IssueOverview {
+        title: issue_title,
+        finding_notification,
+    } = match target {
+        Some(issue) => existing::issue_overview(issue, &GitHub::new())?,
+        None => existing::IssueOverview {
+            title: None,
+            finding_notification: None,
+        },
+    };
+    if issue_title.is_some() {
+        logs::issue_title(issue_title);
+    }
+    if options.read_machine {
+        // Its sandbox binds one Harness's files, so its sessions can't move
+        // route mid-Step: they start on the route Plan usage allows.
+        *harness = crate::plan_usage::settled_route(harness);
+    }
     harness.check_without_probe()?;
     let checkout = worktree::ReviewWorktree::for_triage(launch, &repo.name, base.origin_commit())?;
     let session_logs = session::Logs::of_triage_run(repo);
@@ -370,10 +384,12 @@ fn investigate(
     } else {
         session::Sessions::within(&session_logs, checkout.path(), harness, investigate)
     };
-    if result.is_ok()
-        && let Some(claim) = &mut claim
-    {
-        claim.completed();
+    if let Some(claim) = &mut claim {
+        match &result {
+            Ok(_) => claim.completed(),
+            Err(error) if session::limits::plan_usage_paused(error).is_some() => claim.paused(),
+            Err(_) => {}
+        }
     }
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);

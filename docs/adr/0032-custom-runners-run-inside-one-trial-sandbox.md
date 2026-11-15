@@ -1,38 +1,19 @@
-# Custom runners run inside one Trial sandbox
+# A Custom runner runs inside one Trial sandbox and returns a commit and session traces
 
-A Custom runner is an outside orchestrator used as either Arm of a process
-Experiment. Its scripts and mapped skill trees are frozen before Trials and
-verified by SHA-256 before each attempt. Source Git origin, path, HEAD and dirty
-state are provenance; dirty local edits are valid inputs. Neither Arm needs a
-thirdshift build when both are Custom runners. Decided in #1468; implementation
-starts in #2188.
+An Arm on a `process` Eval suite may name a **Custom runner** manifest instead of a thirdshift build and Process. Whereas a native Process Trial enters `bwrap` once per Step for a single Harness, a Custom runner is a black box that spawns its own child CLIs or direct-SDK calls across providers, so thirdshift encloses the whole Custom runner Trial in one `bwrap` sandbox inside the Trial's `systemd-run` memory scope. Before the first Trial, `prepare-arms` freezes the manifest and its mapped files by SHA-256 and pins declared Harnesses by path and version. Inside the sandbox, fresh `HOME` holds only those frozen files, the logins for declared Harnesses, Trials-only `[providers]` API keys from Credentials, thin `PATH` wrappers ahead of pinned Harness binaries that prepend each Harness's no-web-search switch, and one allowlisting `HTTPS_PROXY` restricted to declared provider API hosts. The Custom runner receives `request.json` and the prepared repository, runs unattended with no simulated user, commits its change on `HEAD`, and leaves `result.json` plus either live-recorded Harness streams or `sessions.json` (raw Harness streams and direct-SDK `uncached_input_tokens` records). thirdshift converts every session into OTLP `.logs.jsonl` and `.spans.jsonl` priced solely from the Experiment's frozen price table, checks session counts against `HTTPS_PROXY` traffic and Harness wrapper runs for `accounting_gap`, and grades `HEAD` through the existing code Graders, Pair evidence, Grader panel, and blind pairwise page ([ADR 0027](0027-a-trial-carries-out-a-process-but-is-not-a-command.md), [ADR 0028](0028-who-decides-a-verdict-is-fixed-in-the-bar.md)). Grilled in #1468, Q1.3–Q1.7, Q2.3–Q2.6, and Q3.2–Q3.3.
 
-One Trial-wide sandbox and memory scope enclose the orchestrator and all its
-children. Fresh HOME holds declared files, Harness logins and Trials-only
-provider keys. A provider-only proxy and Harness wrappers enforce the same
-network and web-search boundary as native Trials. These multi-provider sandbox
-adapters are delivered by #2189; the execution contract in #2188 is their seam.
-
-The runner receives a versioned request, works unattended, commits its change
-on HEAD and writes a versioned result. Code Graders and Pair evidence read the
-commit, ignoring uncommitted files. Stopping to ask fails its Score; no simulated
-user supplies answers. Only session unavailability, usage limits and rate limits
-may be self-reported as Void. Outer supervision owns interruption, sandbox
-failure, memory-cap and host-kill evidence. A broken runner protocol fails one
-Trial rather than aborting the Experiment.
-
-Session evidence is converted to the standard traces and priced from the frozen
-Experiment price table (#2191). Declared roles describe configuration; observed
-Models decide pricing. Setup identity includes the frozen runner digest, with
-no thirdshift commit or single Harness on a Custom-runner Arm.
+The frozen bytes are the input: the enclosing Git repository, `HEAD` commit and `dirty` state of each frozen source are recorded as provenance, and uncommitted local edits are accepted. Neither Arm needs a thirdshift checkout or Cargo build when both are Custom runners. A Custom-runner Arm's **Setup** identifies it by runner name and frozen digest, with no thirdshift commit or single Harness. Declared `roles` describe configuration for inspection; observed session Models decide pricing. Only `session_unavailable`, `usage_limit` and `rate_limit` may be self-reported as Void; outer supervision owns interruption, sandbox failure, memory-cap and host-kill evidence, and a broken runner protocol fails one Trial rather than aborting the Experiment.
 
 ## Considered Options
 
-- **Run the outside workflow as a top-level Command.** Rejected: it would
-  publish factory work and mix Trial evidence into production metrics.
-- **Sandbox every child session separately.** Rejected: the orchestrator could
-  read the host or network outside those sessions and bypass Trial boundaries.
-- **Grade a returned patch or the working tree.** Rejected: committed HEAD
-  handles binary files, renames and several commits while excluding scratch.
-- **Refuse dirty source repositories.** Rejected: freezing records the actual
-  bytes, making local skill experiments reproducible without extra commits.
+- **Enter `bwrap` per Step, or run the Custom runner outside `bwrap`.** Rejected: thirdshift does not drive a Custom runner's internal Steps, and running an outside orchestrator unsandboxed on an Experiment host would expose the reference fix, GitHub, and live factory state without separate OS accounts.
+- **Package each Custom runner as a container image (Harbor style).** Rejected: a TOML manifest with SHA-256-frozen files and pinned host Harnesses runs on existing `host` tasks without rebuilding an image for every prompt or skill edit, while keeping task container images orthogonal.
+- **Return a `git diff` patch (SWE-bench style) and runner-computed USD costs.** Rejected: grading `HEAD` reuses code Graders and Pair evidence without `git apply` failures on renames, binaries, or multi-commit work, and pricing raw streams or explicit `uncached_input_tokens` records from the frozen price table avoids Anthropic/OpenAI cache-token mismatches.
+- **Answer Custom runner questions with a simulated user.** Rejected: Process Arms see only `.thirdshift-issue.md` and fail on `stopped_to_ask`, so answering questions for one Arm would tilt the Experiment.
+- **Run the outside workflow as a top-level Command.** Rejected: it would publish factory work and mix Trial evidence into production metrics.
+- **Refuse dirty source repositories.** Rejected: freezing records the actual bytes, so local skill experiments stay reproducible without extra commits.
+
+## Consequences
+
+- Provider-hosted web search runs over allowed provider API hosts, so `PATH` wrappers disable it on pinned Harnesses and any web-search tool call in a normalized transcript voids the Trial.
+- Outbound provider connections or Harness runs without matching recorded sessions void the Trial (`accounting_gap`), so a Custom runner cannot silently omit sub-agent spend or leak-check transcripts.

@@ -254,7 +254,7 @@ impl Flags {
     /// the default. It is a Run's, and a Pass's
     /// for its own sessions as for the run it dispatches.
     pub fn harness(&self, config: &UserConfig) -> Choice {
-        Choice::of(&self.harness, &config.harness)
+        choice(&self.harness, config)
     }
 
     /// The Harness of a Security run: command, Security setting, default
@@ -264,12 +264,28 @@ impl Flags {
             default: config.security_harness.or(config.harness.default),
             ..config.harness.clone()
         };
+        if config.security_harness.is_none() {
+            return self.harness(config);
+        }
         let mut choice = Choice::of(&self.harness, &settings);
-        if self.harness.harness.is_none() && config.security_harness.is_some() {
+        if self.harness.harness.is_none() {
             choice.chosen_by = harness::ChosenBy::SecurityConfig;
         }
         choice
     }
+}
+
+/// What a factory Command that `asked` for its Harness, Model and Effort
+/// runs its sessions on: as asked, else `config`'s. A Command that asked
+/// for none of them takes the first of `harness.routes`, which Plan usage
+/// may route each session Step away from.
+pub fn choice(asked: &harness::Asked, config: &UserConfig) -> Choice {
+    if *asked == harness::Asked::default()
+        && let Some(first) = config.routing.first(&config.harness)
+    {
+        return first;
+    }
+    Choice::of(asked, &config.harness)
 }
 
 #[cfg(test)]
@@ -321,6 +337,7 @@ mod tests {
             pickup_order: crate::ready::PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
+            routing: crate::plan_usage::Routing::default(),
             security_fix: None,
             security_close: None,
             security_review: false,
@@ -380,6 +397,48 @@ mod tests {
             effort: effort.map(str::to_string),
             chosen_by: ChosenBy::Command,
         }
+    }
+
+    #[test]
+    fn only_a_command_that_asks_nothing_takes_the_first_route_and_may_route() {
+        let config = UserConfig {
+            routing: crate::plan_usage::Routing {
+                routes: vec![
+                    crate::plan_usage::route::Route::named(Harness::Claude),
+                    crate::plan_usage::route::Route::named(Harness::Codex),
+                ],
+                ..crate::plan_usage::Routing::default()
+            },
+            ..every_setting()
+        };
+        let routed = Flags::default().harness(&config);
+        assert_eq!(
+            routed,
+            Choice {
+                harness: Harness::Claude,
+                model: Some("opus".to_string()),
+                effort: Some("high".to_string()),
+                chosen_by: ChosenBy::Routes,
+            }
+        );
+        assert_eq!(Flags::default().security_harness(&config), routed);
+        // A Harness or Model named on the command stays pinned.
+        let named = Flags {
+            harness: claude_on_sonnet(),
+            ..Flags::default()
+        };
+        assert_eq!(named.harness(&config).chosen_by, ChosenBy::Command);
+        let model_only = Flags {
+            harness: harness::Asked {
+                harness: None,
+                model_and_effort: model_and_effort("gpt-6-luna", "low"),
+            },
+            ..Flags::default()
+        };
+        assert_eq!(model_only.harness(&config).chosen_by, ChosenBy::UserConfig);
+        // Its continuation command is routed again, not pinned to the route.
+        let asks = Asks::of_run(&issue(), &Flags::default(), &config);
+        assert!(!args::continuation(&issue(), &asks, false).contains("harness"));
     }
 
     /// The flags that choose Claude, on the Model `sonnet`.

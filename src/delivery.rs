@@ -98,6 +98,18 @@ pub struct Delivery<'a> {
 pub struct Opening {
     pub session: OpeningSession,
     pub prompt: String,
+    /// The Continuation prompt an implement session on a fresh Issue
+    /// branch starts again with when Plan usage moves it to another route
+    /// after it made commits; none for any other opening.
+    pub continuation: Option<String>,
+}
+
+impl Opening {
+    /// Rewrite the prompt, and the continuation prompt with it, alike.
+    pub fn each_prompt(&mut self, rewrite: impl Fn(&str) -> String) {
+        self.prompt = rewrite(&self.prompt);
+        self.continuation = self.continuation.as_deref().map(&rewrite);
+    }
 }
 
 /// Which session a Delivery opens with.
@@ -174,6 +186,7 @@ impl Delivery<'_> {
                     crate::review::Reservation::take(worktree.launch(), &GitHub::new(), &pr)?
                         .context("Base CI fix PR is already reserved")?;
                 crate::logs::pull_request(&pr.url);
+                crate::logs::pull_request_title(Some(title.to_owned()));
                 outside.write_built_with(&outside.child_asks.harness.clone())?;
                 outside.stage(Stage::PullRequestReadiness);
                 outside.mark_pr_ready(None)?;
@@ -198,6 +211,7 @@ impl Delivery<'_> {
             }
             if let Some(pr) = pull_request.info() {
                 crate::logs::pull_request(&pr.url);
+                crate::logs::pull_request_title(Some(title.to_owned()));
                 failed.pr_url = Some(pr.url);
             }
         }
@@ -330,6 +344,7 @@ impl Delivery<'_> {
             Opening {
                 session: OpeningSession::SpecReview,
                 prompt,
+                continuation: None,
             },
             pull_request,
             Some(checklist),
@@ -814,8 +829,8 @@ impl Route<'_> {
         let session = opening.session;
         outside.stage(session.stage());
         if let crate::implement::Completed::NotReproduced(comment_url) =
-            crate::implement::run(self.issue, opening, |prompt| {
-                outside.session(session.kind(), prompt)
+            crate::implement::run(self.issue, opening, |prompt, continuation| {
+                outside.implementation(session.kind(), prompt, continuation)
             })?
         {
             outside.confirm_needs_info()?;
@@ -840,8 +855,9 @@ impl Route<'_> {
     fn publish(&self, outside: &mut impl Outside, checklist: Option<&str>) -> Result<Identified> {
         outside.stage(Stage::Push);
         outside.push()?;
-        self.write_built_with(outside);
         outside.stage(Stage::PullRequestReadiness);
+        outside.open_missing_pr()?;
+        self.write_built_with(outside);
         outside.mark_pr_ready(checklist)
     }
 
@@ -861,8 +877,8 @@ impl Route<'_> {
 
     /// Write the line that says the pull request was built with the Harness
     /// in its body, in place of any thirdshift wrote there before, only
-    /// warning if that fails, as the work is done without it. Nothing if
-    /// there is no pull request: marking it ready says so.
+    /// warning if that fails, as the work is done without it. Opening a
+    /// missing pull request comes first, and fails when there is none to open.
     fn write_built_with(&self, outside: &mut impl Outside) {
         if let Err(error) = outside.write_built_with(self.harness) {
             outside.warn(
@@ -1050,6 +1066,16 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
+    /// Run the implement session given `prompt`, starting again on
+    /// `continuation` if Plan usage moves it after it made commits.
+    fn implementation(
+        &mut self,
+        kind: Kind,
+        prompt: &str,
+        _continuation: Option<&str>,
+    ) -> Result<Option<String>> {
+        self.session(kind, prompt)
+    }
     fn confirm_needs_info(&mut self) -> Result<()>;
     /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
@@ -1057,6 +1083,10 @@ trait Outside {
     fn record_security_review(&mut self, entry: &str) -> Result<()>;
     /// Push the Issue branch.
     fn push(&mut self) -> Result<()>;
+    /// Open the pull request the implement session should have opened, when
+    /// the pushed Issue branch has commits ahead of the Base branch but no
+    /// pull request; fail, saying so, when it has neither.
+    fn open_missing_pr(&mut self) -> Result<()>;
     /// Write the annotation through the captured pull request module.
     fn write_built_with(&mut self, choice: &Choice) -> Result<()>;
     /// Validate and mark the captured pull request ready.
@@ -1182,6 +1212,16 @@ impl std::fmt::Display for UntrustedEdit {
 
 impl std::error::Error for UntrustedEdit {}
 
+/// The body of the pull request thirdshift opens for issue `number` when its
+/// implement session pushed commits but opened none.
+fn recovered_pr_body(number: u64) -> String {
+    format!(
+        "Closes #{number}\n\n\
+         thirdshift opened this pull request: the implement session pushed its \
+         commits but ended without opening one."
+    )
+}
+
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.
 struct InWorktree<'a> {
@@ -1214,6 +1254,24 @@ impl Outside for InWorktree<'_> {
         Ok(final_message)
     }
 
+    fn implementation(
+        &mut self,
+        kind: Kind,
+        prompt: &str,
+        continuation: Option<&str>,
+    ) -> Result<Option<String>> {
+        let base = self.base;
+        let pull_request = &mut *self.pull_request;
+        let mut continue_with = |committed: bool| {
+            crate::implement::continue_with(continuation, committed, base, pull_request)
+        };
+        let final_message =
+            self.sessions
+                .run_implementation(kind, prompt, Some(&mut continue_with))?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(final_message)
+    }
+
     fn confirm_needs_info(&mut self) -> Result<()> {
         crate::implement::confirm_needs_info(&GitHub::new().issue_labels(self.issue)?)
     }
@@ -1236,6 +1294,24 @@ impl Outside for InWorktree<'_> {
         self.pull_request.ensure_actionable(false)?;
         self.worktree
             .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
+    }
+
+    fn open_missing_pr(&mut self) -> Result<()> {
+        if self.pull_request.actionable_head(false)?.is_some() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            self.worktree.ahead_merge_base(self.base)?.is_some(),
+            "the implement session made no commits and opened no pull request"
+        );
+        progress::step(format_args!(
+            "the implement session pushed {} without opening a pull request; \
+             opening it in the session's place",
+            self.worktree.branch()
+        ));
+        let title = GitHub::new().issue_title(self.issue)?;
+        self.pull_request
+            .open_if_absent(&title, &recovered_pr_body(self.issue.number))
     }
 
     fn write_built_with(&mut self, choice: &Choice) -> Result<()> {

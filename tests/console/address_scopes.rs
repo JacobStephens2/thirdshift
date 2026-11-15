@@ -715,3 +715,73 @@ fn cli_sets_and_shows_address_scopes_without_changing_other_settings() {
         json!({"email": EMAIL, "scopes": []})
     );
 }
+
+#[test]
+fn security_run_command_log_requires_security_scope_without_leaking_target_or_title() {
+    let home = configured();
+    let mut security = record(home.path(), 6, Some("findings recorded"), 0);
+    security["kind"] = json!("Security run");
+    security["name"] = json!("secure-private");
+    security["issue"] = json!({
+        "number": 99,
+        "url": "https://github.com/acme/widgets/issues/99",
+        "title": "Secret advisory title"
+    });
+    write_record(home.path(), 6, &security);
+    fs::write(
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/6-fixture.log"),
+        "Private security log output\n",
+    )
+    .unwrap();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let selector = format!(
+        "{}::secure-private",
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/6-fixture.command.json")
+            .display()
+    );
+    let mut url = reqwest::Url::parse("http://localhost/log").unwrap();
+    url.query_pairs_mut().append_pair("command", &selector);
+    let path = format!("{}?{}", url.path(), url.query().unwrap());
+
+    api::cli(
+        home.path(),
+        &["console", "scopes", "--scopes", "read", "--json"],
+    );
+    let denied = get(&console, &path, &session);
+    assert_eq!(denied.status(), 403);
+    let denied_body = denied.text().unwrap();
+    assert!(
+        !denied_body.contains("Secret advisory title"),
+        "{denied_body}"
+    );
+    assert!(!denied_body.contains("acme/widgets#99"), "{denied_body}");
+    assert!(
+        !denied_body.contains("Private security log output"),
+        "{denied_body}"
+    );
+
+    api::cli(
+        home.path(),
+        &["console", "scopes", "--scopes", "read,security", "--json"],
+    );
+    let allowed = get(&console, &path, &session);
+    assert_eq!(allowed.status(), 200);
+    let allowed_body = allowed.text().unwrap();
+    assert!(
+        allowed_body.contains("Secret advisory title"),
+        "{allowed_body}"
+    );
+    assert!(allowed_body.contains("acme/widgets#99"), "{allowed_body}");
+    assert!(
+        allowed_body.contains("Private security log output"),
+        "{allowed_body}"
+    );
+}

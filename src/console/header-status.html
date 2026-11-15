@@ -2,6 +2,7 @@
   {% include "console/notifications.html" %}
   {% if page.can_read() %}
   {% include "console/host-resources.html" %}
+  {% if let Some(warning) = page.plan_usage %}<p id="plan-usage-warning" role="status"><a href="/plan-usage" title="{{ warning.detail }}">{{ warning.label }}</a></p>{% endif %}
   <script src="/assets/resources.js" type="module"></script>
   {% endif %}
 </div>

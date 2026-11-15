@@ -139,7 +139,9 @@ impl TicketBoard {
             .values()
             .flat_map(|standing| match standing {
                 Standing::Ended(
-                    Ended::Failed { local_work, .. } | Ended::Interrupted { local_work },
+                    Ended::Failed { local_work, .. }
+                    | Ended::Paused { local_work, .. }
+                    | Ended::Interrupted { local_work },
                 ) => local_work.as_slice(),
                 Standing::Running | Standing::Ended(_) => &[],
             })
@@ -184,6 +186,31 @@ impl TicketBoard {
                 .iter()
                 .filter(|ticket| ticket.is_open)
                 .all(|ticket| self.waits(ticket))
+    }
+
+    /// The first Ticket whose Run ended as a Paused Command, if one did.
+    pub(super) fn paused(&self) -> Option<u64> {
+        self.by_number().into_iter().find_map(|ticket| {
+            matches!(
+                self.standings.get(&ticket.issue.identity()),
+                Some(Standing::Ended(Ended::Paused { .. }))
+            )
+            .then_some(ticket.issue.number)
+        })
+    }
+
+    /// Whether the Spec run only paused: a Ticket's Run paused, and no
+    /// other failed, was interrupted or is still running, so a later Spec
+    /// run continues it once Plan usage allows.
+    pub(super) fn only_paused(&self) -> bool {
+        self.paused().is_some()
+            && !self.standings.values().any(|standing| {
+                matches!(
+                    standing,
+                    Standing::Running
+                        | Standing::Ended(Ended::Failed { .. } | Ended::Interrupted { .. })
+                )
+            })
     }
 
     /// The open Tickets in the Spec's repository, the ones a later Spec run
@@ -358,6 +385,9 @@ impl TicketBoard {
             }
             Some(Standing::Running) => return "running".to_string(),
             Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
+            Some(Standing::Ended(Ended::Paused { .. })) => {
+                return format!("paused: {}", crate::session::limits::NO_ROUTE);
+            }
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
                 return format!("failed: {cause}");
             }

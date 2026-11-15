@@ -77,7 +77,7 @@ fn listed_name(path: &Path) -> bool {
         )
 }
 
-pub(super) const UNLISTED: &str = "log is not in the current inventory";
+pub(crate) const UNLISTED: &str = "log is not in the current inventory";
 
 /// Check only the selected entries, as `load` sees them: the root and
 /// literal `commands` path may be aliases, but owner, repository, kind and
@@ -112,18 +112,40 @@ pub(super) fn still_listed(root: &Path, path: &Path, other_account: bool) -> boo
         && (!other_account || super::inventory::stays_under(root, path))
 }
 
-pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
-    let mut logs = Vec::new();
+fn load_account_snapshot(source: &Source) -> Result<Option<Snapshot>> {
+    match Snapshot::load_using(super::files_for(source), &source.root, Local::now()) {
+        Ok(snapshot) => Ok(Some(snapshot)),
+        Err(_) if source.account.is_some() => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn for_each_account_catalog<T>(
+    config: &UserConfig,
+    mut visit: impl FnMut(&Source, &Snapshot, Vec<Log>) -> Result<Option<T>>,
+) -> Result<Option<T>> {
     for source in crate::logs::accounts::discover(config).logs {
-        let loaded = Snapshot::load_using(super::files_for(&source), &source.root, Local::now())
-            .and_then(|snapshot| list(&snapshot, &source, None));
-        let listed = match loaded {
+        let Some(snapshot) = load_account_snapshot(&source)? else {
+            continue;
+        };
+        let listed = match list(&snapshot, &source, None) {
             Ok(logs) => logs,
             Err(_) if source.account.is_some() => continue,
             Err(error) => return Err(error),
         };
-        logs.extend(listed);
+        if let Some(found) = visit(&source, &snapshot, listed)? {
+            return Ok(Some(found));
+        }
     }
+    Ok(None)
+}
+
+pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
+    let mut logs = Vec::new();
+    for_each_account_catalog(config, |_, _, listed| {
+        logs.extend(listed);
+        Ok(None::<()>)
+    })?;
     if let Some(owner) = selected_owner {
         logs.retain(|log| log.owners.iter().any(|id| id == owner));
     }
@@ -277,11 +299,190 @@ pub(super) fn list(
     Ok(logs)
 }
 
+pub(crate) struct Opened {
+    pub log: Log,
+    pub target: Option<crate::logs::status::GitHubTarget>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OpenRequest<'a> {
+    Id(&'a str),
+    Command {
+        command: &'a str,
+        session: Option<&'a str>,
+    },
+}
+
+pub(crate) enum OpenOutcome {
+    Opened(Box<Opened>),
+    Forbidden,
+    NotFound,
+}
+
 pub(crate) fn find(config: &UserConfig, selected: &str) -> Result<Log> {
-    load(config, None)?
-        .into_iter()
-        .find(|log| log.id == selected)
-        .context(UNLISTED)
+    match open(config, OpenRequest::Id(selected), true, false)? {
+        OpenOutcome::Opened(opened) => Ok(opened.log),
+        OpenOutcome::Forbidden | OpenOutcome::NotFound => anyhow::bail!(UNLISTED),
+    }
+}
+
+fn open_listed_log<'a>(
+    source: &Source,
+    snapshot: &'a Snapshot,
+    mut log: Log,
+    resolved_observation: Option<Observation<'a>>,
+    allow_security: bool,
+    include_target: bool,
+) -> OpenOutcome {
+    if !allow_security && log.security_details {
+        return OpenOutcome::Forbidden;
+    }
+    let observation = resolved_observation.or_else(|| find_observation(snapshot, &log.path));
+    if let Some(selector) = observation.and_then(Observation::selector) {
+        log.selector = selector;
+    }
+    let target = include_target
+        .then(|| {
+            let kept = source
+                .account
+                .is_none()
+                .then(|| crate::logs::github::load(&source.root));
+            observation.and_then(|obs| {
+                crate::logs::status::GitHubTarget::from_observation(obs, kept.as_ref())
+            })
+        })
+        .flatten();
+    OpenOutcome::Opened(Box::new(Opened { log, target }))
+}
+
+fn open_command(
+    config: &UserConfig,
+    command: &str,
+    session: Option<&str>,
+    allow_security: bool,
+    include_target: bool,
+) -> Result<OpenOutcome> {
+    let mut accounts = Vec::new();
+    for source in crate::logs::accounts::discover(config).logs {
+        let Some(mut snapshot) = load_account_snapshot(&source)? else {
+            continue;
+        };
+        if source.account.is_some() {
+            super::adopt_account(&mut snapshot, &source.account);
+        }
+        accounts.push((source, snapshot));
+    }
+    let Ok(resolved) = super::selection::resolve_iter(
+        accounts.iter().flat_map(|(_, snapshot)| snapshot.entries()),
+        command,
+    ) else {
+        return Ok(OpenOutcome::NotFound);
+    };
+    let Ok(path) = crate::logs::status::inspect::selected_log(resolved.observation, session) else {
+        return Ok(OpenOutcome::NotFound);
+    };
+    let owner_account = resolved.observation.account().map(str::to_owned);
+    let Some((source, snapshot)) = accounts
+        .iter()
+        .find(|(source, _)| source.account == owner_account)
+    else {
+        return Ok(OpenOutcome::NotFound);
+    };
+    let listed = match list(snapshot, source, None) {
+        Ok(listed) => listed,
+        Err(_) if source.account.is_some() => return Ok(OpenOutcome::NotFound),
+        Err(error) => return Err(error),
+    };
+    let Some(log) = listed.into_iter().find(|log| log.path == path) else {
+        return Ok(OpenOutcome::NotFound);
+    };
+    Ok(open_listed_log(
+        source,
+        snapshot,
+        log,
+        Some(resolved.observation),
+        allow_security,
+        include_target,
+    ))
+}
+
+/// Open one listed log by ID or Command selector, enforcing Security scope and
+/// optionally computing its GitHub target from the same Snapshot capture.
+pub(crate) fn open(
+    config: &UserConfig,
+    request: OpenRequest<'_>,
+    allow_security: bool,
+    include_target: bool,
+) -> Result<OpenOutcome> {
+    match request {
+        OpenRequest::Id(id) => for_each_account_catalog(config, |source, snapshot, listed| {
+            let Some(log) = listed.into_iter().find(|log| log.id == id) else {
+                return Ok(None);
+            };
+            Ok(Some(open_listed_log(
+                source,
+                snapshot,
+                log,
+                None,
+                allow_security,
+                include_target,
+            )))
+        })
+        .map(|found| found.unwrap_or(OpenOutcome::NotFound)),
+        OpenRequest::Command { command, session } => {
+            open_command(config, command, session, allow_security, include_target)
+        }
+    }
+}
+
+fn observation_matches_log(observation: Observation<'_>, log_path: &Path) -> bool {
+    observation.command_log() == Some(log_path)
+        || observation
+            .sessions()
+            .is_ok_and(|sessions| sessions.iter().any(|path| path == log_path))
+}
+
+fn find_nested_session<'a>(command: &'a Command, log_path: &Path) -> Option<Observation<'a>> {
+    for child in command.children.iter().chain(&command.dispatched) {
+        if let Some(found) = find_nested_session(child, log_path) {
+            return Some(found);
+        }
+        let obs = Observation::Record(child);
+        if log_path != child.command_log
+            && obs
+                .sessions()
+                .is_ok_and(|sessions| sessions.iter().any(|path| path == log_path))
+        {
+            return Some(obs);
+        }
+    }
+    None
+}
+
+fn find_command_observation<'a>(command: &'a Command, log_path: &Path) -> Option<Observation<'a>> {
+    find_nested_session(command, log_path).or_else(|| {
+        let obs = Observation::Record(command);
+        observation_matches_log(obs, log_path).then_some(obs)
+    })
+}
+
+fn find_observation<'a>(snapshot: &'a Snapshot, log_path: &Path) -> Option<Observation<'a>> {
+    for entry in snapshot.entries() {
+        if let Entry::Record(command) = entry
+            && let Some(found) = find_command_observation(command, log_path)
+        {
+            return Some(found);
+        }
+    }
+    for entry in snapshot.entries() {
+        if let Entry::History(historical) = entry {
+            let obs = Observation::History(historical);
+            if observation_matches_log(obs, log_path) {
+                return Some(obs);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {

@@ -25,6 +25,10 @@
 //! stay as ADR 0013 has them: the sandbox wraps the session, it does not
 //! change its arguments.
 //!
+//! The release summary Session's sandbox is sealed: it binds no skills folder
+//! and no toolchain root, only the `node` executable an npm-installed Harness
+//! runs on.
+//!
 //! A Model Grader uses the same session sandbox with only its packet workspace
 //! bound. Code Graders run offline with report copies and the prepared
 //! repository at neutral paths; neither Grader binds raw Trial logs or the
@@ -119,12 +123,23 @@ pub(crate) struct Request<'a> {
     pub harness: Harness,
     pub model: Option<&'a str>,
     pub repository: &'a Path,
-    pub skills_dir: &'a Path,
+    pub host: Host<'a>,
     pub harness_binary: &'a Path,
     pub home: &'a Path,
     pub fresh_home: &'a Path,
     pub secrets: Secrets,
     pub adapter_env: Vec<(&'a str, &'a str)>,
+}
+
+/// What the session may read of the host beyond its Harness and the base
+/// system.
+pub(crate) enum Host<'a> {
+    /// The Factory skills folder and every toolchain root, read-only.
+    Tools { skills_dir: &'a Path },
+    /// Nothing, except the `node` executable an npm-installed Harness runs
+    /// on: the release summary Session's promise of no host filesystem read
+    /// access.
+    Sealed,
 }
 
 /// A prepared sandbox: its bwrap arguments up to `--`, and the Harness's
@@ -190,7 +205,9 @@ pub(crate) fn for_session(
         harness: choice.harness,
         model: choice.model.as_deref(),
         repository: workspace,
-        skills_dir: &crate::skills::written_out()?,
+        host: Host::Tools {
+            skills_dir: &crate::skills::written_out()?,
+        },
         harness_binary: binary,
         home: &home,
         fresh_home: &crate::skills::trial_home().unwrap_or_else(|| output_dir.join("home")),
@@ -451,11 +468,12 @@ const SOCKET_DEST: &str = "/sandbox/proxy.sock";
 const SHELL: &str = "/bin/sh";
 
 /// Prepare a Trial sandbox as `request` says: copy logins into a fresh home, bind
-/// the repository, skills, Harness, toolchains and proxy socket, start the
-/// proxy, and set the session's environment. Fails before any session starts
-/// when bwrap or socat is missing, the proxy cannot start, the Grok Trials
-/// home has no login, or an OpenCode Trial has no provider key or names an
-/// unknown provider.
+/// the repository, the host's skills and toolchains or only its `node`, the
+/// Harness and proxy socket, start the proxy, and set the session's
+/// environment. Fails before any session starts when bwrap or socat is
+/// missing, a sealed Harness's `node` cannot be resolved, the proxy cannot
+/// start, the Grok Trials home has no login, or an OpenCode Trial has no
+/// provider key or names an unknown provider.
 pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     ensure!(
         request.repository.is_absolute(),
@@ -513,8 +531,13 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         &request.repository.join("repository"),
         &request.repository.join("repository"),
     );
-    binds.read_only(request.skills_dir, request.skills_dir);
-    toolchains_into(request.home, &mut binds, &mut environment);
+    match request.host {
+        Host::Tools { skills_dir } => {
+            binds.read_only(skills_dir, skills_dir);
+            toolchains_into(request.home, &mut binds, &mut environment);
+        }
+        Host::Sealed => node_into(&binary, &mut binds, &mut environment)?,
+    }
     let _grok = home_into(request, &mut binds, &mut environment)?;
     // The proxy allows only this Trial Harness's provider hosts. An OpenCode
     // Trial with no key fails in the homes above, as before; one naming an
@@ -556,7 +579,11 @@ fn finish(
     for name in ["NO_PROXY", "no_proxy"] {
         environment.set_str(name, "127.0.0.1,localhost");
     }
-    conceal_toolchain_credentials(request, &mut binds)?;
+    // Kept after every other bind, so no later mount can uncover a
+    // credential's blank; hence apart from the toolchain binds above.
+    if let Host::Tools { .. } = request.host {
+        conceal_toolchain_credentials(request, &mut binds)?;
+    }
     let mut argv = base_argv();
     binds.argv(&mut argv);
     let env = environment.finish(&request.adapter_env);
@@ -787,6 +814,69 @@ fn toolchains_into(home: &Path, binds: &mut Binds, environment: &mut Environment
         // Prefer rustup's proxies to a host PATH naming one toolchain's bin.
         environment.path_dirs.retain(|path| path != &cargo_bin);
         environment.prepend_path(&cargo_bin);
+    }
+}
+
+/// Bind only the `node` an npm-installed Harness names in its `#!` line, at
+/// the path it expects: an absolute interpreter at that path, or `env node`
+/// at the host `node`'s resolved path, with its directory first on `PATH`.
+/// Nothing else of a toolchain root becomes visible. A Harness that names no
+/// `node` binds nothing; one whose `node` cannot be resolved fails rather
+/// than widening the binds.
+fn node_into(binary: &Path, binds: &mut Binds, environment: &mut Environment) -> Result<()> {
+    let Some(interpreter) = node_interpreter(binary) else {
+        return Ok(());
+    };
+    let unresolved = |error: anyhow::Error| {
+        anyhow::Error::new(Unavailable {
+            diagnostic: format!("{} needs node: {error:#}", binary.display()),
+        })
+    };
+    match interpreter {
+        Node::At(path) => {
+            let node = path
+                .canonicalize()
+                .with_context(|| format!("could not resolve {}", path.display()))
+                .map_err(unresolved)?;
+            binds.read_only(&node, &path);
+        }
+        Node::OnPath => {
+            let node = resolve_binary("node").map_err(unresolved)?;
+            binds.read_only(&node, &node);
+            if let Some(directory) = node.parent() {
+                environment.prepend_path(directory);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `node` a script's `#!` line runs it with.
+#[derive(Debug, PartialEq)]
+enum Node {
+    /// An absolute interpreter path.
+    At(PathBuf),
+    /// `env node`: whichever `node` is first on `PATH`.
+    OnPath,
+}
+
+/// The `node` a script's `#!` line names, if it names one.
+fn node_interpreter(binary: &Path) -> Option<Node> {
+    let mut head = [0; 256];
+    let read = fs::File::open(binary)
+        .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
+        .ok()?;
+    let line = head[..read].strip_prefix(b"#!")?;
+    let line = String::from_utf8_lossy(line.split(|byte| *byte == b'\n').next()?).into_owned();
+    let mut words = line.split_whitespace();
+    let program = Path::new(words.next()?);
+    if program.file_name()? == "env" {
+        words
+            .find(|word| !word.starts_with('-'))
+            .filter(|word| *word == "node")
+            .map(|_| Node::OnPath)
+    } else {
+        (program.file_name()? == "node").then(|| Node::At(program.to_path_buf()))
     }
 }
 
@@ -1493,7 +1583,9 @@ mod tests {
                 harness,
                 model,
                 repository: &self.repo,
-                skills_dir: &self.skills,
+                host: Host::Tools {
+                    skills_dir: &self.skills,
+                },
                 harness_binary: &self.harness,
                 home: &self.home,
                 fresh_home: &self.fresh,
@@ -1644,6 +1736,44 @@ mod tests {
             "printf 'CONNECT {target} HTTP/1.1\\r\\nHost: {target}\\r\\n\\r\\n' \
              | socat - TCP:127.0.0.1:{RELAY_PORT} | head -n 1"
         )
+    }
+
+    #[test]
+    fn a_harness_names_node_only_in_its_interpreter_line() {
+        let dir = tempfile::tempdir().unwrap();
+        for (head, expected) in [
+            ("#!/usr/bin/env node\n", Some(Node::OnPath)),
+            ("#!/usr/bin/env -S node --no-warnings\n", Some(Node::OnPath)),
+            (
+                "#!/opt/node/bin/node\n",
+                Some(Node::At(PathBuf::from("/opt/node/bin/node"))),
+            ),
+            ("#!/usr/bin/env python3\n", None),
+            ("#!/bin/sh\nnode\n", None),
+            ("\x7fELF", None),
+        ] {
+            let binary = dir.path().join("harness");
+            fs::write(&binary, head).unwrap();
+            assert_eq!(node_interpreter(&binary), expected, "{head:?}");
+        }
+    }
+
+    #[test]
+    fn a_sealed_harness_binds_its_node_alone_or_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = dir.path().join("nvm/versions/node/v22/bin/node");
+        fs::create_dir_all(node.parent().unwrap()).unwrap();
+        fs::write(&node, "").unwrap();
+        let binary = dir.path().join("harness");
+        fs::write(&binary, format!("#!{}\n", node.display())).unwrap();
+        let mut binds = Binds::default();
+        node_into(&binary, &mut binds, &mut Environment::default()).unwrap();
+        assert_eq!(binds.binds, [(true, node.canonicalize().unwrap(), node)]);
+
+        fs::write(&binary, "#!/missing/bin/node\n").unwrap();
+        let error =
+            node_into(&binary, &mut Binds::default(), &mut Environment::default()).unwrap_err();
+        assert!(format!("{error:#}").contains("needs node"), "{error:#}");
     }
 
     #[test]
@@ -1955,7 +2085,9 @@ mod tests {
             harness: Harness::Grok,
             model: None,
             repository: &repo,
-            skills_dir: &skills,
+            host: Host::Tools {
+                skills_dir: &skills,
+            },
             harness_binary: &harness,
             home: home.path(),
             fresh_home: &first,
@@ -1970,7 +2102,9 @@ mod tests {
                     harness: Harness::Grok,
                     model: None,
                     repository: &repo,
-                    skills_dir: &skills,
+                    host: Host::Tools {
+                        skills_dir: &skills,
+                    },
                     harness_binary: &harness,
                     home: home.path(),
                     fresh_home: &second,

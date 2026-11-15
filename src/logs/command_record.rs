@@ -129,11 +129,17 @@ pub(super) struct CommandRecord {
     pub limit: Option<crate::session::limits::Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
+    /// A Paused Command's Claim put `ready-for-agent` back, so a later
+    /// Pickup run retakes its issue: it sits in Done, not Needs you.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_back_for_pickup: bool,
     pub issue_branch: Option<String>,
     /// The selected Base branch for a Fix Pass repairing its CI, not its repair branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
     pub pull_request: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_title: Option<String>,
     #[serde(default)]
     pub parent_record: Option<PathBuf>,
     #[serde(default)]
@@ -223,6 +229,14 @@ pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
     pub session_log: Option<PathBuf>,
+    /// The Harness, Model and Effort the stage's latest session ran on: a
+    /// Step Plan usage routed runs on another route than the Command's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub suspended_seconds: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -340,6 +354,7 @@ stage_names! {
     Sampling => "sampling",
     Grading => "grading",
     Triage => "Triage",
+    ReleaseSummary => "Release summary",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -360,6 +375,7 @@ impl StageName {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
+            | Work::ReleaseRun(_)
             | Work::TriageRun { .. }
             | Work::Experiment(_)
             | Work::Process { .. } => Self::DispatchedRun,
@@ -386,6 +402,7 @@ impl StageName {
             Self::SecurityReview,
             Self::ArchitectureReview,
             Self::Triage,
+            Self::ReleaseSummary,
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
@@ -481,12 +498,20 @@ impl CommandRecord {
                 .or_else(|| self.stopped_stage().map(str::to_owned))
         });
         self.failure_category = failure.map(|cause| cause.category(account.interrupted));
-        self.pull_request = account.pr_url.map(String::from);
+        if let Some(pr_url) = account.pr_url {
+            self.pull_request = Some(pr_url.into());
+        }
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
         if matches!(
             self.kind.as_str(),
-            "Run" | "Spec run" | "Base fix" | "Review run" | "Triage run" | "Fix run"
+            "Run"
+                | "Spec run"
+                | "Base fix"
+                | "Review run"
+                | "Triage run"
+                | "Fix run"
+                | "Release run"
         ) {
             self.run_metrics = Some(super::run_metrics::RunMetrics::of(
                 self,
@@ -519,6 +544,7 @@ impl CommandRecord {
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
+                | Work::ReleaseRun(_)
                 | Work::TriageRun { .. }
                 | Work::Experiment(_)
                 | Work::Process { .. } => None,
@@ -534,6 +560,7 @@ impl CommandRecord {
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::ReviewRun(_) => format!("review-{stamp}"),
             Work::FixRun(_) => format!("fix-{stamp}"),
+            Work::ReleaseRun(_) => format!("release-{stamp}"),
             Work::TriageRun { .. } => format!("triage-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
@@ -575,9 +602,11 @@ impl CommandRecord {
             waiting_for: Vec::new(),
             limit: None,
             resume_command: None,
+            handed_back_for_pickup: false,
             issue_branch: None,
             base_branch: None,
             pull_request: None,
+            pull_request_title: None,
             parent_record: None,
             parent_dispatch: None,
             tickets: Vec::new(),

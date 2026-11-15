@@ -17,7 +17,7 @@ fn thirdshift(home: &Path, args: &[&str]) -> Output {
 }
 
 /// `console report add` on `home`, the token on stdin.
-fn pair(home: &Path, name: &str, address: &str, token: &str) -> Output {
+pub(super) fn pair(home: &Path, name: &str, address: &str, token: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
         .args(["console", "report", "add", name, address])
         .env("HOME", home)
@@ -30,7 +30,12 @@ fn pair(home: &Path, name: &str, address: &str, token: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-fn post(console: &Console, token: &str, path: &str, body: &Value) -> reqwest::blocking::Response {
+pub(super) fn post(
+    console: &Console,
+    token: &str,
+    path: &str,
+    body: &Value,
+) -> reqwest::blocking::Response {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -51,7 +56,7 @@ fn report(machine: &str) -> Value {
     })
 }
 
-fn machine<'a>(fleet: &'a Value, name: &str) -> &'a Value {
+pub(super) fn machine<'a>(fleet: &'a Value, name: &str) -> &'a Value {
     fleet["machines"]
         .as_array()
         .unwrap()
@@ -365,7 +370,7 @@ fn a_finished_command_reports_its_metrics_and_an_offline_console_only_warns() {
     assert!(
         result
             .stderr
-            .contains("warning: metrics not reported to hub:"),
+            .contains("warning: metrics and Plan usage not reported to hub:"),
         "{}",
         result.stderr
     );

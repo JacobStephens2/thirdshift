@@ -125,6 +125,7 @@ fn command_kind(command: &args::Command) -> Option<CommandKind> {
         Parsed::Triage(_) => CommandKind::Triage,
         Parsed::Fix(_) => CommandKind::Fix,
         Parsed::Review(_) => CommandKind::Review,
+        Parsed::Release(_) => CommandKind::Release,
         Parsed::Process(args::ProcessAction::Run(_)) => CommandKind::Process,
         // An Issue URL can select a Spec run or Ticket run; labels are not read here.
         _ => return None,

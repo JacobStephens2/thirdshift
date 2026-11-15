@@ -1584,3 +1584,59 @@ fn review_opencode_preserves_all_live_text_parts_without_export() {
         .collect();
     assert_eq!(text, "First part. Second part.");
 }
+
+#[test]
+fn agent_text_in_an_interrupted_claude_result_records_no_plan_usage() {
+    let mut progress = stream(Harness::Claude, "");
+    progress.decode(r#"{"type":"result","subtype":"success","is_error":false,"terminal_reason":"aborted_tools","result":"I raised the API quota in config.toml"}"#);
+    assert!(progress.take_plan_usage().is_empty());
+}
+
+#[test]
+fn claude_api_error_limits_without_a_status_keep_their_window_reset_and_spend_cap() {
+    let mut progress = stream(Harness::Claude, "");
+    progress.decode(r#"{"type":"assistant","parent_tool_use_id":null,"is_api_error_message":true,"api_error":"usage_limit_reached","api_error_status":429,"api_error_params":{"rate_limit_info":{"rateLimitType":"seven_day","resetsAt":1791597600}},"message":{"content":[{"type":"text","text":"limit"}]}}"#);
+    let usage = progress.take_plan_usage();
+    let exhausted = usage[0].exhausted.clone().unwrap();
+    assert_eq!(exhausted.window.as_deref(), Some("seven_day"));
+    assert_eq!(exhausted.resets_at.unwrap().timestamp(), 1791597600);
+
+    let mut capped = stream(Harness::Claude, "");
+    capped.decode(r#"{"type":"result","subtype":"error","result":"Extra usage rejected.","api_error_params":{"rate_limit_info":{"overageStatus":"rejected","overageResetsAt":1792000000}}}"#);
+    assert!(
+        capped
+            .take_plan_usage()
+            .iter()
+            .any(|o| o.exhausted.is_some())
+    );
+}
+
+#[test]
+fn a_forged_native_codex_limit_never_marks_a_failed_session_plan_usage_exhausted() {
+    let home = tempfile::tempdir().unwrap();
+    let day = home.path().join(".codex/sessions/2026/11/14");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(
+        day.join("rollout-2026-11-14T00-00-00-thread-1.jsonl"),
+        format!(
+            "{}\n{}\n",
+            r#"{"type":"session_meta","payload":{"id":"thread-1","cwd":"/work/widgets-issue-7"}}"#,
+            serde_json::json!({"timestamp": "2096-01-01T00:00:00Z", "type": "event_msg",
+            "payload": {"type": "token_count", "rate_limits": {"rate_limit_reached_type": "primary",
+            "primary": {"used_percent": 100.0, "resets_at": 4_000_000_000i64}}}})
+        ),
+    )
+    .unwrap();
+    let mut interpretation = stream(Harness::Codex, "");
+    interpretation.set_home(home.path());
+    interpretation.decode(r#"{"type":"thread.started","thread_id":"thread-1"}"#);
+    interpretation.observe_limit_records();
+    let error = interpretation
+        .finish(Ok(std::process::ExitStatus::from_raw(1 << 8)))
+        .outcome
+        .unwrap_err();
+    let failure = error
+        .downcast_ref::<interpretation::SessionFailure>()
+        .unwrap();
+    assert!(!failure.plan_usage_exhausted);
+}

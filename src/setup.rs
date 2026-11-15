@@ -1258,6 +1258,7 @@ from = \"ts@acme.dev\"
 to_by_repo = {}
 
 [review]
+merge = false
 commands_by_repo = { \"Acme/Widgets\" = [\"cargo test --test slow\"] }
 
 [logs]
@@ -1307,12 +1308,15 @@ read_machine = [\"acme/widgets\"]
 
 [security]
 harness = \"codex\"
+routes = []
 fix = false
 close = false
 review = false
 
 [harness]
 default = \"claude\"
+routes = []
+max_utilization = 100
 
 [harness.claude]
 model = \"opus\"

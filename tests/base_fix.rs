@@ -719,3 +719,18 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"fai
         "Run notification omits the locally retained Base fix worktree:\n{text}"
     );
 }
+
+#[test]
+fn a_base_fix_that_stops_at_its_plan_usage_limit_pauses_the_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, &format!("echo '{}'\nexit 1\n", serde_json::json!({"type": "rate_limit_event",
+        "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 4_000_000_000i64, "utilization": 1.0}})));
+    let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
+    assert!(
+        !scenario
+            .issue_labels(7)
+            .contains(&"agent-failed".to_string())
+    );
+}

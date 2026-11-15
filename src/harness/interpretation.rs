@@ -32,6 +32,14 @@ pub struct Interpretation {
     events: Option<Vec<event::Event>>,
     work_started: bool,
     plan_limit: Option<limits::Limit>,
+    /// Plan usage seen since the recorder last took it.
+    plan_usage: Vec<crate::plan_usage::Observation>,
+    /// Whether a structured wire frame said the subscription refused
+    /// included work: sticky once seen, since the recorder takes the
+    /// observations themselves.
+    plan_usage_exhausted: bool,
+    /// The first such refusal's Harness, Plan window, utilization and reset.
+    plan_usage_limit: Option<limits::Limit>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -157,8 +165,13 @@ pub struct Decoded {
 
 pub(super) enum Evidence {
     PlanLimit(limits::Limit),
+    /// Any Plan usage report, at every status and utilization.
+    PlanUsage(crate::plan_usage::Observation),
     WorkStarted,
-    ObservedModel { name: String, scope: ModelScope },
+    ObservedModel {
+        name: String,
+        scope: ModelScope,
+    },
     RequestedModelFallback,
     SafeguardRefusal(SafeguardRefusal),
 }
@@ -183,6 +196,9 @@ enum Failure {
         refusal: Option<SafeguardRefusal>,
         before_first_turn: bool,
         session_id: Option<String>,
+        plan_usage_exhausted: bool,
+        /// Boxed so the rarely-set limit doesn't bloat every `Result`.
+        plan_usage_limit: Option<Box<limits::Limit>>,
     },
 }
 
@@ -198,6 +214,13 @@ pub struct SessionFailure {
     pub session_id: Option<String>,
     /// Kernel or manager evidence supplied by the Session's execution owner.
     pub oom_killed: bool,
+    /// A structured Harness wire frame, never agent-writable text, said the
+    /// subscription's Plan usage refused included work during the session:
+    /// the failure a Step may be routed away from.
+    pub plan_usage_exhausted: bool,
+    /// What that wire frame said stopped the session, for a Paused
+    /// Command's record.
+    pub plan_usage_limit: Option<limits::Limit>,
     status: ExitStatus,
 }
 
@@ -249,6 +272,8 @@ impl SessionFailure {
             before_first_turn: self.before_first_turn,
             session_id: None,
             oom_killed: self.oom_killed,
+            plan_usage_exhausted: self.plan_usage_exhausted,
+            plan_usage_limit: None,
             status: self.status,
         }
         .to_string()
@@ -272,7 +297,20 @@ impl SessionFailure {
             before_first_turn: false,
             session_id: None,
             oom_killed: false,
+            plan_usage_exhausted: false,
+            plan_usage_limit: None,
             status: ExitStatus::from_raw(code << 8),
+        }
+    }
+
+    /// A session of `harness` stopped at its Plan usage limit, before its
+    /// first turn or after work began.
+    #[cfg(test)]
+    pub fn plan_usage_limit(harness: &'static str, before_first_turn: bool) -> Self {
+        Self {
+            before_first_turn,
+            plan_usage_exhausted: true,
+            ..Self::exited(harness, 1)
         }
     }
 }
@@ -287,6 +325,8 @@ impl Failure {
                 refusal,
                 before_first_turn,
                 session_id,
+                plan_usage_exhausted,
+                plan_usage_limit,
             } => {
                 let error = anyhow::Error::new(SessionFailure {
                     harness: cli,
@@ -295,6 +335,8 @@ impl Failure {
                     before_first_turn,
                     session_id,
                     oom_killed: false,
+                    plan_usage_exhausted,
+                    plan_usage_limit: plan_usage_limit.map(|limit| *limit),
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -316,6 +358,9 @@ impl Interpretation {
             events: None,
             work_started: false,
             plan_limit: None,
+            plan_usage: Vec::new(),
+            plan_usage_exhausted: false,
+            plan_usage_limit: None,
         }
     }
 
@@ -367,6 +412,39 @@ impl Interpretation {
         self.decoder.limit_records()
     }
 
+    /// Read supplied raw records for Plan usage alone, leaving the Session
+    /// trace as ordinary sessions keep it. The agent can write these files,
+    /// so they report Plan windows only, never the exhaustion that routes a
+    /// Step, pauses a Command or releases its Claim.
+    pub fn observe_limit_records(&mut self) {
+        let now = chrono::Utc::now();
+        for raw in self.decoder.limit_records() {
+            if let Ok(record) = serde_json::from_str(&raw)
+                && let Some(observation) =
+                    crate::plan_usage::observation::codex_token_count(&record, now)
+            {
+                self.note_plan_usage(crate::plan_usage::Observation {
+                    exhausted: None,
+                    ..observation
+                });
+            }
+        }
+    }
+
+    /// The Plan usage observed since the last call, for the machine's
+    /// snapshot.
+    pub fn take_plan_usage(&mut self) -> Vec<crate::plan_usage::Observation> {
+        std::mem::take(&mut self.plan_usage)
+    }
+
+    fn note_plan_usage(&mut self, observation: crate::plan_usage::Observation) {
+        self.plan_usage_exhausted |= observation.exhausted.is_some();
+        if self.plan_usage_limit.is_none() {
+            self.plan_usage_limit = observation.limit();
+        }
+        self.plan_usage.push(observation);
+    }
+
     /// The stream decoder's ID alone, without retained-record recovery or
     /// completion policy. Saved streams can supply this metadata even when
     /// interruption deliberately suppressed recovery during supervision.
@@ -399,6 +477,10 @@ impl Interpretation {
         for fact in evidence {
             if let Evidence::PlanLimit(limit) = &fact {
                 self.plan_limit.get_or_insert_with(|| limit.clone());
+            }
+            if let Evidence::PlanUsage(observation) = fact {
+                self.note_plan_usage(observation);
+                continue;
             }
             if matches!(fact, Evidence::WorkStarted) {
                 self.work_started = true;
@@ -470,6 +552,8 @@ impl Interpretation {
                         before_first_turn: !self.work_started
                             && !facts.report.events.iter().any(work_started),
                         session_id: facts.ended.session_id,
+                        plan_usage_exhausted: self.plan_usage_exhausted,
+                        plan_usage_limit: self.plan_usage_limit.map(Box::new),
                     })
                 } else {
                     Ok(facts.ended)

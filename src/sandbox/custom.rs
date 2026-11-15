@@ -63,7 +63,9 @@ pub(crate) fn prepare(
             harness,
             model: None,
             repository: attempt,
-            skills_dir: &attempt.join("runner"),
+            host: Host::Tools {
+                skills_dir: &attempt.join("runner"),
+            },
             harness_binary: &declared.binary.path,
             home,
             fresh_home: &fresh_home,
@@ -104,7 +106,9 @@ pub(crate) fn prepare(
         harness: Harness::Claude,
         model: None,
         repository: attempt,
-        skills_dir: &attempt.join("runner"),
+        host: Host::Tools {
+            skills_dir: &attempt.join("runner"),
+        },
         harness_binary: Path::new(SHELL),
         home,
         fresh_home: &fresh_home,
@@ -190,7 +194,9 @@ pub(crate) fn missing_logins(runner: &Runner, home: &Path) -> Result<MissingLogi
             harness,
             model: None,
             repository: scratch.path(),
-            skills_dir: scratch.path(),
+            host: Host::Tools {
+                skills_dir: scratch.path(),
+            },
             harness_binary: &declared.binary.path,
             home,
             fresh_home: &fresh_home,

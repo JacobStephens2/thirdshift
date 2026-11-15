@@ -17,6 +17,7 @@ const COMMAND_PREFIXES: &[(&str, &str)] = &[
     ("Triage run", "triage"),
     ("Review run", "review"),
     ("Fix run", "fix"),
+    ("Release run", "release"),
     ("Scoring run", "scoring"),
     ("Experiment", "experiment"),
     ("Process", "process"),
@@ -346,6 +347,13 @@ fn records<'a>(
 }
 
 pub(super) fn resolve<'a>(entries: &'a [Entry], input: &str) -> Result<Selection<'a>> {
+    resolve_iter(entries, input)
+}
+
+pub(super) fn resolve_iter<'a, I>(entries: I, input: &str) -> Result<Selection<'a>>
+where
+    I: IntoIterator<Item = &'a Entry>,
+{
     let name = Name::parse(input)?;
     let mut candidates = Vec::new();
     for entry in entries {

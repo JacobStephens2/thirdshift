@@ -3,6 +3,89 @@ use serde_json::Value;
 use std::path::Path;
 use std::{fs, process::Command};
 
+#[test]
+fn done_headers_identify_command_kinds_locally_and_across_fleet() {
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    let owner = tempfile::tempdir().unwrap();
+    let caller = tempfile::tempdir().unwrap();
+    configure(owner.path());
+    configure(caller.path());
+    let cases = [
+        ("Run", None, "Ticket run"),
+        ("Spec run", None, "Spec run"),
+        ("Triage run", None, "Triage run"),
+        ("Review run", None, "Review run"),
+        ("Pickup run", None, "Pickup run"),
+        (
+            "Process",
+            Some("nightly <checks>"),
+            "Process nightly &#60;checks&#62;",
+        ),
+        ("Process", None, "Process legacy-process"),
+    ];
+    for (index, (kind, process, _)) in cases.iter().enumerate() {
+        let number = index as u64 + 1;
+        let mut fixture = record(owner.path(), number, Some("merged"), 0);
+        fixture["kind"] = json!(kind);
+        fixture["name"] = json!("legacy-process");
+        fixture["process_name"] = json!(process);
+        fixture["issue"]["number"] = json!(42);
+        fixture["issue"]["url"] = json!("https://github.com/acme/widgets/issues/42");
+        fixture["tickets"] = json!([]);
+        if *kind == "Pickup run" {
+            let mut child = fixture.clone();
+            child["kind"] = json!("Run");
+            fixture["dispatched"] = json!([child]);
+        }
+        super::write_record(owner.path(), number, &fixture);
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let local = Console::start(binary, owner.path());
+    let token = super::tokens::create(owner.path(), "caller", &["--scopes", "read"]);
+    assert!(
+        super::fleet::add(caller.path(), "owner", &local.address, &token)
+            .status
+            .success()
+    );
+    let fleet = Console::start(binary, caller.path());
+    for console in [&local, &fleet] {
+        let _events = console.get("/events");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let html = loop {
+            let html = console.get("/?section=done").text().unwrap();
+            if html.contains("legacy-process") {
+                break html;
+            }
+            assert!(Instant::now() < deadline, "Fleet rows never arrived");
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        for (index, (_, _, label)) in cases.iter().enumerate() {
+            let selector = format!("{}-fixture.command.json", index + 1);
+            let head = section(&html, "done")
+                .split("<li class=\"command")
+                .find(|row| row.contains(&selector))
+                .unwrap()
+                .split("<div class=\"row-head\">")
+                .nth(1)
+                .unwrap()
+                .split("</div>")
+                .next()
+                .unwrap();
+            assert!(
+                head.contains(&format!("<span class=\"command-kind\">{label}</span>")),
+                "{label} missing: {head}"
+            );
+            assert!(
+                head.contains("href=\"https://github.com/acme/widgets/issues/42\""),
+                "{head}"
+            );
+            assert!(head.contains(">merged</span>"), "{head}");
+        }
+    }
+}
+
 /// A Triage URL that fails the origin check is still recorded. The compact
 /// header must not lend the launch repository's name to that other issue.
 #[test]
@@ -1263,6 +1346,51 @@ fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group(
 }
 
 #[test]
+fn done_and_resolved_say_what_they_hold_whether_empty_or_populated() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 1, Some("merged"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let done_help = "Ended within the last 24 hours, with nothing waiting for you.";
+    let resolved_help =
+        "Older Commands with nothing waiting for you, kept here until their retention period ends.";
+
+    // Resolved is empty here, and still explains itself.
+    let html = console.get("/?section=resolved").text().unwrap();
+    let resolved = section(&html, "resolved");
+    assert!(resolved.contains("Nothing here."), "{resolved}");
+    assert!(resolved.contains(resolved_help), "{resolved}");
+    assert!(
+        resolved.contains("from when the Command ended or its waiting work was dealt with"),
+        "{resolved}"
+    );
+    assert!(
+        resolved.contains("the owning machine's <a href=\"/history\">History</a>"),
+        "{resolved}"
+    );
+    let done = section(&html, "done");
+    assert!(done.contains(done_help), "{done}");
+
+    record(home.path(), 2, Some("merged"), 2);
+    let html = console.get("/?section=resolved").text().unwrap();
+    for (group, expected) in [("done", done_help), ("resolved", resolved_help)] {
+        let group = section(&html, group);
+        assert!(group.contains("<ul class=\"commands\"><li"), "{group}");
+        let help = group
+            .split("<p class=\"section-help\">")
+            .nth(1)
+            .expect(group)
+            .split("</p>")
+            .next()
+            .unwrap();
+        assert!(help.starts_with(expected), "{help}");
+        // Neither promises success nor asks the Day shift to resolve anything.
+        assert!(!help.contains("succe"), "{help}");
+        assert!(!help.contains("you must"), "{help}");
+    }
+}
+
+#[test]
 fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -1286,7 +1414,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
             .collect()
     };
 
-    // With no choice, all four current groups open together, even empty ones.
+    // With no choice, Overview shows every group, even empty ones.
     let html = console.get("/").text().unwrap();
     let folders = html
         .split("aria-label=\"Inbox sections\"")
@@ -1314,28 +1442,49 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
             .contains("href=\"/?section=overview\" data-group=\"overview\" aria-current=\"page\""),
         "{folders}"
     );
-    assert_eq!(
-        shown(&html),
-        ["needs you", "ready for review", "landing", "working"],
+    let overview = [
+        "needs you",
+        "ready for review",
+        "landing",
+        "working",
+        "done",
+        "resolved",
+    ];
+    assert_eq!(shown(&html), overview, "{html}");
+    let opens = |html: &str, group: &str| {
+        section(html, group)
+            .split('>')
+            .next()
+            .unwrap()
+            .ends_with(" open")
+    };
+    // Done and Resolved follow Working, folded closed even without JavaScript.
+    for (group, title, open) in [
+        ("needs you", "Needs you", true),
+        ("ready for review", "Ready for review", true),
+        ("landing", "Landing", true),
+        ("working", "Working", true),
+        ("done", "Done", false),
+        ("resolved", "Resolved", false),
+    ] {
+        assert!(
+            section(&html, group).contains(&format!("<summary><h3>{title} ")),
+            "{html}"
+        );
+        assert_eq!(opens(&html, group), open, "{group}: {html}");
+    }
+    assert!(
+        section(&html, "resolved").contains("<p class=\"empty\">Nothing here.</p>"),
         "{html}"
     );
-    for (group, title) in [
-        ("needs you", "Needs you"),
-        ("ready for review", "Ready for review"),
-        ("landing", "Landing"),
-        ("working", "Working"),
-        ("done", "Done"),
-        ("resolved", "Resolved"),
-    ] {
-        let group = section(&html, group);
-        assert!(group.contains(&format!("<summary><h3>{title} ")), "{html}");
-        assert!(group.split('>').next().unwrap().ends_with(" open"));
-    }
-    // Both sections are still on the page, so a switch needs no request.
-    assert!(html.contains("data-group=\"done\""), "{html}");
 
+    // A section's own folder opens it.
+    for group in ["done", "resolved"] {
+        let html = console.get(&format!("/?section={group}")).text().unwrap();
+        assert_eq!(shown(&html), [group], "{html}");
+        assert!(opens(&html, group), "{html}");
+    }
     let html = console.get("/?section=done").text().unwrap();
-    assert_eq!(shown(&html), ["done"], "{html}");
     assert!(
         html.contains("href=\"/?section=done\" data-group=\"done\" aria-current=\"page\""),
         "{html}"
@@ -1344,7 +1493,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     // An unknown section falls back to the default.
     assert_eq!(
         shown(&console.get("/?section=nonsense").text().unwrap()),
-        ["needs you", "ready for review", "landing", "working"]
+        overview
     );
 
     // A section hidden with Sections keeps a hidden folder, for Sections to
@@ -1361,7 +1510,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     );
     assert_eq!(
         shown(&html),
-        ["ready for review", "landing", "working"],
+        ["ready for review", "landing", "working", "done", "resolved"],
         "{html}"
     );
 }
@@ -1452,5 +1601,46 @@ fn one_line_rows_carry_a_gist_of_outcome_and_what_a_title_less_pass_did() {
     assert!(
         head("acme/widgets#3").contains("<span class=\"gist\" title=\"failed\">failed</span>"),
         "{heads:#?}"
+    );
+}
+
+#[test]
+fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
+    use serde_json::json;
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut retaken = record(home.path(), 7, Some("paused"), 0);
+    retaken["kind"] = json!("Run");
+    retaken["handed_back_for_pickup"] = json!(true);
+    retaken["cause"] = json!("no allowed route has available Plan usage: claude five-hour window");
+    super::write_record(home.path(), 7, &retaken);
+    let mut waiting = record(home.path(), 8, Some("paused"), 0);
+    waiting["kind"] = json!("Run");
+    super::write_record(home.path(), 8, &waiting);
+    // The default Harness is installed, and held until its reset.
+    let bin = home.path().join("console-fixture-bin");
+    fs::create_dir_all(&bin).unwrap();
+    super::support::write_executable(&bin.join("claude"), "#!/bin/sh\nexit 0\n");
+    let now = chrono::Utc::now().to_rfc3339();
+    fs::write(
+        home.path().join(".thirdshift/plan-usage.json"),
+        json!({"harnesses": {"claude": {"observed_at": now,
+            "cooldown": {"since": now, "until": "2096-10-02T07:06:40Z", "window": "five_hour"}}}})
+        .to_string(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let inbox = console.get("/").text().unwrap();
+    let needs = section(&inbox, "needs you");
+    assert!(needs.contains("widgets#8"), "{needs}");
+    assert!(!needs.contains("widgets#7"), "{needs}");
+    assert!(section(&inbox, "done").contains("widgets#7"), "{inbox}");
+    assert!(
+        inbox.contains(
+            "<p class=\"plan-usage-exhausted\" role=\"status\">Plan usage: every configured route \
+             is unavailable, so scheduled Passes skip: claude in cooldown (five_hour) until \
+             2096-10-02T07:06:40Z; earliest reset 2096-10-02T07:06:40Z</p>"
+        ),
+        "{inbox}"
     );
 }

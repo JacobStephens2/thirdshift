@@ -82,10 +82,10 @@ This host already has bwrap, with the AppArmor profile that Security reviews use
 *Checked (2026-10-19):* "this host" is the `thirdshift` host, formerly tracewake, which holds #429's Tasks. thirdshift also runs on `stephens`. Experiments run on the `thirdshift` host, where the private Tasks are; see the Settled list.
 
 **Q3.8 - How promptfoo starts a Trial.** This follows from Q2.4. thirdshift has no command that runs one session: every session runs inside a Run, a Spec run, an Architect run or a Security run. promptfoo's `exec:` provider truncates output at 1 MiB, returns no metadata and leaves sessions running after a timeout. Its JavaScript provider can stop a Trial when it's cancelled and return metadata. Skills are built into the thirdshift binary, so an Arm that changes a skill or a Session prompt needs its own build. The options:
-- (a) **A hidden internal flag, like `--release-summary`,** such as `thirdshift --session <kind> --worktree D --logs D`, with the Harness, Model and Effort. It runs one session through the same code a Run uses: the Harness check, the production prompt, skills, sub-agent rules, review reports, Resume and Model evidence. It then prints one JSON line with the final message, log paths, HEAD before and after, and elapsed time. A small JavaScript provider spawns it and stops it on cancel. An Arm is a thirdshift build plus a Harness, Model and Effort.
+- (a) **A hidden internal flag, like the former summary shim,** such as `thirdshift --session <kind> --worktree D --logs D`, with the Harness, Model and Effort. It runs one session through the same code a Run uses: the Harness check, the production prompt, skills, sub-agent rules, review reports, Resume and Model evidence. It then prints one JSON line with the final message, log paths, HEAD before and after, and elapsed time. A small JavaScript provider spawns it and stops it on cancel. An Arm is a thirdshift build plus a Harness, Model and Effort.
 - (b) **The same command, public and documented,** such as `thirdshift session`.
 
-*Recommended:* (a). It exists for the Eval harness, as `--release-summary` exists for releases. It can go public later if #706's `thirdshift review` wants it.
+*Recommended:* (a). It exists for the Eval harness, as the former summary shim did for releases. It can go public later if #706's `thirdshift review` wants it.
 
 *Answer:* agre
 

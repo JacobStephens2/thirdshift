@@ -19,7 +19,7 @@ fn a_release_waits_for_green_main_descending_from_the_previous_bump_tag() {
     release.main_ci_on(&base, "completed", "success", 3);
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.3.0");
+    let output = release.run("0.3.0");
 
     let head = release.pr_head("release-0.3.0");
     assert_eq!(
@@ -29,7 +29,7 @@ fn a_release_waits_for_green_main_descending_from_the_previous_bump_tag() {
         stderr(&output)
     );
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("waiting for CI on main"));
+    assert!(stderr(&output).contains("waiting for main push CI before releasing"));
     let body = release.pr_body("release-0.3.0");
     assert!(
         body.contains("-version = \"0.2.0\"\n+version = \"0.3.0\""),
@@ -37,10 +37,7 @@ fn a_release_waits_for_green_main_descending_from_the_previous_bump_tag() {
     );
     let calls = release.agent_calls();
     let prompt = calls.last().unwrap()["prompt"].as_str().unwrap();
-    assert!(
-        prompt.contains("Pull requests merged since v0.2.0"),
-        "{prompt}"
-    );
+    assert!(prompt.contains("\"pull_requests\""), "{prompt}");
     assert!(!prompt.contains("Add the frobnicator"), "{prompt}");
     assert_eq!(release.origin_tag("v0.3.0"), Some(head));
 }
@@ -61,7 +58,7 @@ fn a_saved_candidate_is_reselected_after_a_previous_release_merges() {
     release.main_ci_on(&base, "completed", "success", 2);
     release.ci_reports(GREEN);
 
-    let output = release.run_script("0.3.0");
+    let output = release.run("0.3.0");
 
     let head = release.pr_head("release-0.3.0");
     assert_eq!(
@@ -86,7 +83,7 @@ fn an_untagged_branch_or_open_pr_is_recut_after_a_previous_release_merges() {
         release.main_ci_on(&base, "completed", "success", 2);
         release.ci_reports(GREEN);
 
-        let output = release.run_script("0.3.0");
+        let output = release.run("0.3.0");
 
         let head = release.pr_head("release-0.3.0");
         assert_eq!(
@@ -105,18 +102,14 @@ fn an_untagged_branch_or_open_pr_is_recut_after_a_previous_release_merges() {
             body.contains("-version = \"0.2.0\"\n+version = \"0.3.0\""),
             "{body}"
         );
-        assert!(stderr(&output).contains(&format!(
-            "re-cutting untagged v0.3.0 from main at {}",
-            &base[..7]
-        )));
         let calls = release.gh_calls();
         assert!(calls.iter().any(|call| {
             call.iter()
-                .any(|arg| arg.contains(&format!("actions/runs?head_sha={head}")))
+                .any(|arg| arg.contains(&format!("commits/{head}/check-runs")))
         }));
         assert!(!calls.iter().any(|call| {
             call.iter()
-                .any(|arg| arg.contains(&format!("actions/runs?head_sha={old}")))
+                .any(|arg| arg.contains(&format!("commits/{old}/check-runs")))
         }));
     }
 }
@@ -133,7 +126,7 @@ fn declining_review_leaves_an_untagged_branch_and_its_open_pr_unchanged() {
         release.main_ci_on(&base, "completed", "success", 0);
         let before = release.origin_refs();
 
-        let output = release.run_script_with(&["--review", "0.3.0"], "n\n", &[]);
+        let output = release.run_on_terminal(&["--review", "0.3.0"], "n\n", &[]);
 
         assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
         assert_eq!(release.origin_refs(), before);
@@ -144,7 +137,11 @@ fn declining_review_leaves_an_untagged_branch_and_its_open_pr_unchanged() {
                 "Summary from the first run"
             );
         }
-        assert!(stderr(&output).contains("stopped at the review"));
+        assert!(
+            stderr(&output).contains("stopped at the review"),
+            "{}",
+            stderr(&output)
+        );
         assert!(
             !release
                 .gh_calls()
@@ -179,9 +176,10 @@ fn stale_pins_branches_and_prs_refuse_a_version_main_has_overtaken() {
         let merge = release.merge_bump_pr("0.4.0", &previous);
         // This case covers a release tag landing directly on main.
         release.origin(&["tag", "v0.4.0", &merge]);
+        release.main_ci("completed", "success");
         let before = release.origin_refs();
 
-        let output = release.run_script("0.3.0");
+        let output = release.run("0.3.0");
 
         assert_eq!(
             output.status.code(),
@@ -190,7 +188,13 @@ fn stale_pins_branches_and_prs_refuse_a_version_main_has_overtaken() {
             stderr(&output)
         );
         assert!(
-            stderr(&output).contains("it is not higher than 0.4.0 on main"),
+            stderr(&output).contains(if stage == "pin" {
+                "strictly greater than 0.4.0 on main"
+            } else {
+                // The last tag is main itself: no newer CI candidate exists
+                // from which to re-cut this stale bump.
+                "no candidate main commit"
+            }),
             "stage={stage}: {}",
             stderr(&output)
         );

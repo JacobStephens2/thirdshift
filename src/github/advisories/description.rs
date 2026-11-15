@@ -1,5 +1,7 @@
 //! The persisted private description protocol, inspected only as needed.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, bail};
 
 use super::{FindingDraft, FindingProvenance, FixEnding};
@@ -48,8 +50,20 @@ impl<'a> Description<'a> {
         Ok(commit)
     }
     pub(super) fn matches_fingerprint(&self, fingerprint: &str) -> bool {
-        let marker = format!("Fingerprint: `{fingerprint}`");
-        self.0.lines().any(|line| line == marker)
+        let candidate = canonical_tokens(fingerprint);
+        self.0.lines().any(|line| {
+            let Some(recorded) = line
+                .strip_prefix("Fingerprint: `")
+                .and_then(|rest| rest.strip_suffix('`'))
+            else {
+                return false;
+            };
+            if candidate.is_empty() {
+                recorded == fingerprint
+            } else {
+                canonical_tokens(recorded) == candidate
+            }
+        })
     }
 
     /// The first recorded outcome; a failed or unfinished reproduction writes none.
@@ -259,4 +273,14 @@ impl<'a> Description<'a> {
         }
         Ok(())
     }
+}
+
+/// Normalize a fingerprint into its case-folded token set so separator style
+/// and token order changes do not create duplicate private records.
+fn canonical_tokens(fingerprint: &str) -> BTreeSet<String> {
+    fingerprint
+        .split(|ch: char| matches!(ch, '.' | ':' | '/' | '-' | '_') || ch.is_whitespace())
+        .filter(|token| !token.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }

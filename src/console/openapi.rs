@@ -48,13 +48,29 @@ pub(super) fn document() -> Value {
         if route.method == axum::http::Method::POST {
             paths.get_mut(route.api).unwrap()["post"]["requestBody"] = action_body(route.view);
         }
+        if matches!(route.view, View::StartRun | View::StartOptions) {
+            let operation =
+                &mut paths.get_mut(route.api).unwrap()[route.method.as_str().to_ascii_lowercase()];
+            operation["x-any-scopes"] = json!(["run", "admin"]);
+            operation["description"] = json!(format!(
+                "CLI twins: {}. Release starts require admin; other Command starts require run. Start choices are filtered by these scopes.",
+                route.cli.join("; ")
+            ));
+            if matches!(route.view, View::StartRun) {
+                operation["x-command-scopes"] = super::start::Kind::ALL
+                    .into_iter()
+                    .map(|kind| (kind.word().to_owned(), json!(kind.scope().name())))
+                    .collect::<Map<String, Value>>()
+                    .into();
+            }
+        }
     }
     json!({
         "openapi": "3.1.1",
         "info": {
             "title": "thirdshift Console API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Currently served /api/v1 operations. Each operation enforces its x-scope. Bearer tokens require HTTPS or a direct connection to 127.0.0.1 without proxy headers. Local --no-sign-in needs no session."
+            "description": "Currently served /api/v1 operations. Operations enforce x-scope except shared Start operations, whose x-any-scopes lists admission alternatives and x-command-scopes selects the required scope per Command. Release starts require admin; other starts require run. Bearer tokens require HTTPS or a direct connection to 127.0.0.1 without proxy headers. Local --no-sign-in needs no session."
         },
         "paths": paths,
         "security": [{"ConsoleSession": []}, {"ConsoleBearer": []}],
@@ -170,9 +186,50 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             ]},
             "scopes": array(json!({"type": "string", "enum": super::Scope::TOKEN}))
         })),
-        View::ReportMetrics => object(json!({
+        View::ReportMetrics | View::ReportPlanUsage => object(json!({
             "machine": text, "pushed_at": {"type": "string", "format": "date-time"}
         })),
+        View::PlanUsage => {
+            query(
+                "fleet",
+                false,
+                json!({"type": "string", "enum": ["true"], "description": "Every Fleet machine, grouping shared logins: --fleet. The default once a Fleet machine is paired or saved."}),
+            );
+            query(
+                "machine",
+                false,
+                json!({"type": "string", "description": "One machine by its Fleet name, or this machine's own: --machine."}),
+            );
+            query(
+                "local",
+                false,
+                json!({"type": "string", "enum": ["true"], "description": "This machine alone, as Fleet machines are asked: --local."}),
+            );
+            let harness = json!({"type": "object", "required": ["harness", "routes"], "properties": {
+                "harness": text, "routes": array(record.clone())
+            }});
+            json!({"oneOf": [
+                object(json!({"version": version, "harnesses": array(harness.clone())})),
+                object(json!({
+                    "version": version,
+                    "machine": {"oneOf": [{"type": "null"}, text]},
+                    "machines": array(object(json!({
+                        "name": text, "address": {"oneOf": [{"type": "null"}, text]},
+                        "local": {"type": "boolean"},
+                        "status": {"type": "string", "enum": ["ok", "cached", "reported", "unavailable", "refused", "incompatible", "link-only"]},
+                        "last_seen": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]},
+                        "pushed_at": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]},
+                        "error": {"oneOf": [{"type": "null"}, text]}
+                    }))),
+                    "harnesses": array(json!({"type": "object", "required": ["harness", "identity", "machines", "observed_on", "active_on", "routes"], "properties": {
+                        "harness": text, "identity": {"oneOf": [{"type": "null"}, text]},
+                        "machines": array(text.clone()), "observed_on": text,
+                        "active_on": array(text.clone()), "routes": array(record.clone())
+                    }}))
+                }))
+            ]})
+        }
+        View::ClearPlanUsage => object(json!({"version": version, "cleared": array(text)})),
         View::OpenApi => object(json!({
             "openapi": {"type": "string", "const": "3.1.1"},
             "info": record, "paths": record, "components": record, "security": array(record.clone())
@@ -196,7 +253,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 "commands": array(record.clone()), "idle_passes": array(record.clone()),
                 "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
                 "github_last_answered_at": {"type": ["string", "null"]},
-                "github_failure": {"type": ["string", "null"]}
+                "github_failure": {"type": ["string", "null"]},
+                "plan_usage_banner": {"type": ["string", "null"]}
             }))
         }
         View::Inspect => {
@@ -494,6 +552,21 @@ fn action_body(view: View) -> Value {
                 }
             }}}});
         }
+        View::ReportPlanUsage => {
+            return json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "additionalProperties": false,
+                "required": ["version", "machine", "view"],
+                "properties": {
+                    "version": {"type": "integer", "const": 1},
+                    "machine": {"type": "string", "description": "The report token's holder; any other name is refused with 403."},
+                    "view": {"type": "object", "description": "The machine's own plan-usage --local --json view.", "required": ["version", "harnesses"]}
+                }
+            }}}});
+        }
+        View::ClearPlanUsage => (
+            json!({"harness": {"type": "string", "description": "One subscription Harness; every one when missing or empty."}}),
+            vec![],
+        ),
         View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),
         View::Help
         | View::Version
@@ -520,6 +593,7 @@ fn action_body(view: View) -> Value {
         | View::Resources
         | View::ResourceStatus
         | View::Metrics
+        | View::PlanUsage
         | View::Inbox
         | View::Inspect
         | View::Spans
@@ -553,6 +627,9 @@ fn start_schema() -> Value {
     let fields = json!({
         "repository": text, "issue": {"oneOf":[{"type":"integer","minimum":1},text]},
         "pull_request": text, "author": text, "name": text,
+        "version": {"type":"string", "pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "bump": {"enum":["major","minor","patch"]},
+        "with_experiment": boolean,
         "base": text, "focus": text, "report": {"type":"string","minLength":1},
         "order": {"enum":["lowest-first","highest-first"]},
         "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
@@ -587,6 +664,10 @@ fn start_schema() -> Value {
             required.push("command");
         }
         let mut variant = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
+        variant["x-scope"] = json!(kind.scope().name());
+        if command == "release" {
+            variant["not"] = json!({"required":["version", "bump"]});
+        }
         if command == "review" {
             variant["oneOf"] = json!([
                 {"required":["pull_request"],"not":{"required":["author"]}},

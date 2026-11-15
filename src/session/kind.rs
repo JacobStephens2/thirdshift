@@ -27,6 +27,9 @@ pub enum Kind {
     Triage,
     /// One correction of an invalid Triage recommendation, retaining its investigation.
     TriageCorrection,
+    /// The Release run's one summary Session, `release-summary`. Without a
+    /// version or bump flag the same Session also chooses `minor` or `patch`.
+    ReleaseSummary,
     /// `security-audit`.
     SecurityAudit,
     /// The Security reproduction of the numbered candidate,
@@ -54,6 +57,7 @@ impl Kind {
             Self::ArchitectureReview => "architecture-review".to_string(),
             Self::Triage => "triage".to_string(),
             Self::TriageCorrection => "triage-correction".to_string(),
+            Self::ReleaseSummary => "release-summary".to_string(),
             Self::SecurityAudit => "security-audit".to_string(),
             Self::SecurityReproduction(n) => format!("security-reproduction-{n}"),
             Self::SecurityFixPublishing => "security-fix-publishing".to_string(),
@@ -64,7 +68,8 @@ impl Kind {
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 11] = [
+        const UNNUMBERED: [Kind; 12] = [
+            Kind::ReleaseSummary,
             Kind::Triage,
             Kind::TriageCorrection,
             Kind::Implementation,
@@ -91,12 +96,27 @@ impl Kind {
     }
 }
 
-/// A session as its Session trace names it: of `kind`, and its Resume if
-/// `resume`.
+/// A session as its Session trace names it: of `kind`, on its Step's
+/// zero-based `route` (a later route when Plan usage moved the Step), and
+/// its Resume if `resume`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Logged {
     pub kind: Kind,
     pub resume: bool,
+    pub route: usize,
+}
+
+/// The suffix before a later route's number, as in `implement-route-2`.
+const ROUTE: &str = "-route-";
+
+/// `token` without a later route's `-route-<n>` suffix, with the route's
+/// zero-based index: 0 with no suffix, as the first route has none.
+fn without_route(token: &str) -> Option<(&str, usize)> {
+    let Some((kind, number)) = token.rsplit_once(ROUTE) else {
+        return Some((token, 0));
+    };
+    let n = number.parse::<usize>().ok().filter(|n| *n >= 2)?;
+    (n.to_string() == number).then_some((kind, n - 1))
 }
 
 impl Logged {
@@ -105,17 +125,31 @@ impl Logged {
         Logged {
             kind,
             resume: false,
+            route: 0,
         }
     }
 
     /// The Resume of the session of `kind`.
     pub fn resume_of(kind: Kind) -> Self {
-        Logged { kind, resume: true }
+        Logged {
+            kind,
+            resume: true,
+            route: 0,
+        }
     }
 
-    /// The Session-trace token: the kind's, with `-resume` for its Resume.
+    /// The same session on its Step's zero-based `route`.
+    pub fn on_route(self, route: usize) -> Self {
+        Logged { route, ..self }
+    }
+
+    /// The Session-trace token: the kind's, with `-route-<n>` for a later
+    /// route's one-based number, then `-resume` for its Resume.
     pub fn token(self) -> String {
-        let token = self.kind.token();
+        let mut token = self.kind.token();
+        if self.route > 0 {
+            token = format!("{token}{ROUTE}{}", self.route + 1);
+        }
         if self.resume {
             format!("{token}-resume")
         } else {
@@ -125,10 +159,18 @@ impl Logged {
 
     /// The session a Session trace's `token` names, if thirdshift can read it.
     pub fn read(token: &str) -> Option<Self> {
-        match token.strip_suffix("-resume") {
-            Some(kind) => Kind::read(kind).map(Self::resume_of),
-            None => Kind::read(token).map(Self::of),
-        }
+        let (rest, resume) = match token.strip_suffix("-resume") {
+            Some(rest) => (rest, true),
+            None => (token, false),
+        };
+        let (kind, route) = without_route(rest)?;
+        let kind = Kind::read(kind)?;
+        let logged = if resume {
+            Self::resume_of(kind)
+        } else {
+            Self::of(kind)
+        };
+        Some(logged.on_route(route))
     }
 
     /// The Command record stage the session enters. A Resume of the
@@ -155,6 +197,7 @@ impl Logged {
             (Kind::SecurityReview | Kind::SecurityReviewFallback, false) => Stage::SecurityReview,
             (Kind::ArchitectureReview, _) => Stage::ArchitectureReview,
             (Kind::Triage | Kind::TriageCorrection, _) => Stage::Triage,
+            (Kind::ReleaseSummary, _) => Stage::ReleaseSummary,
             (Kind::SecurityAudit, _) => Stage::SecurityAudit,
             (Kind::SecurityReproduction(_), _) => Stage::SecurityReproduction,
             (Kind::SecurityFixPublishing, _) => Stage::SecurityFixPublishing,
@@ -186,6 +229,8 @@ pub(crate) fn is_security(token: &str) -> bool {
 
 pub fn selects(word: &str, token: &str) -> bool {
     let resumed = token.strip_suffix("-resume").unwrap_or(token);
+    // A later route's session is selected as its kind's first is.
+    let resumed = without_route(resumed).map_or(resumed, |(kind, _)| kind);
     token == word
         || resumed == word
         || (word == "security-review" && resumed == "security-review-fallback")
@@ -252,6 +297,34 @@ mod tests {
             let resume = format!("{token}-resume");
             assert_eq!(Logged::resume_of(kind).token(), resume);
             assert_eq!(Logged::read(&resume), Some(Logged::resume_of(kind)));
+        }
+    }
+
+    #[test]
+    fn a_later_routes_session_reads_back_and_is_selected_by_its_kind() {
+        for (logged, token) in [
+            (
+                Logged::of(Kind::Implementation).on_route(1),
+                "implement-route-2",
+            ),
+            (
+                Logged::resume_of(Kind::Repair(3)).on_route(2),
+                "repair-3-route-3-resume",
+            ),
+        ] {
+            assert_eq!(logged.token(), token);
+            assert_eq!(Logged::read(token), Some(logged));
+        }
+        assert!(selects("implement", "implement-route-2"));
+        assert!(selects("implement", "implement-route-2-resume"));
+        assert!(selects("repair", "repair-3-route-3"));
+        assert!(is_security("security-review-fallback-route-2"));
+        for token in [
+            "implement-route-1",
+            "implement-route-02",
+            "implement-route-x",
+        ] {
+            assert_eq!(Logged::read(token), None, "{token}");
         }
     }
 

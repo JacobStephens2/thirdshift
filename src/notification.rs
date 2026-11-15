@@ -47,6 +47,7 @@ pub enum About<'a> {
     ScoringRun,
     ReviewRun,
     FixRun,
+    ReleaseRun,
     TriageRun,
     /// A Custom process, named by its file, from the Launch directory.
     Process {
@@ -68,6 +69,7 @@ impl About<'_> {
             About::ScoringRun => None,
             About::ReviewRun => launch::repo().ok(),
             About::FixRun => launch::repo().ok(),
+            About::ReleaseRun => launch::repo().ok(),
         }
     }
 }
@@ -91,6 +93,7 @@ enum Subject {
     ScoringRun,
     ReviewRun(Option<Repo>),
     FixRun(Option<Repo>),
+    ReleaseRun(Option<Repo>),
     TriageRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
@@ -112,6 +115,7 @@ impl Subject {
             Subject::ScoringRun => Some(("Scoring run".into(), None)),
             Subject::ReviewRun(repo) => Some(("Review run".into(), repo.as_ref())),
             Subject::FixRun(repo) => Some(("Fix run".into(), repo.as_ref())),
+            Subject::ReleaseRun(repo) => Some(("Release run".into(), repo.as_ref())),
             Subject::TriageRun(repo) => Some(("Triage run".into(), repo.as_ref())),
             Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
@@ -182,6 +186,7 @@ impl RunNotification {
             About::ScoringRun => Subject::ScoringRun,
             About::ReviewRun => Subject::ReviewRun(repo),
             About::FixRun => Subject::FixRun(repo),
+            About::ReleaseRun => Subject::ReleaseRun(repo),
             About::TriageRun => Subject::TriageRun(repo),
             // Input is captured after the Process resolves it.
             About::Process { name } => Subject::Process {
@@ -253,7 +258,8 @@ impl RunNotification {
         let host = host::name();
         let command_log = logs::command_log_path();
         // Detection happens during sessions, after the choice was configured.
-        let configured = self.configured.as_ref().map(|choice| {
+        let configured = self.configured.as_ref().map(|configured| {
+            let choice = &logs::implemented_on(configured);
             if account.pre_audit_failure.is_some() {
                 return format!("{choice} (configured)");
             }
@@ -301,9 +307,11 @@ impl RunNotification {
                 ));
             }
         }
+        // A Paused Command a later Pickup run retakes needs no one, so it
+        // is saved but not emailed when only unmerged runs are.
+        let retaken = account.outcome == "paused" && crate::logs::recorded_handed_back_for_pickup();
         if let Some(resend) = self.resend
-            && account.outcome != "paused"
-            && !(self.unless_merged && account.merged_with_nothing_waiting())
+            && !(self.unless_merged && (account.merged_with_nothing_waiting() || retaken))
             && let Err(error) = resend.send(&subject, &text)
         {
             progress::step(format_args!(
@@ -416,6 +424,11 @@ fn body(
     }
     if let Some((command, repo)) = subject.command() {
         text += &command_lines(&command, repo);
+    }
+    if matches!(subject, Subject::ReleaseRun(_))
+        && let Ok(line) = &account.ended
+    {
+        text += &format!("Details:      {line}\n");
     }
     if let Some(input) = input {
         text += &format!("{:<14}{}\n", format!("{}:", input.label), input.url);
@@ -603,8 +616,9 @@ fn body(
 }
 
 /// Promote usage exhaustion out of a Spec's Ticket details without replacing
-/// its other failure causes. Read only failed Harness diagnostics, never log
-/// paths or successful sessions that may have recovered from a limit.
+/// its other failure causes. Read only failed Harness diagnostics and paused
+/// Tickets, never log paths or successful sessions that may have recovered
+/// from a limit.
 fn usage_limit(account: &Account) -> Option<String> {
     let cause = account.ended.as_ref().err()?;
     if account.interrupted {
@@ -619,12 +633,18 @@ fn usage_limit(account: &Account) -> Option<String> {
                 && ErrorKind::from_text(diagnostic) == ErrorKind::UsageLimit
         })
     };
+    // A Ticket whose child Run paused, by its exit code, had no route with
+    // Plan usage.
+    let paused = format!(" paused: {}", crate::session::limits::NO_ROUTE);
     let tickets: Vec<_> = account
         .ticket_lines
         .iter()
-        .filter_map(|line| line.split_once(" failed: "))
-        .filter(|(_, cause)| limited(cause))
-        .map(|(ticket, _)| ticket)
+        .filter_map(|line| {
+            line.split_once(" failed: ")
+                .filter(|(_, cause)| limited(cause))
+                .map(|(ticket, _)| ticket)
+                .or_else(|| line.strip_suffix(paused.as_str()))
+        })
         .collect();
     let affected = if tickets.is_empty() {
         if !limited(cause.full()) {
@@ -676,6 +696,32 @@ mod tests {
 
     fn about_architect_run() -> Subject {
         Subject::ArchitectRun(Repo::of_origin("https://github.com/acme/widgets.git"))
+    }
+
+    #[test]
+    fn a_release_notification_is_quiet_unless_merged_only_after_publication_and_merge() {
+        let subject = Subject::ReleaseRun(Repo::of_origin("https://github.com/acme/widgets.git"));
+        let ending = crate::command::Ending::Release(Ok(crate::release::Ended {
+            pr_url: PR.into(),
+            version: "1.2.3".into(),
+        }));
+        let account = crate::run_ending::read(&ending).ok().unwrap();
+        assert!(account.merged_with_nothing_waiting());
+        let (line, text) = told(&subject, &account).unwrap();
+        assert_eq!(line, "[thirdshift] acme/widgets Release run: merged");
+        assert!(text.contains("Command:      Release run"), "{text}");
+        assert!(text.contains("Release 1.2.3 published"), "{text}");
+
+        let ending = crate::command::Ending::Release(Err(crate::failed_run::FailedRun {
+            pr_url: Some(PR.into()),
+            ..anyhow!("published, but merge failed").into()
+        }));
+        let account = crate::run_ending::read(&ending).ok().unwrap();
+        assert!(!account.merged_with_nothing_waiting());
+        let (line, text) = told(&subject, &account).unwrap();
+        assert_eq!(line, "[thirdshift] acme/widgets Release run: failed");
+        assert!(text.contains("published, but merge failed"), "{text}");
+        assert!(text.contains(PR), "{text}");
     }
 
     /// A merged Run's account.

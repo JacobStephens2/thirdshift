@@ -260,6 +260,7 @@ fn malformed_stderr_preserves_a_successful_ending_and_base_fix_account() {
         Ended::NotReproduced { .. }
         | Ended::ArchitectureReview { .. }
         | Ended::Failed { .. }
+        | Ended::Paused { .. }
         | Ended::Interrupted { .. } => {
             panic!("the successful child lost its ending")
         }
@@ -291,6 +292,23 @@ fn malformed_diagnostics_preserve_later_failure_cause_and_final_session_log() {
     assert!(matches!(ended, Ended::Failed { cause, log: Some(log), .. }
         if cause == "inherited failure" && log == "/logs/248.jsonl"));
     fixture.assert_stopped();
+}
+
+#[test]
+fn only_a_child_exiting_as_a_paused_command_ends_paused() {
+    let paused = Fixture::new(
+        "os.write(2, b'thirdshift: no allowed route has available Plan usage\\nthirdshift: session trace: /logs/7.jsonl')\nraise SystemExit(75)",
+    );
+    let ended = paused.start().unwrap().wait().unwrap();
+    assert!(matches!(ended, Ended::Paused { log: Some(log), .. } if log == "/logs/7.jsonl"));
+    paused.assert_stopped();
+    // The same words with another exit code are an ordinary failure.
+    let failed = Fixture::new(
+        "os.write(2, b'thirdshift: no allowed route has available Plan usage')\nraise SystemExit(1)",
+    );
+    let ended = failed.start().unwrap().wait().unwrap();
+    assert!(matches!(ended, Ended::Failed { .. }));
+    failed.assert_stopped();
 }
 
 #[test]

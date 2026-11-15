@@ -145,6 +145,126 @@ test('span tree, summary Peek, zoom and keyboard work at laptop and 390 px', asy
   assert.deepEqual(errors, []);
 });
 
+test('Escape closes Waterfall layers then clears selection at desktop and 390 px', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${origin}/waterfall?command=widgets%237`);
+    const tree = page.getByRole('tree', { name: 'Command spans' });
+    const sess = tree.locator(`[data-span-id="${ids.session}"]`);
+    await sess.locator(':scope > .span-row').click();
+    await page.keyboard.press('?');
+    assert.equal(await page.locator('#keys').evaluate(el => el.open), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#keys').evaluate(el => el.open), false);
+    assert.equal(await page.locator('#peek').isVisible(), true);
+    await page.keyboard.press('g');
+    assert.equal(await page.locator('#jumps').isVisible(), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#jumps').isVisible(), false);
+    assert.equal(await page.locator('#peek').isVisible(), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#peek').isVisible(), false);
+    assert.equal(await sess.getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('Escape');
+    assert.equal(await tree.locator('[aria-selected="true"]').count(), 0, 'second Escape clears the selected span');
+    assert.equal(await tree.locator('.is-selected').count(), 0);
+    await page.keyboard.press('Escape');
+    assert.equal(await tree.locator('[aria-selected="true"], .is-selected').count(), 0);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test('Waterfall keyboard entry and expansion work after clearing selection', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${origin}/waterfall?command=widgets%237`);
+    const tree = page.getByRole('tree', { name: 'Command spans' });
+    await tree.locator(`[data-span-id="${ids.session}"] > .span-row`).click();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    assert.equal(await tree.evaluate(el => el === document.activeElement), true, 'Escape retains a keyboard entry point');
+    for (const name of ['Ticket runs', 'Stages', 'Sessions', 'Every call']) {
+      await page.getByRole('button', { name, exact: true }).click();
+      assert.equal(await tree.locator('[aria-selected="true"], .is-selected').count(), 0, `${name} preserves empty selection`);
+      assert.equal(await page.locator('#peek').isVisible(), false);
+    }
+    await page.keyboard.press('Tab');
+    assert.equal(await tree.evaluate(el => el === document.activeElement), true, 'Tab enters the tree without selecting a row');
+    assert.equal(await tree.locator('[aria-selected="true"], .is-selected').count(), 0);
+    const first = await tree.getByRole('treeitem').first().getAttribute('data-span-id');
+    const last = await tree.getByRole('treeitem').last().getAttribute('data-span-id');
+    for (const key of ['ArrowDown', 'j', 'ArrowUp', 'k', 'Home', 'End', 'ArrowLeft', 'ArrowRight', 'Enter', 'Space']) {
+      await page.keyboard.press(key);
+      const expected = ['ArrowUp', 'k', 'End'].includes(key) ? last : first;
+      assert.equal(await tree.locator('[aria-selected="true"]').getAttribute('data-span-id'), expected, key);
+      assert.equal(await page.locator('#peek').isVisible(), ['Enter', 'Space'].includes(key));
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      assert.equal(await tree.locator('[aria-selected="true"], .is-selected').count(), 0);
+    }
+    await tree.locator(`[data-span-id="${ids.tool}"] > .span-row`).click();
+    assert.equal(await tree.locator(`[data-span-id="${ids.tool}"]`).getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#peek').isVisible(), true);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test('cleared Waterfall selection survives changed data and running renders', async t => {
+  const original = await readFile(recordPath, 'utf8');
+  t.after(() => replaceRecord(recordPath, original));
+  const record = JSON.parse(original);
+  record.started_at = new Date(Date.now() - 10000).toISOString();
+  record.stages[0].began_at = record.started_at;
+  if (process.platform === 'linux') {
+    const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+    record.process_id = process.pid;
+    record.process_start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19]}`;
+    record.outcome = null;
+    record.ended_at = null;
+  } else record.ended_at = new Date().toISOString();
+  await replaceRecord(recordPath, JSON.stringify(record));
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${origin}/waterfall?command=widgets%237`);
+    const tree = page.getByRole('tree', { name: 'Command spans' });
+    await tree.locator(`[data-span-id="${ids.session}"] > .span-row`).click();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    if (process.platform === 'linux') {
+      assert.equal(await tree.getAttribute('data-live'), 'true');
+      const running = tree.locator('.span-row').filter({ has: page.locator('.span-status-running') }).first();
+      const duration = await running.locator('.span-duration').textContent();
+      await page.waitForFunction(duration => document.querySelector('#span-tree .span-status-running')?.closest('.span-row').querySelector('.span-duration').textContent !== duration, duration);
+      assert.equal(await tree.locator('[aria-selected="true"], .is-selected').count(), 0, 'running render keeps selection empty');
+      assert.equal(await page.locator('#peek').isVisible(), false);
+    }
+    record.issue.title = `Widgets cleared at ${viewport.width}`;
+    await replaceRecord(recordPath, JSON.stringify(record));
+    await page.waitForFunction(title => document.querySelector('#span-tree')?.textContent.includes(title), record.issue.title);
+    assert.equal(await tree.locator('[aria-selected="true"], .is-selected').count(), 0, 'changed-data refresh keeps selection empty');
+    assert.equal(await page.locator('#peek').isVisible(), false);
+    assert.equal(await tree.evaluate(el => el === document.activeElement), true);
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await tree.locator('[aria-selected="true"]').count(), 1);
+  }
+  assert.deepEqual(errors, []);
+});
+
 test('refresh preserves folds, selected span, zoom and open Peek', async t => {
   const context = await browser.newContext();
   t.after(() => context.close());

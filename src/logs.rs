@@ -128,6 +128,7 @@ pub enum CommandKind {
     Process,
     Review,
     Fix,
+    Release,
 }
 
 impl CommandKind {
@@ -143,6 +144,7 @@ impl CommandKind {
             Self::Process => "process",
             Self::Review => "review",
             Self::Fix => "fix",
+            Self::Release => "release",
         }
     }
 
@@ -158,6 +160,7 @@ impl CommandKind {
             "process" => Some(Self::Process),
             "review" => Some(Self::Review),
             "fix" => Some(Self::Fix),
+            "release" => Some(Self::Release),
             _ => None,
         }
     }
@@ -177,6 +180,9 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
+    ReleaseRun {
+        pass: bool,
+    },
     ReviewRun {
         pass: bool,
     },
@@ -220,6 +226,7 @@ pub enum Work<'a> {
     ScoringRun(&'a Repo),
     ReviewRun(&'a Repo),
     FixRun(&'a Repo),
+    ReleaseRun(&'a Repo),
     /// Triage on a Report, or on the retained explicit or Pass-selected issue.
     TriageRun {
         repo: &'a Repo,
@@ -242,16 +249,18 @@ pub enum Pass {
     Review,
     Fix,
     Triage,
+    Release,
 }
 
 impl Pass {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Architect,
         Self::Pickup,
         Self::Security,
         Self::Review,
         Self::Fix,
         Self::Triage,
+        Self::Release,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -262,6 +271,7 @@ impl Pass {
             Self::Review => "Review",
             Self::Fix => "Fix",
             Self::Triage => "Triage",
+            Self::Release => "Release",
         }
     }
 }
@@ -291,6 +301,24 @@ impl<'de> serde::Deserialize<'de> for Pass {
 /// The production command's complete record, shared with reader threads.
 static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
     LazyLock::new(|| Mutex::new(Record::new(OnMachine)));
+
+/// Temporarily record an in-process Command under its owning Command. Restores
+/// the parent's writer and quota attachment even when nested work fails.
+pub(crate) struct Nested(Option<Record<OnMachine>>);
+
+pub(crate) fn nested() -> Nested {
+    let mut current = record();
+    let mut child = Record::new(OnMachine);
+    child.child_of(current.record_path());
+    Nested(Some(std::mem::replace(&mut *current, child)))
+}
+
+impl Drop for Nested {
+    fn drop(&mut self) {
+        *record() = self.0.take().expect("nested recording restored once");
+        attach_quota_budget();
+    }
+}
 
 const PARENT_RECORD: &str = "THIRDSHIFT_PARENT_RECORD";
 const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
@@ -410,6 +438,17 @@ pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
     record().custom_process()
 }
 
+/// Keep a live Command record while a Pass waits before it starts work, as
+/// a Release run Pass does for pending main CI: it shows in Working and Stop
+/// can reach it. [`started`] or [`skipped`] ends it.
+pub(crate) fn waiting() {
+    if record().needs_preflight_repo() {
+        let repo = crate::launch::repo().ok();
+        record().preflight_repo(repo);
+    }
+    record().waiting();
+}
+
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
 /// Activity log line of its kind there already says so. Nothing is shown:
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
@@ -469,7 +508,7 @@ pub(crate) fn waiting_for(commands: &[String]) {
 
 /// Temporarily overlay the active stage without resetting its timing.
 pub(crate) fn quota_wait(until: Option<&str>) {
-    if until.is_some() && record().needs_quota_repo() {
+    if until.is_some() && record().needs_preflight_repo() {
         let repo = crate::launch::repo().ok();
         record().preflight_repo(repo);
     }
@@ -485,6 +524,31 @@ pub fn session(session: Logged, path: &Path) {
     record().stage(session.stage(), Some(path));
 }
 
+/// What the session just started runs on, for its stage: each Step's
+/// actual Harness, Model and Effort, which Plan usage may have routed.
+pub fn session_choice(choice: &crate::harness::Choice) {
+    record().session_choice(choice);
+}
+
+/// `configured` as the Command's implement session ran it: the Harness,
+/// Model and Effort its record keeps for that session, which Plan usage may
+/// have routed to another route, else `configured` itself. `Built with`
+/// names this one tuple.
+pub(crate) fn implemented_on(configured: &crate::harness::Choice) -> crate::harness::Choice {
+    let recorded = record().implemented_on();
+    match recorded.and_then(|(name, model, effort)| {
+        Some((crate::harness::Harness::named(&name)?, model, effort))
+    }) {
+        Some((harness, model, effort)) => crate::harness::Choice {
+            harness,
+            model,
+            effort,
+            ..configured.clone()
+        },
+        None => configured.clone(),
+    }
+}
+
 /// The selected Issue branch, retained unless completion says it was removed.
 pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
@@ -493,6 +557,11 @@ pub fn issue_branch(branch: Option<&str>) {
 /// The target pull request, available while the Command is still running.
 pub(crate) fn pull_request(url: &str) {
     record().pull_request(url);
+}
+
+/// Title of the target pull request, available while the Command is running.
+pub(crate) fn pull_request_title(title: Option<String>) {
+    record().pull_request_title(title);
 }
 
 /// The selected Base branch of a Fix Pass's CI repair, before a PR exists.
@@ -518,6 +587,18 @@ pub(crate) fn resumable(command: &str) {
     record().resumable(command);
 }
 
+/// A Paused Command's Claim put `ready-for-agent` back: a later Pickup run
+/// retakes its issue once Plan usage allows.
+pub(crate) fn handed_back_for_pickup() {
+    record().handed_back_for_pickup();
+}
+
+/// Whether this Command's record says a later Pickup run retakes it: its
+/// Claim put `ready-for-agent` back when it paused.
+pub(crate) fn recorded_handed_back_for_pickup() -> bool {
+    record().recorded_handed_back_for_pickup()
+}
+
 pub(crate) fn paused(limit: &crate::session::limits::Limit) {
     record().paused(limit);
 }
@@ -526,9 +607,14 @@ pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
     complete(outcome, cause);
 }
 
-/// Record how a Command with no Run account ended, such as a Process.
+/// Record how a Command with no Run account ended, such as a Process. A
+/// Paused Command with no resume command recorded keeps this one.
 pub fn complete(outcome: &str, cause: Option<&str>) {
-    record().outcome(outcome, cause);
+    let mut record = record();
+    if outcome == "paused" {
+        record.resumable_by_this_command();
+    }
+    record.outcome(outcome, cause);
 }
 
 /// The Stop given to this Command, if interruption is being handled.
@@ -676,6 +762,7 @@ impl<'a> Work<'a> {
             Self::ScoringRun(_) => "scoring-run",
             Self::ReviewRun(_) => "review-run",
             Self::FixRun(_) => "fix-run",
+            Self::ReleaseRun(_) => "release-run",
             Self::TriageRun { .. } => "triage-run",
             Self::Experiment(_) => "experiment",
             Self::Process { name, .. } => return Identity::custom(name, None),
@@ -692,6 +779,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::ReviewRun(_) => Some(Stage::CodeReview),
             Work::FixRun(_) => Some(Stage::PullRequest),
+            Work::ReleaseRun(_) => Some(Stage::PullRequest),
             Work::TriageRun { .. } => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
@@ -709,6 +797,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(repo)
             | Work::ReviewRun(repo)
             | Work::FixRun(repo)
+            | Work::ReleaseRun(repo)
             | Work::TriageRun { repo, .. }
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
@@ -726,6 +815,7 @@ impl<'a> Work<'a> {
                 CommandKind::Scoring => Kind::ScoringRun,
                 CommandKind::Review => Kind::ReviewRun,
                 CommandKind::Fix => Kind::FixRun,
+                CommandKind::Release => Kind::ReleaseRun,
                 CommandKind::Triage => Kind::TriageRun,
                 CommandKind::Experiment => Kind::Experiment,
                 CommandKind::Process => Kind::Process,
@@ -738,6 +828,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Kind::ScoringRun,
             Work::ReviewRun(_) => Kind::ReviewRun,
             Work::FixRun(_) => Kind::FixRun,
+            Work::ReleaseRun(_) => Kind::ReleaseRun,
             Work::TriageRun { .. } => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
@@ -755,6 +846,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
+            | Work::ReleaseRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

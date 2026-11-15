@@ -33,6 +33,7 @@ use crate::skills;
 /// How a command that did factory work, or was skipped before any, ended.
 pub enum Ending {
     Scoring(Result<usize, FailedRun>),
+    Release(Result<crate::release::Ended, FailedRun>),
     Triage(Result<crate::triage::Ended, FailedRun>),
     /// A Run or a Spec run ended: started by hand, or dispatched by a Pickup
     /// run.
@@ -197,6 +198,7 @@ impl Started {
             }
             | Ending::SecurityFix { .. } => self.started.map(|started| started.elapsed()),
             Ending::Scoring(_)
+            | Ending::Release(_)
             | Ending::Triage(_)
             | Ending::Architect { .. }
             | Ending::Security(_)
@@ -231,6 +233,9 @@ pub fn failure(error: &anyhow::Error) -> ExitCode {
     progress::step(format_args!("{error:#}"));
     if crate::failed_run::out_of_disk(error) {
         progress::step(crate::failed_run::OUT_OF_DISK);
+    }
+    if crate::session::limits::plan_usage_paused(error).is_some() {
+        return ExitCode::from(run_ending::PAUSED_EXIT);
     }
     ExitCode::FAILURE
 }

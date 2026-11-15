@@ -141,14 +141,7 @@ struct FleetPage {
 impl FleetPage {
     /// How long ago `at` was, roughly, as of now.
     fn age(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
-        let seconds = (chrono::Utc::now() - *at).num_seconds().max(0);
-        let (count, unit) = match seconds {
-            0..60 => return "just now".into(),
-            60..3_600 => (seconds / 60, "minute"),
-            3_600..86_400 => (seconds / 3_600, "hour"),
-            _ => (seconds / 86_400, "day"),
-        };
-        format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
+        super::age(at)
     }
 
     /// Why a Failed Command's details cannot be opened: its machine's

@@ -24,6 +24,7 @@ mod live;
 mod logs;
 mod look;
 mod metrics;
+mod plan_usage;
 pub use look::{export_theme, import_theme, sections, theme};
 mod openapi;
 pub use openapi::print as openapi;
@@ -79,6 +80,8 @@ struct PageContext {
     consoles: Vec<crate::config::console::fleet::Entry>,
     theme: String,
     resources: resources::Status,
+    /// Any configured route on this machine used up or at its ceiling.
+    plan_usage: Option<plan_usage::Warning>,
 }
 
 impl PageContext {
@@ -89,6 +92,7 @@ impl PageContext {
             consoles: config.console.fleet.clone(),
             theme: config.console.theme.clone(),
             resources: resources::Status::new(config),
+            plan_usage: plan_usage::Warning::new(config),
         }
     }
 
@@ -126,8 +130,8 @@ pub(crate) enum Scope {
     Act,
     Run,
     Admin,
-    /// Upload only the token holder's own Run metrics summary; never a
-    /// person's scope (ADR 0026, #2036 Q4.2).
+    /// Upload only the token holder's own Run metrics summary and Plan
+    /// usage; never a person's scope (ADR 0026, #2036 Q4.2).
     Report,
 }
 
@@ -246,6 +250,9 @@ enum View {
     ResourceStatus,
     Metrics,
     ReportMetrics,
+    PlanUsage,
+    ClearPlanUsage,
+    ReportPlanUsage,
     Inbox,
     Inspect,
     Spans,
@@ -322,6 +329,9 @@ impl PageRoute {
                 | View::ResourceStatus
                 | View::Metrics
                 | View::ReportMetrics
+                | View::PlanUsage
+                | View::ClearPlanUsage
+                | View::ReportPlanUsage
                 | View::Inbox
                 | View::Inspect
                 | View::Spans
@@ -482,14 +492,6 @@ const PAGES: &[PageRoute] = &[
         view: View::Recheck,
     },
     PageRoute {
-        path: "/api/v1/start",
-        api: "/api/v1/start",
-        scope: Some(Scope::Run),
-        cli: &["thirdshift experiment HEAD"],
-        method: Method::POST,
-        view: View::StartRun,
-    },
-    PageRoute {
         path: "/api/v1/runs",
         api: "/api/v1/runs",
         scope: Some(Scope::Run),
@@ -505,7 +507,16 @@ const PAGES: &[PageRoute] = &[
             "thirdshift score",
             "thirdshift triage",
             "thirdshift experiment HEAD",
+            "thirdshift release 1.2.3",
         ],
+        method: Method::POST,
+        view: View::StartRun,
+    },
+    PageRoute {
+        path: "/api/v1/start",
+        api: "/api/v1/start",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift experiment HEAD", "thirdshift release 1.2.3"],
         method: Method::POST,
         view: View::StartRun,
     },
@@ -630,6 +641,40 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift metrics --push"],
         method: Method::POST,
         view: View::ReportMetrics,
+    },
+    PageRoute {
+        path: "/plan-usage",
+        api: "/api/v1/plan-usage",
+        scope: Some(Scope::Read),
+        cli: &[
+            "thirdshift plan-usage --json",
+            "thirdshift plan-usage --fleet --json",
+            "thirdshift plan-usage --machine other --json",
+            "thirdshift plan-usage --local --json",
+        ],
+        method: Method::GET,
+        view: View::PlanUsage,
+    },
+    PageRoute {
+        path: "/plan-usage/clear",
+        api: "/api/v1/plan-usage/clear",
+        scope: Some(Scope::Act),
+        cli: &[
+            "thirdshift plan-usage --clear --json",
+            "thirdshift plan-usage --clear agy --json",
+        ],
+        method: Method::POST,
+        view: View::ClearPlanUsage,
+    },
+    // The receiving end of `plan-usage --push` and the push after each
+    // Command: a `report` token uploads its holder's own Plan usage view.
+    PageRoute {
+        path: "/api/v1/plan-usage/report",
+        api: "/api/v1/plan-usage/report",
+        scope: Some(Scope::Report),
+        cli: &["thirdshift plan-usage --push"],
+        method: Method::POST,
+        view: View::ReportPlanUsage,
     },
     PageRoute {
         path: "/bug-origins",
@@ -1167,6 +1212,11 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::ReportMetrics, Method::POST) => {
                 post(metrics::receive).layer(DefaultBodyLimit::max(metrics::REPORT_LIMIT))
             }
+            (View::PlanUsage, Method::GET) => get(plan_usage::show),
+            (View::ClearPlanUsage, Method::POST) => post(plan_usage::clear),
+            (View::ReportPlanUsage, Method::POST) => {
+                post(plan_usage::receive).layer(DefaultBodyLimit::max(plan_usage::REPORT_LIMIT))
+            }
             (View::Inbox, Method::GET) => {
                 get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
             }
@@ -1205,7 +1255,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
                 "API route needs a scope"
             );
             let api_handler = handler.clone().layer(axum::Extension(api::Format::Json));
-            let api_handler = if let Some(scope) = page.scope {
+            let api_handler = if matches!(page.view, View::StartRun | View::StartOptions) {
+                // The request's Command chooses run or admin after this shared gate.
+                api_handler.layer(middleware::from_fn(auth::require_start_scope))
+            } else if let Some(scope) = page.scope {
                 api_handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
             } else {
                 api_handler
@@ -1300,16 +1353,19 @@ impl InboxPage {
             .map_or("overview", |section| section.group)
     }
 
-    fn in_overview(&self, group: &str) -> bool {
-        matches!(
-            group,
-            "needs you" | "ready for review" | "landing" | "working"
-        )
+    /// Finished sections sit folded below Working in Overview, until opened.
+    fn folded_in_overview(&self, group: &str) -> bool {
+        matches!(group, "done" | "resolved")
     }
 
+    /// Without a browser choice, a section opens unless Overview folds it.
+    fn opens(&self, group: &str) -> bool {
+        !(self.folder() == "overview" && self.folded_in_overview(group))
+    }
+
+    /// Overview shows every visible section, so a switch needs no request.
     fn shown(&self, group: &str) -> bool {
-        !self.hidden(group)
-            && (self.folder() == group || (self.folder() == "overview" && self.in_overview(group)))
+        !self.hidden(group) && (self.folder() == group || self.folder() == "overview")
     }
 
     fn slug(&self, group: &str) -> String {
@@ -1353,7 +1409,7 @@ impl InboxPage {
             row,
             start: self.start.as_ref(),
             csrf: &self.csrf,
-            can_copy: can_copy && row.console.is_empty(),
+            can_copy,
             can_act: self.page.can_act(),
             can_security: self.page.can_security(),
         }
@@ -1399,6 +1455,18 @@ impl RowTemplate<'_> {
 /// A section's name as config and URLs spell it: `needs you` is `needs-you`.
 fn slug(group: &str) -> String {
     group.replace(' ', "-")
+}
+
+/// How long ago `at` was, roughly, as of now.
+fn age(at: &chrono::DateTime<chrono::Utc>) -> String {
+    let seconds = (chrono::Utc::now() - *at).num_seconds().max(0);
+    let (count, unit) = match seconds {
+        0..60 => return "just now".into(),
+        60..3_600 => (seconds / 60, "minute"),
+        3_600..86_400 => (seconds / 3_600, "hour"),
+        _ => (seconds / 86_400, "day"),
+    };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
 }
 
 fn query_value(query: &Option<String>, key: &str) -> String {
@@ -1652,26 +1720,7 @@ async fn log(
         })
         .await;
     }
-    match tokio::task::spawn_blocking(move || {
-        let config = UserConfig::load()?;
-        let path = status::inspect::log_path(
-            &config,
-            &command,
-            (!session.is_empty()).then_some(session.as_str()),
-        )?;
-        crate::logs::catalog::load(&config, None)?
-            .into_iter()
-            .find(|log| log.path == path)
-            .map(|log| log.id)
-            .context("log is unavailable")
-    })
-    .await
-    {
-        Ok(Ok(id)) => {
-            logs::reader(Path(id), axum::Extension(viewer), axum::Extension(format)).await
-        }
-        _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
-    }
+    logs::reader_for_command(command, (!session.is_empty()).then_some(session), viewer).await
 }
 
 fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {

@@ -17,6 +17,7 @@ use super::subscription::{Readiness, Subscription};
 use crate::config::UserConfig;
 use crate::logs::Framing;
 use crate::logs::catalog::{self, Log};
+use crate::logs::status::GitHubTarget;
 
 #[derive(Template)]
 #[template(path = "console/logs.html")]
@@ -61,6 +62,7 @@ fn by_repository(logs: Vec<Log>) -> Vec<LogGroup> {
 struct ReaderPage {
     page: super::PageContext,
     log: ReaderLog,
+    target: Option<GitHubTarget>,
     html: String,
     offset: u64,
     live: bool,
@@ -95,6 +97,15 @@ pub(super) fn remote(
         let contents = value["contents"]
             .as_str()
             .context("incompatible remote log")?;
+        let target = (!command.is_empty())
+            .then(|| {
+                let peek_route = crate::logs::status::inspect::url("/peek", command, None);
+                remote
+                    .get(&peek_route)
+                    .ok()
+                    .and_then(|details| GitHubTarget::from_details(&details["command"]))
+            })
+            .flatten();
         let kind = if session.is_some() {
             catalog::Kind::Session
         } else {
@@ -122,6 +133,7 @@ pub(super) fn remote(
                 ),
                 selector: command.into(),
             },
+            target,
             html: conversation::render(contents, kind),
             offset: 0,
             live: false,
@@ -192,29 +204,18 @@ async fn inventory(
     .await
 }
 
-async fn security_refusal(viewer: &super::auth::Viewer, id: &str) -> Option<Response> {
-    if viewer.scopes.contains(&super::Scope::Security) {
-        return None;
-    }
-    let selected = id.to_owned();
-    match tokio::task::spawn_blocking(move || -> Result<bool> {
-        let config = UserConfig::load()?;
-        let log = catalog::find(&config, &selected)?;
-        Ok(log.security_details)
-    })
-    .await
-    {
-        Ok(Ok(true)) => Some(super::api::error(
-            StatusCode::FORBIDDEN,
-            "Missing scope: security",
-        )),
-        Ok(Ok(false)) => None,
-        Ok(Err(error)) => Some(super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)),
-        Err(_) => Some(super::api::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Can't read this view; check the Console's stderr.",
-        )),
-    }
+enum OpenTarget {
+    Id(String),
+    Command {
+        command: String,
+        session: Option<String>,
+    },
+}
+
+enum HtmlOutcome {
+    Page(String),
+    Forbidden,
+    NotFound,
 }
 
 pub(super) async fn reader(
@@ -222,27 +223,69 @@ pub(super) async fn reader(
     Extension(viewer): Extension<super::auth::Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
-    if let Some(response) = security_refusal(&viewer, &id).await {
-        return response;
-    }
+    let allow_security = viewer.scopes.contains(&super::Scope::Security);
     if format == super::api::Format::Json {
         return super::api::read(format, move || {
-            let log = catalog::find(&UserConfig::load()?, &id)?;
-            Ok(Json(catalog::contents(&log.reader)?).into_response())
+            let config = UserConfig::load()?;
+            match catalog::open(
+                &config,
+                catalog::OpenRequest::Id(&id),
+                allow_security,
+                false,
+            )? {
+                catalog::OpenOutcome::Opened(opened) => {
+                    Ok(Json(catalog::contents(&opened.log.reader)?).into_response())
+                }
+                catalog::OpenOutcome::Forbidden => Ok(super::api::error(
+                    StatusCode::FORBIDDEN,
+                    "Missing scope: security",
+                )),
+                catalog::OpenOutcome::NotFound => Ok(super::api::error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    catalog::UNLISTED,
+                )),
+            }
         })
         .await;
     }
-    let result = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+    render_html_reader(OpenTarget::Id(id), viewer).await
+}
+
+pub(super) async fn reader_for_command(
+    command: String,
+    session: Option<String>,
+    viewer: super::auth::Viewer,
+) -> Response {
+    render_html_reader(OpenTarget::Command { command, session }, viewer).await
+}
+
+async fn render_html_reader(target: OpenTarget, viewer: super::auth::Viewer) -> Response {
+    let allow_security = viewer.scopes.contains(&super::Scope::Security);
+    let result = tokio::task::spawn_blocking(move || -> Result<HtmlOutcome> {
         let config = UserConfig::load()?;
-        let Some(log) = catalog::load(&config, None)?
-            .into_iter()
-            .find(|log| log.id == id)
-        else {
-            return Ok(None);
+        let outcome = match &target {
+            OpenTarget::Id(id) => {
+                catalog::open(&config, catalog::OpenRequest::Id(id), allow_security, true)?
+            }
+            OpenTarget::Command { command, session } => catalog::open(
+                &config,
+                catalog::OpenRequest::Command {
+                    command,
+                    session: session.as_deref(),
+                },
+                allow_security,
+                true,
+            )?,
         };
+        let opened = match outcome {
+            catalog::OpenOutcome::Opened(opened) => opened,
+            catalog::OpenOutcome::Forbidden => return Ok(HtmlOutcome::Forbidden),
+            catalog::OpenOutcome::NotFound => return Ok(HtmlOutcome::NotFound),
+        };
+        let log = opened.log;
         let lines = log.reader.read(0, Framing::Lines, usize::MAX)?;
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
-        Ok(Some(
+        Ok(HtmlOutcome::Page(
             ReaderPage {
                 page: super::PageContext::new(&config, &viewer.scopes),
                 cli: format!("thirdshift logs --file {}", log.id),
@@ -254,6 +297,7 @@ pub(super) async fn reader(
                     name: log.name,
                     selector: log.selector,
                 },
+                target: opened.target,
                 html,
                 offset: lines.offset,
                 live: !lines.done,
@@ -265,8 +309,13 @@ pub(super) async fn reader(
     })
     .await;
     match result {
-        Ok(Ok(Some(html))) => super::page(Ok(Ok(html))),
-        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Ok(HtmlOutcome::Page(html))) => super::page(Ok(Ok(html))),
+        Ok(Ok(HtmlOutcome::Forbidden)) => {
+            super::api::error(StatusCode::FORBIDDEN, "Missing scope: security")
+        }
+        Ok(Ok(HtmlOutcome::NotFound)) => {
+            (StatusCode::NOT_FOUND, "Log is unavailable.").into_response()
+        }
         Ok(Err(error)) => super::page(Ok(Err(error))),
         Err(error) => super::page(Err(error)),
     }
@@ -297,19 +346,33 @@ pub(super) async fn stream(
 ) -> Response {
     // A finite request uses the same reader and offset as SSE when a proxy
     // cannot keep streams open. It still crosses the normal account guard.
-    if let Some(response) = security_refusal(&viewer, &id).await {
-        return response;
-    }
+    let allow_security = viewer.scopes.contains(&super::Scope::Security);
     if headers
         .get("accept")
         .is_some_and(|value| value == "application/json")
     {
-        return match tokio::task::spawn_blocking(move || {
-            appended(&catalog::find(&UserConfig::load()?, &id)?, offset)
+        return match tokio::task::spawn_blocking(move || -> Result<_> {
+            let config = UserConfig::load()?;
+            match catalog::open(
+                &config,
+                catalog::OpenRequest::Id(&id),
+                allow_security,
+                false,
+            )? {
+                catalog::OpenOutcome::Opened(opened) => Ok(Ok(appended(&opened.log, offset)?)),
+                catalog::OpenOutcome::Forbidden => Ok(Err(true)),
+                catalog::OpenOutcome::NotFound => Ok(Err(false)),
+            }
         })
         .await
         {
-            Ok(Ok(batch)) => Json(batch).into_response(),
+            Ok(Ok(Ok(batch))) => Json(batch).into_response(),
+            Ok(Ok(Err(true))) => {
+                super::api::error(StatusCode::FORBIDDEN, "Missing scope: security")
+            }
+            Ok(Ok(Err(false))) => {
+                super::api::error(StatusCode::UNPROCESSABLE_ENTITY, catalog::UNLISTED)
+            }
             Ok(Err(error)) => super::page(Ok(Err(error))),
             Err(error) => super::page(Err(error)),
         };
@@ -321,21 +384,34 @@ pub(super) async fn stream(
         .unwrap_or(offset);
     let checked = tokio::task::spawn_blocking(move || -> Result<_> {
         let config = UserConfig::load()?;
-        let log = catalog::find(&config, &id)?;
-        ensure!(
-            offset <= std::fs::metadata(&log.path)?.len(),
-            "invalid log offset"
-        );
-        Ok(log)
+        match catalog::open(
+            &config,
+            catalog::OpenRequest::Id(&id),
+            allow_security,
+            false,
+        )? {
+            catalog::OpenOutcome::Opened(opened) => {
+                ensure!(
+                    offset <= std::fs::metadata(&opened.log.path)?.len(),
+                    "invalid log offset"
+                );
+                Ok(Ok(opened.log))
+            }
+            catalog::OpenOutcome::Forbidden => Ok(Err(true)),
+            catalog::OpenOutcome::NotFound => Ok(Err(false)),
+        }
     })
     .await;
     let state = match checked {
-        Ok(Ok(log)) => LogStream {
+        Ok(Ok(Ok(log))) => LogStream {
             log: std::sync::Arc::new(log),
             offset,
             done: false,
             subscription: Subscription::new(changes, viewer, &notifier),
         },
+        Ok(Ok(Err(true))) => {
+            return super::api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+        }
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     let events = futures_util::stream::unfold(state, |mut state| async move {
