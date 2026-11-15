@@ -734,7 +734,8 @@ fn a_run_that_fails_after_killed_background_work_names_that_work_in_its_notifica
     assert_contains(
         text(&request),
         "implement session ended with a background task still running (cargo test), \
-         which was killed, and a later step failed: no PR found",
+         which was killed, and a later step failed: \
+         the implement session made no commits and opened no pull request",
     );
 }
 

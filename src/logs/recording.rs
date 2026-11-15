@@ -42,7 +42,7 @@ pub(super) struct Record<O: Outside> {
     command_record: Option<(PathBuf, CommandTree)>,
     preflight_repo: Option<Repo>,
     preflight_issue: Option<crate::issue::IssueUrl>,
-    quota_record: bool,
+    preflight_record: bool,
     custom_process: Option<crate::processes::Identity>,
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
@@ -179,7 +179,7 @@ impl<O: Outside> Record<O> {
             command_record: None,
             preflight_repo: None,
             preflight_issue: None,
-            quota_record: false,
+            preflight_record: false,
             custom_process: None,
             parent_record: None,
             parent_dispatch: None,
@@ -202,6 +202,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => CommandKind::Scoring,
             Begin::ReviewRun { .. } => CommandKind::Review,
             Begin::FixRun { .. } => CommandKind::Fix,
+            Begin::ReleaseRun { .. } => CommandKind::Release,
             Begin::TriageRun { .. } => CommandKind::Triage,
             Begin::Experiment => CommandKind::Experiment,
             Begin::Process { .. } => CommandKind::Process,
@@ -219,6 +220,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::ReviewRun { pass } => ("Review run starting".into(), pass),
             Begin::FixRun { pass } => ("Fix run starting".into(), pass),
+            Begin::ReleaseRun { pass } => ("Release run starting".into(), pass),
             Begin::TriageRun { pass } => ("Triage run starting".into(), pass),
             Begin::Experiment => ("Experiment starting".into(), false),
             Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
@@ -237,7 +239,9 @@ impl<O: Outside> Record<O> {
     pub(super) fn configured(&mut self, config: &UserConfig) {
         self.logs_dir = Some(config.logs_dir.clone());
         self.otlp_endpoint = config.otlp_endpoint.clone();
-        if !config.quiet_skips {
+        // A Release Pass skips with no output at all, whatever quiet_skips
+        // says: its held lines stay held until it knows it is not skipping.
+        if !config.quiet_skips && self.command != CommandKind::Release {
             self.show_held();
         }
         if !self.child {
@@ -258,7 +262,7 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn needs_quota_repo(&self) -> bool {
+    pub(super) fn needs_preflight_repo(&self) -> bool {
         self.command_record.is_none() && self.preflight_repo.is_none()
     }
 
@@ -308,6 +312,7 @@ impl<O: Outside> Record<O> {
             CommandKind::Review => Pass::Review,
             CommandKind::Fix => Pass::Fix,
             CommandKind::Triage => Pass::Triage,
+            CommandKind::Release => Pass::Release,
             CommandKind::Issue
             | CommandKind::Scoring
             | CommandKind::Experiment
@@ -360,7 +365,7 @@ impl<O: Outside> Record<O> {
         let stamp = self.stamp();
         let began = matches!(self.command_log, Log::Held { .. });
         self.keep(&root, work, &stamp);
-        if began || self.quota_record {
+        if began || self.preflight_record {
             self.start_record(work, harness);
         }
         self.step(format_args!("sessions run on {harness}"));
@@ -388,6 +393,7 @@ impl<O: Outside> Record<O> {
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
+                | Work::ReleaseRun(_)
                 | Work::TriageRun { .. }
                 | Work::Experiment(_) => None,
             },
@@ -441,12 +447,12 @@ impl<O: Outside> Record<O> {
     fn start_record(&mut self, work: Work, harness: &Choice) {
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
-        if self.quota_record
+        if self.preflight_record
             && let Some((_, tree)) = &self.command_record
         {
             facts.started_at = tree.command.started_at.clone();
         }
-        self.quota_record = false;
+        self.preflight_record = false;
         if matches!(work, Work::Process { .. })
             && let Some(identity) = &self.custom_process
         {
@@ -459,12 +465,8 @@ impl<O: Outside> Record<O> {
             .unwrap_or_default();
         facts.parent_record = self.parent_record.clone();
         facts.parent_dispatch = self.parent_dispatch.clone();
-        let path = if let Some(parent) = &self.parent_record {
-            owner::child_record(
-                parent,
-                self.parent_dispatch.as_deref(),
-                work.issue().unwrap(),
-            )
+        let path = if let (Some(parent), Some(issue)) = (&self.parent_record, work.issue()) {
+            owner::child_record(parent, self.parent_dispatch.as_deref(), issue)
         } else {
             let Some(owner) = &self.owner else {
                 return;
@@ -498,7 +500,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn skipped(&mut self, pass: Pass, repo: &Repo, reason: impl Display) {
-        if self.quota_record {
+        if self.preflight_record {
             self.outcome("skipped", Some(&reason.to_string()));
         }
         let kind = Kind::Pass(pass);
@@ -661,8 +663,24 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn quota_wait(&mut self, until: Option<&str>) {
-        if until.is_some()
-            && self.command_record.is_none()
+        if until.is_some() {
+            self.open_preflight_record();
+        }
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().quota_wait_until = until.map(str::to_owned);
+            self.write_record();
+        }
+    }
+
+    /// Keep a live record for a Pass that waits before it starts work, so
+    /// it shows in Working and Stop can reach it. Its later start or skip
+    /// ends this record.
+    pub(super) fn waiting(&mut self) {
+        self.open_preflight_record();
+    }
+
+    fn open_preflight_record(&mut self) {
+        if self.command_record.is_none()
             && let Some(repo) = self.preflight_repo.clone()
             && self.logs_dir.is_some()
             && (!self.child || self.preflight_issue.is_some())
@@ -682,11 +700,7 @@ impl<O: Outside> Record<O> {
                 // No Harness has been selected or launched during preflight.
                 tree.command.harness = "not started".into();
             }
-            self.quota_record = true;
-        }
-        if let Some((_, tree)) = &mut self.command_record {
-            tree.active().quota_wait_until = until.map(str::to_owned);
-            self.write_record();
+            self.preflight_record = true;
         }
     }
 

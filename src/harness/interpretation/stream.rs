@@ -5,7 +5,7 @@
 //! completion supplies the last reply holding a completion line (otherwise
 //! the last result) and any work killed since the latest result.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -49,6 +49,9 @@ struct Claude {
     tasks: HashMap<String, String>,
     /// Task id and description, in order of the first kill since the result.
     killed: Vec<(String, String)>,
+    /// Tasks whose kill a result already followed: their late stop
+    /// notification reports nothing new.
+    settled: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -65,6 +68,14 @@ struct Grok {
     fallback_id: Option<String>,
     usage: Option<String>,
     cost_known: bool,
+}
+
+/// Claude Code delivers a background task's notification as a result with
+/// no model turn, as when it stops the session's remaining background work
+/// at its wait ceiling. Such a result ends no turn: it neither replaces the
+/// last reply nor clears the work it reports killed.
+fn notification_only(event: &Value) -> bool {
+    event["origin"]["kind"] == "task-notification" && event["num_turns"].as_u64() == Some(0)
 }
 
 fn result_failed(event: &Value) -> bool {
@@ -361,7 +372,7 @@ impl Stream {
             }
             Some("result") => {
                 if matches!(self.dialect, Dialect::Claude(_))
-                    && !event["parent_tool_use_id"].is_null()
+                    && (!event["parent_tool_use_id"].is_null() || notification_only(event))
                 {
                     return Vec::new();
                 }
@@ -478,7 +489,7 @@ impl Claude {
 
     fn result(&mut self, event: &Value, failed: bool) {
         self.failed = failed;
-        self.killed.clear();
+        self.settled.extend(self.killed.drain(..).map(|(id, _)| id));
         let mut api_error = self.api_error.take().unwrap_or_default();
         self.diagnostic = if failed {
             // Terminal facts replace only the fields they actually supply.
@@ -511,7 +522,9 @@ impl Claude {
                 }
                 false
             }
-            TaskState::Updated("killed") | TaskState::Notified("stopped") => true,
+            TaskState::Updated("killed") => true,
+            // A stop a result already followed reports no new kill.
+            TaskState::Notified("stopped") => !self.settled.contains(id),
             TaskState::Updated(_) | TaskState::Notified(_) | TaskState::Other => false,
         };
         if killed && !self.killed.iter().any(|(killed_id, _)| killed_id == id) {

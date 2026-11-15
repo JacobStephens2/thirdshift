@@ -552,3 +552,115 @@ fn a_new_finding_is_reproduced_even_when_its_write_up_quotes_an_outcome() {
         assert_eq!(ended.findings[0].severity, None, "private {private}");
     }
 }
+
+#[test]
+fn canonical_fingerprints_reuse_records_and_deduplicate_within_an_audit() {
+    use crate::github::{DraftAdvisory, Package};
+    let candidate = |fingerprint: &str| DraftAdvisory {
+        fingerprint: fingerprint.into(),
+        summary: format!("Summary {fingerprint}"),
+        description: format!("Fingerprint: `{fingerprint}`\n"),
+        package: Package {
+            ecosystem: "other".into(),
+            name: None,
+        },
+    };
+    for private in [false, true] {
+        // Across audits: completed untriaged record `a.php.fn.sqli` is reused by `sqli:a.php:fn`,
+        // skipping reproduction, while `a.php.other_fn.sqli` creates and reproduces a second record.
+        let body = "Fingerprint: `a.php.fn.sqli`\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: reproduced high single\n";
+        let existing = if private {
+            serde_json::json!({
+                "number": 1, "state": "open", "body": body, "title": "First",
+                "html_url": "https://github.com/acme/widgets/issues/1",
+                "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
+            })
+        } else {
+            serde_json::json!({
+                "ghsa_id": "GHSA-first", "state": "draft", "severity": null,
+                "description": body, "summary": "First",
+                "html_url": "https://github.com/acme/widgets/security/advisories/GHSA-first"
+            })
+        };
+        let audited = vec![
+            candidate("sqli:a.php:fn"),
+            candidate("a.php.fn.sqli"),
+            candidate("a.php.other_fn.sqli"),
+        ];
+        let outside = InMemory::default().audited(audited);
+        let mut outside = if private {
+            outside.finding_issues(vec![existing])
+        } else {
+            outside.advisories(vec![existing])
+        };
+        let Outcome::Audited(ended) =
+            run_through(&mut outside, &widgets(), "main", false, false, None)
+        else {
+            panic!("audit expected");
+        };
+        let Ok(recorded) = &ended.outcome else {
+            panic!("audit failed");
+        };
+        assert_eq!(recorded.existing, 2, "private {private}");
+        assert_eq!(recorded.created, 1, "private {private}");
+        assert_eq!(ended.findings[0].severity.as_deref(), Some("high"));
+        let created: Vec<_> = outside
+            .calls
+            .iter()
+            .filter_map(|call| {
+                if let Call::CreateAdvisory(fp) = call {
+                    Some(fp.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(created, vec!["a.php.other_fn.sqli"], "private {private}");
+        let reproduced = outside
+            .calls
+            .iter()
+            .filter(|call| matches!(call, Call::Reproduce(_)))
+            .count();
+        assert_eq!(reproduced, 1, "only the distinct finding reproduces");
+        let kept_steps = outside
+            .calls
+            .iter()
+            .filter(|call| {
+                matches!(call, Call::Step(line) if line.contains("keeping the completed Security reproduction"))
+            })
+            .count();
+        assert_eq!(
+            kept_steps, 1,
+            "duplicate canonical references in one audit must log once"
+        );
+
+        // Within one empty-repo audit: two canonical variants create and reproduce only once.
+        let same_audit = vec![
+            candidate("a.php.fn.sqli"),
+            candidate("sqli:a.php:fn"),
+            candidate("a.php.other_fn.sqli"),
+        ];
+        let outside = InMemory::default().audited(same_audit);
+        let mut outside = if private {
+            outside.finding_issues(Vec::new())
+        } else {
+            outside
+        };
+        let Outcome::Audited(ended) =
+            run_through(&mut outside, &widgets(), "main", false, false, None)
+        else {
+            panic!("audit expected");
+        };
+        let Ok(recorded) = &ended.outcome else {
+            panic!("audit failed");
+        };
+        assert_eq!(recorded.created, 2, "private {private}");
+        assert_eq!(recorded.existing, 1, "private {private}");
+        let reproduced = outside
+            .calls
+            .iter()
+            .filter(|call| matches!(call, Call::Reproduce(_)))
+            .count();
+        assert_eq!(reproduced, 2, "two distinct records reproduce once each");
+    }
+}

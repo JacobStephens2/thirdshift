@@ -158,3 +158,85 @@ fn a_zero_exit_failed_claude_turn_leaves_the_pr_draft_without_a_resume() {
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
     scenario.assert_cleaned_up("issue-7");
 }
+
+/// What a session does whose Spec review Claude Code stops at its background
+/// wait ceiling, ten minutes after the session ended its turn (#2231): the
+/// stop arrives after the turn's result, then is delivered as an empty,
+/// zero-turn result of its own.
+const REVIEW_STOPPED_AT_THE_CEILING: &str = r#"
+echo '{"type": "system", "subtype": "task_started", "task_id": "a1", "description": "Spec review of issue-7"}'
+cat >> "$FAKE_CLAUDE_AFTER_RESULT" <<'JSON'
+{"type": "system", "subtype": "task_updated", "task_id": "a1", "patch": {"status": "killed"}}
+{"type": "system", "subtype": "task_notification", "task_id": "a1", "status": "stopped", "summary": "Spec review of issue-7"}
+{"type": "system", "subtype": "init", "session_id": "fake-session-1"}
+{"type": "result", "subtype": "success", "is_error": false, "result": "", "num_turns": 0, "total_cost_usd": 1.0, "origin": {"kind": "task-notification"}}
+JSON
+"#;
+
+/// The stopped review still gets the session its Resume, which opens the
+/// pull request.
+#[test]
+fn a_review_stopped_at_claudes_wait_ceiling_gets_its_session_resumed() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "echo feature > feature.txt\ngit add feature.txt\ngit commit -q -m 'Add feature'\n\
+             git push -q origin issue-7\n{REVIEW_STOPPED_AT_THE_CEILING}"
+        ),
+    );
+    scenario.agent_does(
+        "gh pr create --base main --head issue-7 --title \"Add feature\" --body \"Closes #7\"\n",
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(
+            "implement: background work was killed as the session ended; resuming it once"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    let prompt = scenario.claude_calls()[1]["prompt"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        prompt.contains("Spec review of issue-7"),
+        "prompt: {prompt}"
+    );
+}
+
+#[test]
+fn a_run_that_fails_after_a_review_stopped_at_the_ceiling_names_the_review_in_its_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(REVIEW_STOPPED_AT_THE_CEILING);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        2,
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(
+            "implement session ended with a background task still running \
+             (Spec review of issue-7), which was killed, and a later step failed: \
+             the implement session made no commits and opened no pull request"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}

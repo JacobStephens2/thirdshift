@@ -5642,3 +5642,117 @@ fn a_second_security_run_is_skipped_while_one_dispatches_a_fix_it_reserved_and_n
     assert_eq!(fixing.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert_eq!(reservations(&scenario), "");
 }
+
+#[test]
+fn reformatted_audit_fingerprints_reuse_records_and_skip_repeat_reproduction() {
+    for private in [false, true] {
+        let scenario = Scenario::new();
+        let mut github = scenario.gh_state();
+        github["private"] = json!(private);
+        scenario.write_gh_state(&github);
+
+        scenario.agent_does_in_session(
+            1,
+            &audit_script(
+                &json!([finding("a.php.fn.sqli"), finding("b.php.check.xss")]).to_string(),
+            ),
+        );
+        scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+        scenario.agent_does_in_session(3, &reproduction_script("not reproduced"));
+        let first = scenario.run(&["secure"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+
+        let after_first = scenario.gh_state();
+        let stored_before = if private {
+            assert!(after_first["advisories"].is_null());
+            assert_eq!(after_first["issues"].as_object().unwrap().len(), 3);
+            vec![
+                after_first["bodies"]["8"].as_str().unwrap().to_string(),
+                after_first["bodies"]["9"].as_str().unwrap().to_string(),
+            ]
+        } else {
+            assert_eq!(after_first["advisories"].as_array().unwrap().len(), 2);
+            vec![
+                after_first["advisories"][0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+                after_first["advisories"][1]["description"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            ]
+        };
+        assert!(
+            stored_before[0].contains("Fingerprint: `a.php.fn.sqli`"),
+            "{}",
+            stored_before[0]
+        );
+        assert!(
+            stored_before[1].contains("Fingerprint: `b.php.check.xss`"),
+            "{}",
+            stored_before[1]
+        );
+
+        scenario.origin_has_commit(
+            "main",
+            "changed.txt",
+            "second commit",
+            "Advance Base branch for repeat audit",
+        );
+        scenario.agent_does_in_session(
+            4,
+            &audit_script(
+                &json!([
+                    finding("a.php.other_fn.sqli"),
+                    finding("sqli:a.php:fn"),
+                    finding("xss:b.php:check")
+                ])
+                .to_string(),
+            ),
+        );
+        scenario.agent_does_in_session(5, &reproduction_script("reproduced medium spec"));
+        let second = scenario.run(&["secure"]);
+        assert_eq!(second.code, Some(0), "{}", second.stderr);
+
+        // Only the distinct finding runs a reproduction session.
+        assert_eq!(scenario.claude_calls().len(), 5);
+        let (expected_first, expected_second) = if private {
+            (
+                "keeping the completed Security reproduction of issue #8: reproduced high single",
+                "keeping the completed Security reproduction of issue #9: not reproduced",
+            )
+        } else {
+            (
+                "keeping the Day shift's grade for GHSA-test-test-0001",
+                "keeping the completed Security reproduction of GHSA-test-test-0002: not reproduced",
+            )
+        };
+        assert!(second.stderr.contains(expected_first), "{}", second.stderr);
+        assert!(second.stderr.contains(expected_second), "{}", second.stderr);
+        let after_second = scenario.gh_state();
+        if private {
+            assert!(after_second["advisories"].is_null());
+            assert_eq!(after_second["issues"].as_object().unwrap().len(), 4);
+            assert_eq!(after_second["bodies"]["8"], stored_before[0]);
+            assert_eq!(after_second["bodies"]["9"], stored_before[1]);
+            assert!(
+                after_second["bodies"]["10"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Fingerprint: `a.php.other_fn.sqli`")
+            );
+        } else {
+            let advisories = after_second["advisories"].as_array().unwrap();
+            assert_eq!(advisories.len(), 3, "{advisories:?}");
+            assert_eq!(advisories[0]["description"], stored_before[0]);
+            assert_eq!(advisories[1]["description"], stored_before[1]);
+            assert!(
+                advisories[2]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Fingerprint: `a.php.other_fn.sqli`")
+            );
+        }
+    }
+}

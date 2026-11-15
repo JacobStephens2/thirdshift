@@ -538,6 +538,144 @@ fn unused_malformed_records_and_inexact_markers_do_not_block_recording() {
 }
 
 #[test]
+fn canonical_fingerprints_reuse_records_and_preserve_written_fingerprints() {
+    for private in [false, true] {
+        for (existing_fp, incoming_fp) in [
+            ("a.php.fn.sqli", "sqli:a.php:fn"),
+            ("sqli:a.php:fn", "a.php.fn.sqli"),
+            (
+                "mtourbot/common_functions.php.get_auto_cancellations.sqli",
+                "sqli:mtourbot/common_functions.php:get_auto_cancellations",
+            ),
+            ("a.php.fn.sqli", "SQLI:A-PHP_fn / a\tphp"),
+        ] {
+            let mut records = collection(private, Vec::new());
+            let first = records
+                .record_or_reuse(&draft(existing_fp), |storage, draft| {
+                    storage.decode_created(native(private, draft))
+                })
+                .unwrap();
+            assert!(first.created, "{private} {existing_fp}");
+            assert!(
+                first
+                    .record
+                    .description()
+                    .contains(&format!("Fingerprint: `{existing_fp}`\n")),
+                "{}",
+                first.record.description()
+            );
+
+            let reused = records
+                .record_or_reuse(&draft(incoming_fp), |_, _| {
+                    bail!("canonical match must not create another record")
+                })
+                .unwrap();
+            assert!(!reused.created, "{private} {existing_fp} vs {incoming_fp}");
+            assert_eq!(reused.record.metadata(), first.record.metadata());
+            assert_eq!(reused.record.description(), first.record.description());
+        }
+
+        for (state, severity, untriaged) in [("draft", None, true), ("closed", Some("high"), false)]
+        {
+            let mut value = native(private, &draft("a.php.fn.sqli"));
+            value["state"] = json!(if private && state == "draft" {
+                "OPEN"
+            } else if private {
+                "CLOSED"
+            } else {
+                state
+            });
+            value["severity"] = json!(severity);
+            if private && !untriaged {
+                value["labels"] = json!([{"name": "security-finding"}]);
+            }
+            let mut records = collection(private, vec![value]);
+            let reused = records
+                .record_or_reuse(&draft("sqli:a.php:fn"), |_, _| {
+                    bail!("existing record in state {state} must be reused")
+                })
+                .unwrap();
+            assert!(!reused.created);
+            assert_eq!(reused.record.untriaged(), untriaged);
+            assert_eq!(reused.record.metadata().severity.as_deref(), severity);
+        }
+    }
+}
+
+#[test]
+fn distinct_canonical_fingerprints_and_malformed_markers_create_separate_records() {
+    let distinct_native = |private: bool, draft: &DraftAdvisory, issue: u64, ghsa: &str| {
+        let mut value = native(private, draft);
+        if private {
+            value["number"] = json!(issue);
+            value["html_url"] = json!(format!("https://github.com/acme/widgets/issues/{issue}"));
+        } else {
+            value["ghsa_id"] = json!(ghsa);
+            value["html_url"] = json!(format!(
+                "https://github.com/acme/widgets/security/advisories/{ghsa}"
+            ));
+        }
+        value
+    };
+    for private in [false, true] {
+        let mut records = collection(private, Vec::new());
+        let first = records
+            .record_or_reuse(&draft("a.php.fn.sqli"), |storage, draft| {
+                storage.decode_created(native(private, draft))
+            })
+            .unwrap();
+        assert!(first.created);
+        let second = records
+            .record_or_reuse(&draft("a.php.other_fn.sqli"), |storage, draft| {
+                storage.decode_created(distinct_native(private, draft, 43, "GHSA-second"))
+            })
+            .unwrap();
+        assert!(second.created);
+        assert_ne!(first.record.metadata().url, second.record.metadata().url);
+        assert!(
+            second
+                .record
+                .description()
+                .contains("Fingerprint: `a.php.other_fn.sqli`\n")
+        );
+
+        let field = if private { "body" } else { "description" };
+        let mut matched_sep = native(private, &draft(":::"));
+        matched_sep[field] = json!("Fingerprint: `:::`");
+        let mut sep_records = collection(private, vec![matched_sep]);
+        let distinct_sep = sep_records
+            .record_or_reuse(&draft("..."), |storage, draft| {
+                storage.decode_created(distinct_native(private, draft, 44, "GHSA-dots"))
+            })
+            .unwrap();
+        assert!(
+            distinct_sep.created,
+            "distinct separator-only strings must not collapse"
+        );
+
+        let exact_sep = sep_records
+            .record_or_reuse(&draft(":::"), |_, _| {
+                bail!("exact separator-only fingerprint should still match")
+            })
+            .unwrap();
+        assert!(!exact_sep.created);
+
+        let mut blocked = collection(
+            private,
+            vec![json!({
+                field: "Fingerprint: `a.php.fn.sqli.extra`\ninline Fingerprint: `sqli:a.php:fn`\nFingerprint: `sqli:a.php:fn` trailing"
+            })],
+        );
+        let candidate = blocked
+            .record_or_reuse(&draft("sqli:a.php:fn"), |storage, draft| {
+                storage.decode_created(native(private, draft))
+            })
+            .unwrap();
+        assert!(candidate.created);
+    }
+}
+
+#[test]
 fn malformed_selected_records_fail_without_attempting_creation() {
     for private in [false, true] {
         for field in if private {

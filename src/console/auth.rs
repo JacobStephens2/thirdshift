@@ -572,6 +572,21 @@ pub(super) async fn require_look_view(
     }
 }
 
+pub(super) async fn require_start_scope(
+    Extension(viewer): Extension<Viewer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if [Scope::Run, Scope::Admin]
+        .iter()
+        .any(|scope| viewer.scopes.contains(scope))
+    {
+        next.run(request).await
+    } else {
+        super::api::error(StatusCode::FORBIDDEN, "Missing scope: run or admin")
+    }
+}
+
 pub(super) async fn require_scope(
     State(scope): State<Scope>,
     viewer: Option<Extension<Viewer>>,

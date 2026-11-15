@@ -31,7 +31,6 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `console`: Console serving bootstraps the API listener itself; it is not a client operation.
   - `--trial`: The hidden Trial protocol consumes a local request and writes local Trial artifacts.
   - `--oom-exec`: The hidden OOM wrapper replaces its process inside an existing Trial scope.
-  - `--release-summary`: The hidden release-summary protocol belongs to the local release script's stdin exchange. (Retired by #2054 Q2 once `thirdshift release` replaces `scripts/release.sh`.)
   - `release --review`: Interactive release summary review opens an editor on a local terminal (#2054 Q13, Q15).
 
 ## Considered Options

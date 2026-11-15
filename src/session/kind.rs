@@ -27,6 +27,9 @@ pub enum Kind {
     Triage,
     /// One correction of an invalid Triage recommendation, retaining its investigation.
     TriageCorrection,
+    /// The Release run's one summary Session, `release-summary`. Without a
+    /// version or bump flag the same Session also chooses `minor` or `patch`.
+    ReleaseSummary,
     /// `security-audit`.
     SecurityAudit,
     /// The Security reproduction of the numbered candidate,
@@ -54,6 +57,7 @@ impl Kind {
             Self::ArchitectureReview => "architecture-review".to_string(),
             Self::Triage => "triage".to_string(),
             Self::TriageCorrection => "triage-correction".to_string(),
+            Self::ReleaseSummary => "release-summary".to_string(),
             Self::SecurityAudit => "security-audit".to_string(),
             Self::SecurityReproduction(n) => format!("security-reproduction-{n}"),
             Self::SecurityFixPublishing => "security-fix-publishing".to_string(),
@@ -64,7 +68,8 @@ impl Kind {
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 11] = [
+        const UNNUMBERED: [Kind; 12] = [
+            Kind::ReleaseSummary,
             Kind::Triage,
             Kind::TriageCorrection,
             Kind::Implementation,
@@ -192,6 +197,7 @@ impl Logged {
             (Kind::SecurityReview | Kind::SecurityReviewFallback, false) => Stage::SecurityReview,
             (Kind::ArchitectureReview, _) => Stage::ArchitectureReview,
             (Kind::Triage | Kind::TriageCorrection, _) => Stage::Triage,
+            (Kind::ReleaseSummary, _) => Stage::ReleaseSummary,
             (Kind::SecurityAudit, _) => Stage::SecurityAudit,
             (Kind::SecurityReproduction(_), _) => Stage::SecurityReproduction,
             (Kind::SecurityFixPublishing, _) => Stage::SecurityFixPublishing,

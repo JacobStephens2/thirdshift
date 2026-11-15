@@ -26,6 +26,7 @@ pub(crate) use quota::{Quota, QuotaWait};
 
 mod advisories;
 mod base_ci;
+pub(crate) mod release;
 pub(crate) use base_ci::{BaseCiAction, TipCi};
 pub(crate) mod review;
 mod session_issue;

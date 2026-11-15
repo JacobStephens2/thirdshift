@@ -1,7 +1,7 @@
 use super::*;
 
 const STAMP: &str = "20261019T110000-0400";
-const COMMAND_CASES: [(&str, &str, &str); 2] = [
+const COMMAND_CASES: [(&str, &str, &str); 3] = [
     (
         "triage",
         "Triage run",
@@ -11,6 +11,11 @@ const COMMAND_CASES: [(&str, &str, &str); 2] = [
         "review",
         "Review run",
         "process-step-1-20261019T110000-0400~owner-code-review",
+    ),
+    (
+        "release",
+        "Release run",
+        "release-20261019T110000-0400~owner-release-summary",
     ),
 ];
 
@@ -63,6 +68,91 @@ fn triage_discovers_sessions_beyond_stage_references() {
 }
 
 #[test]
+fn a_failed_release_leaves_needs_you_when_its_bump_pull_request_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "https://github.com/acme/widgets/pull/23";
+    let mut release = ended(record(0), "failed");
+    release["kind"] = "Release run".into();
+    release["name"] = format!("release-{STAMP}").into();
+    release["issue"] = Value::Null;
+    release["pull_request"] = url.into();
+    write(dir.path(), "release.command.json", &release);
+    let kept = kept_answer(
+        dir.path(),
+        json!({"version": 2, "subjects": {url: {
+            "state": "Closed", "merged_at": null,
+            "closed_at": "2026-10-19T11:45:00-04:00"
+        }}, "answered_at": {url: "2026-10-19T11:45:00-04:00"}}),
+    );
+    let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+    let rows = snapshot.evaluate_inbox(7, &kept).into_rows(true);
+    let row = serde_json::to_value(&rows[0]).unwrap();
+    assert_eq!(row["group"], "done");
+    assert_eq!(row["left_reason"], "pull request closed");
+}
+
+#[test]
+fn release_failures_wait_until_a_later_start_or_newer_success_without_a_bump_pull_request() {
+    for (start, outcome, group) in [
+        ("2026-10-19T11:45:00-04:00", None, "done"),
+        ("2026-10-19T11:45:00-04:00", Some("merged"), "done"),
+        ("2026-10-19T11:15:00-04:00", None, "needs you"),
+        ("2026-10-19T11:15:00-04:00", Some("failed"), "needs you"),
+        ("2026-10-19T11:15:00-04:00", Some("merged"), "done"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut release = record(0);
+        release["kind"] = "Release run".into();
+        release["name"] = format!("release-{STAMP}").into();
+        release["issue"] = Value::Null;
+        let path = write(
+            dir.path(),
+            "release-old.command.json",
+            &ended(release.clone(), "failed"),
+        );
+        release["name"] = "release-20261019T114500-0400".into();
+        release["started_at"] = start.into();
+        if let Some(outcome) = outcome {
+            release["outcome"] = outcome.into();
+            release["ended_at"] = "2026-10-19T11:50:00-04:00".into();
+        }
+        write(dir.path(), "release-new.command.json", &release);
+
+        let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+        let selected = snapshot.resolve(path.to_str().unwrap()).unwrap();
+        let selector = selected.observation.selector().unwrap();
+        let row = snapshot
+            .evaluate_inbox(7, &crate::logs::github::Kept::default())
+            .into_target(&selector)
+            .unwrap();
+        let row = serde_json::to_value(&row).unwrap();
+        assert_eq!(row["group"], group, "start {start}, outcome {outcome:?}");
+        if group == "done" {
+            assert_eq!(row["left_reason"], "taken up by a later Command");
+        } else {
+            assert!(row["left_reason"].is_null());
+        }
+    }
+}
+
+#[test]
+fn an_interrupted_release_still_needs_the_day_shift_without_a_stop_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut release = ended(record(0), "interrupted");
+    release["kind"] = "Release run".into();
+    release["issue"] = Value::Null;
+    write(dir.path(), "release.command.json", &release);
+
+    let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+    let rows = snapshot
+        .evaluate_inbox(7, &crate::logs::github::Kept::default())
+        .into_rows(true);
+    let row = serde_json::to_value(&rows[0]).unwrap();
+    assert_eq!(row["group"], "needs you");
+    assert_eq!(row["needs_you_kind"], "failed");
+}
+
+#[test]
 fn review_discovers_all_steps_and_resumes_for_its_exact_owner() {
     let dir = tempfile::tempdir().unwrap();
     let (path, sessions) = command(
@@ -88,7 +178,7 @@ fn review_discovers_all_steps_and_resumes_for_its_exact_owner() {
 }
 
 #[test]
-fn triage_and_review_names_select_their_commands() {
+fn session_command_names_select_their_commands() {
     for (prefix, kind, session) in COMMAND_CASES {
         let dir = tempfile::tempdir().unwrap();
         let (path, sessions) = command(dir.path(), prefix, kind, &[session]);
@@ -108,7 +198,7 @@ fn triage_and_review_names_select_their_commands() {
 }
 
 #[test]
-fn triage_and_review_render_in_inbox_history_and_catalog() {
+fn session_commands_render_in_inbox_history_and_catalog() {
     use crate::logs::status::{ArchivePage, Read};
 
     let dir = tempfile::tempdir().unwrap();
@@ -131,8 +221,8 @@ fn triage_and_review_render_in_inbox_history_and_catalog() {
     let history = read
         .archive(&config, ArchivePage::History, "", "", None)
         .unwrap();
-    assert_eq!(rows.len(), 2);
-    assert_eq!(history.rows.len(), 2);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(history.rows.len(), 3);
     for (_, sessions) in &expected {
         assert!(rows.iter().any(|row| row.sessions == *sessions));
         assert!(history.rows.iter().any(|row| row.sessions == *sessions));

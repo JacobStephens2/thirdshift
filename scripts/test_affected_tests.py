@@ -248,7 +248,7 @@ class AffectedTests(unittest.TestCase):
         self.assertIn("No changed files", clean.stdout)
 
     def test_release_only_runs_release_checks(self):
-        self.change("scripts/release.sh")
+        self.change("scripts/release-notes.sh")
         result, calls = self.run_selector()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
@@ -314,7 +314,7 @@ class AffectedTests(unittest.TestCase):
                 self.assertIn("cargo nextest run", result.stdout)
 
     def test_mixed_site_release_and_rust_changes_keep_all_checks(self):
-        self.change("site/index.html", "scripts/release.sh", "src/main.rs")
+        self.change("site/index.html", "scripts/release-notes.sh", "src/main.rs")
         result, calls = self.run_selector()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
@@ -343,7 +343,7 @@ class AffectedTests(unittest.TestCase):
                 self.assertIn(f"No checks for docs-only {path!r}.", result.stdout)
 
     def test_docs_do_not_broaden_other_areas(self):
-        for path in ["src/main.rs", "site/index.html", "scripts/release.sh",
+        for path in ["src/main.rs", "site/index.html", "scripts/release-notes.sh",
                      "console/tests/inbox.test.cjs", "prototype/go/main.go",
                      "prototypes/typescript/src/ticket.ts"]:
             with self.subTest(path=path):
@@ -427,7 +427,7 @@ class AffectedTests(unittest.TestCase):
         self.assertIn("nextest unavailable; falling back to cargo test", result.stdout)
 
     def test_mixed_narrow_areas_also_get_the_full_suite(self):
-        self.change("site/index.html", "scripts/release.sh")
+        self.change("site/index.html", "scripts/release-notes.sh")
         result, calls = self.run_selector()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
@@ -440,8 +440,8 @@ class AffectedTests(unittest.TestCase):
         self.change("site/index.html")
         self.git("branch", "-f", "base", "HEAD")
         (self.root / "site/index.html").write_text("unstaged\n")
-        self.change("scripts/release.sh", commit=False)
-        self.git("add", "scripts/release.sh")
+        self.change("scripts/release-notes.sh", commit=False)
+        self.git("add", "scripts/release-notes.sh")
         self.change("unknown.txt", commit=False)
         result, calls = self.run_selector(cwd=self.root / "site")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -678,7 +678,7 @@ class AffectedTests(unittest.TestCase):
         self.assertIn("abort_test_must_be_named", result.stdout)
 
     def test_failed_release_generator_tests_are_named(self):
-        self.change("scripts/release.sh")
+        self.change("scripts/release-notes.sh")
         for status in ("FAIL", "ERROR"):
             with self.subTest(status=status):
                 output = (

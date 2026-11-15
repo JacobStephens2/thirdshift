@@ -49,7 +49,7 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 2. Picks the **Issue branch** (`issue-<n>`, or `issue-<n>-branch-<k>` once earlier ones are finished) and the **Base branch**, normally the branch you have checked out. Then it makes the [Claim](#the-claim): it labels the issue `in-progress`, in place of `ready-for-agent` if it has that.
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless agent session in that worktree on the **Harness**, Claude Code unless you [choose another](#harness-model-and-effort), with the **Factory skills** in [`skills/`](../skills) linked into its `.claude/skills/`, or `.agents/skills/` on the other Harnesses, as `thirdshift-<skill>` and kept out of git by a `.git/info/exclude` entry ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)), started with one of the **Session prompts** in [`prompts/`](../prompts). The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue. With a [Security review](#security-review) asked for, a second session then reviews the change for vulnerabilities.
-5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
+5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft. If the session ended without opening the pull request, as when its review outlived its turn, and the Issue branch has commits ahead of the Base branch, thirdshift opens the pull request itself at **Pull request readiness**, saying `the implement session pushed <Issue branch> without opening a pull request; opening it in the session's place`: into the Base branch (the Spec branch for a Spec's Ticket), titled after the issue, with `Closes #<n>` and the Built-with line in its body. The Ticket run then goes on to readiness, CI and any Self-merge as usual. With no commits ahead either, the Ticket run fails with `the implement session made no commits and opened no pull request`.
 6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Ticket run. A failed check that also failed, under the same name, on the Base branch commit the head last merged in is an **Inherited failure**, not the branch's to fix: the CI-fix Repair is given only the branch's own failures, with the Inherited failures listed as not to fix. If every failed check is an Inherited failure, no Repair starts: the Ticket run merges the Base branch again if it has moved since, and otherwise ends as a [Failed ticket run](#failed-ticket-runs) that says to fix the Base branch first, unless it was given `base-fix` or the [User config](#user-config) sets `base.fix`, when it starts a [Base fix](#base-fix) first. A check that is pending, passed or missing on that Base branch commit is the branch's own, and thirdshift never triggers or waits for the Base branch's CI. If a CI-fix Repair leaves the head unchanged, with no commit of its own and no Base branch move to merge, thirdshift does a **Check re-run**, once for that head: it asks GitHub to re-run the branch's own failed checks (`gh run rerun <run-id> --failed`, once per workflow run), says so on stderr as `re-running the failed checks on <short sha>: <check>[, <check>…]`, and watches CI on that head again, from the new attempt on. The re-run counts as started once one of a workflow run's failed jobs has a new attempt; a job that `needs` another failed job may get its new attempt only after that job finishes, and counts as pending until then. Once nothing else is running, such a job has one more grace period to get its new attempt: after that, an old failed attempt still listed counts as failed, and a job missing from the listing cannot establish green CI. A check that failed for a reason that does not repeat, such as a flaky test or a runner fault, then passes, and the Ticket run goes on as for any green head. If CI is red again, the Ticket run ends as a Failed ticket run, with no second Repair or re-run for that head. It ends the same way, with nothing re-run, if one of those checks can't be re-run (a commit status, or a check run that is not a GitHub Actions job), since the head could not go green. When GitHub refuses a re-run, stderr shows the refusal and thirdshift reads all checks on that head again: a Repair may already have re-run them. Green continues the Ticket run, pending checks are watched, and the branch's own checks still red fail as before, without another Repair or request for that head. Checks that cannot be read or disappear after known failures cannot establish green CI. Any earlier successful workflow request still waits for its new attempt before the whole head is assessed. What the Repair concluded is never read, Inherited failures are never re-run on their own account, and a Check re-run is no Repair, so it counts against no budget ([ADR-0010](adr/0010-one-check-re-run-before-a-declined-ci-fix.md)). Before any Repair, a head whose own failed checks are all **Abandoned jobs**, GitHub Actions jobs GitHub ended as failed with no failed step and a step not completed, as when a runner is lost, has them re-run once, saying `<check> lost its runner on <short sha>; re-running it`, and CI watched again the same way: green goes on, and red again, or a refused or unseen re-run, gets the CI-fix Repair as before. This too is no Repair and counts against no budget ([ADR-0020](adr/0020-an-abandoned-job-is-re-run-before-any-repair.md)). If the Base branch moves while CI runs, it merges it again and goes round, at most 5 times per Ticket run. In a Ticket run that Self-merges, each round also takes in **Foreign commits** first: see [Foreign commits in a Ticket run that Self-merges](#foreign-commits-in-a-ticket-run-that-self-merges).
 7. In a **Ticket run** that Self-merges (`thirdshift merge <Issue URL>`), does the **Self-merge**: once the pull request is open, ready for review, mergeable and green, thirdshift merges it into the Base branch with a merge commit, on exactly the head commit whose CI it watched (`gh pr merge --merge --match-head-commit <sha>`). Just before each attempt, it reads the PR's `reviewDecision`: `REVIEW_REQUIRED` or `CHANGES_REQUESTED` ends the Ticket run as **review required**, a policy refusal, without attempting the merge or taking another Repair round. An empty or `APPROVED` decision, or a failed read, keeps the existing merge behavior. It never uses GitHub's auto-merge ([ADR-0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)). A merge that fails goes back round step 6, within the same budgets, and is tried again on the new green head. If that round finds nothing to fix, the refusal is a **policy refusal**, such as merge commits being disallowed or a review being required. After the merge, thirdshift deletes the Issue branch on `origin`, and closes the issue if it is still open, with the comment `Closed by #<pr>, merged into <base> by a thirdshift Ticket run with Self-merge.` GitHub closes it on its own only for a merge into the repository's default branch, and then thirdshift leaves it alone. Once the issue is closed, either way, thirdshift takes `in-progress` off it, [removing the Claim](#when-the-claim-ends).
 8. Cleans up: removes the worktree, the local Issue branch and the temporary directory the Factory skills were written out to, whether the Ticket run succeeded or not. The one exception is a **Failed ticket run** whose work could not be pushed: see below.
@@ -583,8 +583,8 @@ Remote `config` and `update` return the owner's JSON. Unknown and link-only
 machines are refused. Omitting `--machine` selects local work. A configured
 Fleet name always selects its owner, even when the name matches the local
 hostname; local choices then say `(local)`. An unpaired local hostname also
-selects local work. `/api/v1/start-options` requires `run` and returns known
-repositories and startable Passes; `whoami` accepts any authenticated scope so
+selects local work. `/api/v1/start-options` requires `run` or `admin` and
+returns known repositories and the Passes those scopes may start; `whoami` accepts any authenticated scope so
 `run`-only and `admin`-only tokens can pair without general read access.
 
 Open a remote row to see its Command details in the same Console, including
@@ -839,7 +839,7 @@ address's scopes, including the Security finding limits above.
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | Stop, Dismissal, judgments, clearing this machine's Plan usage cooldowns, selecting a Theme and hidden sections |
 | `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
-| `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
+| `admin` | Release starts; User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
 | `report` | Only `POST /api/v1/metrics/report`: a JSON body with `version`, `machine` (the token's holder), `view` and `summary`, sent by `metrics --push`; and `POST /api/v1/plan-usage/report`: a JSON body with `version`, `machine` and `view` (its `plan-usage --local --json`), sent by `plan-usage --push` |
 
 The actions in the following table take `application/x-www-form-urlencoded`
@@ -991,6 +991,11 @@ which also starts a Spec run when the issue has Tickets. Every request names
 | `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
 | `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
 | `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
+| `release` | Requires `admin` scope; optional `version` (`X.Y.Z`) or `bump` (`major`, `minor`, `patch`), mutually exclusive; omit both for automatic minor/patch selection; optional `with_experiment` boolean; optional `email`, `harness`, `model`, `effort`; repository must be `JacobStephens2/thirdshift` |
+
+`POST /api/v1/start` is an alias of this path. Release starts require `admin`
+scope; the other Commands require `run`. The Console shows a separate Release
+run form to administrators, including administrators whose scopes omit `run`.
 
 Booleans use `true` or `false`. All options and combinations are checked by
 the CLI argument parser; for example, Architect `plan_only` refuses options
@@ -1139,7 +1144,7 @@ Sessions run headless with the full permissions of that user account, including 
 
 Every factory session on Claude Code, Repairs, reviews and Resumes included, also passes `--settings '{"attribution":{"commit":"","pr":""}}'`. These per-session settings override the user's and repository's attribution settings, hiding Claude Code's commit trailer and pull request attribution. The pull request keeps thirdshift's `Built with` line as its only attribution; nothing replaces the commit trailer. Claude Code run by hand keeps its own settings. The release-summary invocation, which runs with tools disabled, keeps its existing arguments.
 
-`claude -p` exits as soon as the agent ends its turn, killing any background task it started. So every prompt tells the agent to run long commands, such as tests, in the foreground, and to stop any background task it no longer needs, with the `TaskStop` tool, before it ends its turn. If a session still ends with background work running, thirdshift takes it as work the session was waiting on and gives it a **Resume**: it continues that same session once (`claude -p --resume`), asking the agent to re-run the work in the foreground and finish. If the Resume ends the same way, the work may have been abandoned, such as a hung test run the agent could not stop: thirdshift says which task was killed and carries on, so the pull request check, CI and the rest decide how the Ticket run ends. If the Ticket run then fails, its cause names the killed task ahead of what failed.
+`claude -p` exits as soon as the agent ends its turn, killing any background task it started. So every prompt tells the agent to run long commands, such as tests, in the foreground, and to stop any background task it no longer needs, with the `TaskStop` tool, before it ends its turn. If a session still ends with background work running, thirdshift takes it as work the session was waiting on and gives it a **Resume**: it continues that same session once (`claude -p --resume`), asking the agent to re-run the work in the foreground and finish. If the Resume ends the same way, the work may have been abandoned, such as a hung test run the agent could not stop: thirdshift says which task was killed and carries on, so the pull request check, CI and the rest decide how the Ticket run ends. If the Ticket run then fails, its cause names the killed task ahead of what failed. Claude Code waits only so long, 10 minutes by default, for background work after the session's last turn, then stops it, a sub-agent such as a review included; thirdshift reads that stop from the session's stream as killed work too, and the Factory code-review skill tells the session to wait for its reviewers before ending its turn.
 
 ### What sessions leave behind
 
@@ -1406,8 +1411,8 @@ stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y` o
 exits without building an Arm or starting a Trial, and a new Experiment
 leaves no record. In release mode the Baseline probe comes first and may build
 the last release's Arm. `--yes` skips the question,
-and so does a stdin that is not a terminal. `scripts/release.sh
---with-experiment` passes `--yes`, so a release asks only its own question.
+and so does a stdin that is not a terminal. `thirdshift release
+--with-experiment` runs the Experiment with `--yes`, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.
 
@@ -3469,7 +3474,7 @@ checked-out branch, or `base <branch>` / `--base <branch>`, in ascending number
 order. Only Trusted accounts are eligible; `--author <login>` / `author <login>`
 restricts selection to that account, which must itself be trusted. It skips
 `release-*` pull requests targeting `main`, leaving those version bumps to
-`scripts/release.sh`; an explicit `thirdshift fix <pr-url>` still repairs them.
+`thirdshift release`; an explicit `thirdshift fix <pr-url>` still repairs them.
 Neither `base` nor `author` can be combined with a targeted PR.
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
@@ -3609,7 +3614,7 @@ open pull request by that author, one per invocation. The Pass form requires
 authors who are not Trusted accounts, pull requests labelled `in-progress`,
 and heads already named as `reviewed_head` or `pushed_head` in a Review run's
 marker posted by the GitHub account thirdshift acts as. It skips `release-*`
-pull requests targeting `main`, which `scripts/release.sh` delivers; explicit
+pull requests targeting `main`, which `thirdshift release` delivers; explicit
 `review <PR URL>` still reviews them. It also skips a pull
 request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
@@ -3987,7 +3992,7 @@ The Security audit runs in a throwaway worktree, `<repo>-security` next to your 
 
 Each audit keeps a new output directory under `<logs.dir>/<owner>/<repo>/audits/`, outside the worktree. The audit artifacts and private advisory descriptions contain evidence; keep the logs directory private. thirdshift runs both embedded validators before recording anything. A missing final line, an incomplete session or an invalid report fails the run and names its Session trace. Command logs and Session traces are in `commands/secure/`; Session traces are named `secure-<stamp>~<token>-security-audit.logs.jsonl`; the Activity log records the start and ending as for other Passes.
 
-A finding's title becomes the advisory summary. Its description preserves its write-up, trace, evidence and validation plan, with the fingerprint and audited commit. thirdshift claims no severity, CWE or affected version range. It uses the package in the repository's manifest, or the `other` ecosystem when none is identified. Matching fingerprints in any advisory state are kept rather than recorded again. Rejected candidates stay in the local report and produce no advisory. Draft advisories require GitHub repository security manager or administrator access. On a private repository whose advisory endpoint is unavailable, the private record is an issue labelled `security-finding` and `needs-triage`. It is never replaced by a public finding issue.
+A finding's title becomes the advisory summary. Its description preserves its write-up, trace, evidence and validation plan, with the fingerprint and audited commit. thirdshift claims no severity, CWE or affected version range. It uses the package in the repository's manifest, or the `other` ecosystem when none is identified. Existing records in any advisory or private-issue state within the repository are kept rather than recorded again when their canonical fingerprints match: thirdshift case-folds each fingerprint, splits it into tokens on `.`, `:`, `/`, `-`, `_` and whitespace, and compares the resulting token sets regardless of separator or token order (so `a.php.fn.sqli` matches `sqli:a.php:fn`, while `a.php.fn.sqli` and `a.php.other_fn.sqli` stay distinct). Newly created records store the fingerprint verbatim as written by the session. Rejected candidates stay in the local report and produce no advisory. Draft advisories require GitHub repository security manager or administrator access. On a private repository whose advisory endpoint is unavailable, the private record is an issue labelled `security-finding` and `needs-triage`. It is never replaced by a public finding issue.
 
 ### Security review
 
@@ -3999,7 +4004,7 @@ Before any session, a command checks its review's Harness with the same PATH, Mo
 
 If a non-default review Harness passes preflight but returns a Harness error before any turns or tokens, thirdshift warns in the same way and retries the review once on the default Harness. A failure on the default, a model refusal or a failure after work starts is not retried. Each attempt keeps its own Session trace and `.models.json`; the retry uses `security-review-fallback`, also selected by `logs --session security-review`. Those records, the Command log and the Run notification name the Harness each attempt actually ran on; the `Built with` line still names the Command's. A Continuation reads `security.harness` again and applies these checks again. A review on `security.harness` that reaches a Plan-usage limit, even after work began, moves on too: to the next of `security.routes`, else of `harness.routes`, else to `harness.default`, with its uncommitted changes discarded as for any routed Step. With routes configured, one that cannot start walks the same routes instead of this one retry; see [Routing by Plan usage](#routing-by-plan-usage).
 
-The session reads the relevant attack-class guidance and supporting code without delegated auditors or the full audit workflow. It fixes only findings reproduced by a failing proof-of-concept test, keeps that test and commits the fix. Unaddressed introduced findings appear under Security in the PR's Unaddressed findings. A Ticket run or Spec run asked to Self-merge leaves the PR ready for review and fails with the findings named if any remain, or if the review was refused or incomplete. A Ticket run or Spec run not asked to merge records the outcome and continues. An old finding, whose proof-of-concept also fails at the pinned merge base, is reported in a private file under the repository's logs (`security-reviews/`). thirdshift records it as a draft advisory, or a `security-finding`/`needs-triage` issue on a private repository, reusing existing fingerprints and preserving the Day shift's grades. New records include scored reproduction and fix-size metadata so a later Security run can take the fix when allowed. Its details stay out of the PR and it does not hold Self-merge; fixing belongs to a separate Security run. The separate Security audit retains its full audit workflow.
+The session reads the relevant attack-class guidance and supporting code without delegated auditors or the full audit workflow. It fixes only findings reproduced by a failing proof-of-concept test, keeps that test and commits the fix. Unaddressed introduced findings appear under Security in the PR's Unaddressed findings. A Ticket run or Spec run asked to Self-merge leaves the PR ready for review and fails with the findings named if any remain, or if the review was refused or incomplete. A Ticket run or Spec run not asked to merge records the outcome and continues. An old finding, whose proof-of-concept also fails at the pinned merge base, is reported in a private file under the repository's logs (`security-reviews/`). thirdshift records it as a draft advisory, or a `security-finding`/`needs-triage` issue on a private repository, reusing existing records in the repository by canonical fingerprint (matching case-folded token sets across `.`, `:`, `/`, `-`, `_` and whitespace regardless of order, while storing new records' fingerprints verbatim) and preserving the Day shift's grades. New records include scored reproduction and fix-size metadata so a later Security run can take the fix when allowed. Its details stay out of the PR and it does not hold Self-merge; fixing belongs to a separate Security run. The separate Security audit retains its full audit workflow.
 
 ### Security runs on a schedule, with fixing allowed
 
@@ -4488,102 +4493,138 @@ cargo test
 
 ## Releasing
 
-Run `scripts/release.sh` on Linux. It refuses other hosts before fetching,
-writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
-such as Lima; on Windows, use WSL2.
+### Release runs
 
-The release script skips Experiments by default, printing a note. Opt in with
-`scripts/release.sh --with-experiment 0.4.0`, adding `--with-experiment` again
-on each resume that should run an Experiment.
+Schedule a Release Pass with cron or a systemd timer, for example every hour:
 
-With `--with-experiment`, before pushing anything, the script runs
-`thirdshift experiment --release <commit> --yes` using this checkout's runner and private Eval suites,
-so the Experiment prints its cost without asking about it.
-It evaluates the content commit beneath the version-only bump, so reruns use
-the same Experiment even before a bump branch exists. It pins that commit in a
-local Git ref before starting, so a merge to `main` during interruption does
-not change the Candidate on restart. If a release tag now on `main` is not an
-ancestor of that pin, the script selects a new base. It also rechecks that the
-requested version is higher than `main` before reusing a pin, refusing if not.
-The pin is removed after the branch push,
-when the pushed bump retains the selection. A pass carries on;
-a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
-intervals and asks `release anyway? [y/N]`, including without `--review`.
-The summary lists every Advisory suite and its own Verdict. All suites advisory
-gives inconclusive and asks the same question.
-Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
-and decisive Scores are listed with their recheck commands and polled until
-you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. An interrupted invocation resumes its saved
-Trials. A pushed bump branch is checked again before opening its PR, and an
-open or merged bump PR before tagging. An already pushed tag waits for publication before merging
-an open PR, skipping the Experiment unless recovering with a newer green base. Python 3 is needed to read the Experiment results.
-
-The release base is the newest commit on `main` whose latest push `CI` run
-succeeded, strictly newer than and descending from the last release tag on
-`origin/main`. A green commit from before that tag merged into `main` cannot
-qualify. The script uses a qualifying commit immediately even
-if the tip's CI is pending or failed. If none qualifies, it waits for a run to
-succeed, still considering older pending commits when `main` moves. The
-Experiment's Candidate is that release base. The tag names exactly that content
-plus the version bump. A repair or external head update can change that content;
-the script validates it and refreshes the requested Experiment and release notes
-before publishing.
-
-From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
-
-```sh
-scripts/release.sh 0.4.0
+```cron
+0 * * * * cd /path/to/thirdshift && thirdshift release
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it warns that the bump PR is not merged, names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. A Merge conflict or completed failing PR checks can start the bounded Fix run described below. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Running CI and publication have no overall timeout.
+For an on-demand Command, run `thirdshift release 0.4.0` to cut or resume that
+version. To let a Pass select eligible shipped content with a pinned bump, use
+`thirdshift release --minor` (or `--major` / `--patch`).
 
-While waiting for PR CI, the script observes that PR's current head and mergeability.
-A Merge conflict, including one with no workflows, or completed failing CI starts
-at most one targeted `thirdshift fix <PR URL> --no-merge --no-base-fix` per release
-invocation, using this checkout's runner and User config. Those flags override
-Self-merge and Base fix defaults: the release script still tags, waits for
-publication, then merges. Healthy, queued and running CI start no Fix run.
-Missing workflows without a conflict have a five-minute startup grace period
-(`RELEASE_WORKFLOW_STARTUP_SECONDS=300`, adjustable for testing), then stop with
-the PR, head and recovery command. After CI passes, GitHub gets the same grace
-to report the PR mergeable. Neither is a deadline on CI runtime.
+From a clone whose `origin` is `JacobStephens2/thirdshift`, run
+`thirdshift release [<version> | --major | --minor | --patch]` on Linux. An explicit version must be plain `X.Y.Z`,
+without leading zeros, and greater than the version on freshly fetched `main`.
+The running binary uses Git objects and temporary detached worktrees, leaving
+the Launch directory's checked-out branch and uncommitted work alone.
 
-After a Fix run or external push, the script fetches and validates the current
-PR identity, open state, readiness, origin, branches, head and exact version-bump
-tree against main. Extra source changes or a wrong version require human review
-before tagging. A changed content base reruns the Experiment when requested and
-regenerates the summary and version diff, honoring `--review`. More than five
-head updates, a failed or interrupted Fix, or another conflict or CI failure
-after the automatic Fix stops with recovery instructions and no new tag pushed.
-A closed, retargeted or draft PR, a changed origin, or a content base older than
-the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
-A failed or interrupted Fix run leaves the PR draft, so the rerun names
-`gh pr ready <url>`: mark it ready after review, then rerun.
-Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
-records the content base its notes describe; a resumed PR from before that marker
-has its summary and version diff regenerated once, honoring `--review`.
+It chooses the newest `main` commit descending from the last release tag whose
+push CI succeeded. It waits with periodic progress lines while candidates have
+pending CI. Explicit-version runs fail when none qualifies after CI completes. One tool-less
+summary Session runs in a fresh-home sandbox with its Session trace attached to
+the Release run. Failed or empty summaries fall back to GitHub generated notes
+outside the summary markers, so the post-release notes job does not repeat them.
 
-After publication, a failed merge leaves the release standing and names the PR
-for the Day shift. If the PR is draft, mark it ready with `gh pr ready <PR URL>`
-before merging it. Rerunning the release command keeps the published tag in place.
+The Command pushes `release-<version>`, opens `Release <version>` into `main`,
+waits for checks and mergeability, pushes `v<version>` at that validated bump
+head, waits for the release workflow and merges the bump PR. It does not run
+`thirdshift update`. After taking both locks it discovers unfinished release
+branches, pull requests and unpublished tags. A Pass automatically resumes an
+exact-bump branch or ready PR, and recovers a completed failed release workflow
+only after verifying that its GitHub Release was never published. A draft PR,
+non-bump changes or an unverifiable publication lookup produces a quiet,
+deduplicated skip naming the blocked release. An explicit version resumes that
+version and refuses another live unfinished version with recovery instructions.
+Published GitHub Releases are final: their tags are never moved.
 
-Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
+A fresh cut refuses a `v<version>` tag that already exists locally or on
+origin. A bump PR closed without merging whose `release-<version>` branch is
+gone from origin leaves nothing to resume, so that version starts over. A failed
+release workflow exits `1` naming the failed jobs and the run URL with
+`gh run rerun --failed <id>` to recover, and leaves the tag for the Day shift.
+When the merge after publication fails because the bump PR turned draft, the
+error names `gh pr ready <url>`; the GitHub Release stays published.
 
-If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.
+While waiting on the bump PR, a Merge conflict or completed failing check can
+start one in-process targeted Fix run with `--no-merge --no-base-fix`. Every
+adopted head must still have the exact tree of its main merge-base plus the Cargo
+version bump. A draft, unresolved failure or conflict stops before tagging.
+When the content base changes, requested Experiments and release notes refresh.
+A resumed bump PR whose body still names its content base keeps its summary,
+including one edited with `--review`.
+Bump PR workflows have five minutes to appear, as does GitHub's mergeability
+report after checks pass and the release workflow after the tag push; queued
+and running checks keep waiting.
 
-An untagged pushed branch or open bump PR is re-cut if its content base does
-not descend from the last release tag now on `origin/main`, excluding its own
-tag. After validating the existing version-only bump, the script rechecks that
-the requested version is higher than `main` and waits for a green base
-descending from that release tag. It prints the new base, runs the Experiment
-when requested, regenerates the summary and version diff, force-pushes the
-branch, and updates an open PR's body or opens its PR before waiting for checks
-on the new head. With `--review`, declining the new summary exits `1` before
-moving the branch or changing the PR body. Tagged and merged releases keep
-their existing resume behavior.
+Experiments are off by default. `--with-experiment` pins the selected content
+commit across interruptions and runs or resumes the release Experiment from the
+running binary, on touched Eval suites against the last published release tag.
+Pending rechecks and leak decisions wait with progress lines. A failed or
+inconclusive Verdict prints the Experiment's per-suite results, Advisory suites
+included, on stderr, then requires `release anyway? [y/N]` on a terminal;
+unattended runs fail. A Release Pass without `--with-experiment` never
+publishes a pinned version: it skips, naming
+`thirdshift release <version> --with-experiment` to resume it. Console Start's **Run release Experiment** checkbox and the admin-only
+start API's `with_experiment` boolean select the same behavior.
 
-On resume after a completed failed release workflow with no GitHub Release yet, the script looks for the newest `main` commit newer than the bump commit's parent whose latest push `CI` run succeeded. When one exists, it re-cuts `release-<version>` from that commit: it runs the release Experiment when `--with-experiment` is passed, regenerates the summary and version diff (honoring `--review`), force-pushes the new bump commit to the branch, updates the open PR body, waits for its new checks, then force-pushes `v<version>` to the new bump commit. An old merged bump gets a new bump PR. The summary and Experiment exclude the unpublished tag and retain the prior release boundary; release Experiments accept `--baseline <ref>` for this recovery. It waits for the new release workflow before merging. A recovery stopped between pushing the branch and moving the tag resumes that checked version bump. If no newer green commit exists, it automatically runs `gh run rerun --failed <run id>`, prints a stamped progress line, and waits for the rerun before merging. A published GitHub Release is never re-cut: its branch and tag are never moved. If the publication check cannot be completed, the script refuses and moves nothing. A tag on an unrelated commit is still refused. You can stop either wait with Ctrl-C and run the script again to continue.
+`--review` requires terminal stdin and is checked before Setup or network work.
+It prints the summary and offers accept, `$EDITOR` edit or cancel. It is a
+documented CLI-only flag because it needs the maintainer's local terminal.
+
+With no version, the command is a Release Pass. It skips quietly with exit `0`
+and no Run notification during a live Experiment or Quota wait, when no route
+it may take has Plan usage left (see [When no route has Plan usage](#when-no-route-has-plan-usage)), while either
+release lock is held, when nothing changed or only non-shipped paths changed,
+or when every eligible main push CI completed non-green. The Activity log keeps
+one skip entry until its reason changes; Cron jobs shows the latest Pass firing.
+Release Passes use their own locks and run outside the Command limit.
+
+Eligible commits must differ from the last release tag in compiled Rust source,
+embedded Factory skills or Processes, Cargo manifest/lockfile, dist or Rust
+toolchain configuration, `README.md`, `LICENSE`, release/publish workflows or
+release scripts. Documentation, website, Day shift agent skills and tests alone
+do not trigger a release. The newest eligible green commit is selected
+immediately, even when a newer candidate is still waiting for CI. A Pass that
+waits for pending main push CI appears in Working and `thirdshift stop` reaches
+it; if every candidate then ends non-green, its record ends `skipped`.
+
+Without a bump flag, the same fresh-home sandboxed, traced Session chooses
+`minor` or `patch` and writes the summary from merged pull requests and the two
+candidate versions. New CLI commands/flags, Console pages/actions, config keys
+and user-visible contract changes call for minor; fixes and internal refinements
+call for patch. Automatic selection never chooses major: invalid output or a
+failed Session falls back to patch, using generated notes when the summary is
+unusable. Those notes go outside the bump PR's empty summary markers, so the
+GitHub Release lists them once. `--major`, `--minor` and `--patch` pin the bump and ask only for a summary.
+
+Use `--harness`, `--model`, `--effort`, `--email`, `--email-unless-merged` or
+`--no-email` as on other Commands. A machine-local release lock and atomic
+origin reservation serialize releases independently of the Command limit;
+the bump PR has `in-progress` while the run is live. Factory Sessions cannot
+start releases. `thirdshift stop` releases the locks and live label.
+
+Live Release runs appear in Working. Published and merged runs appear in Done
+and stay quiet under `email-unless-merged`. Failures, including publication
+without merging, appear in Needs you and email even under that policy. They
+settle when the bump PR merges or closes, a later Release run starts, or a
+Dismissal covers them. Cron jobs recognizes versioned and versionless releases.
+Console Start controls and `POST /api/v1/start` (also `/api/v1/runs`) require
+`admin` scope for releases; `run` scope and narrowed viewers are refused.
+
+### Release safeguards
+
+The repository owner can run `bash scripts/setup-release-tags.sh` to provision
+or verify the `v*` tag rulesets on `JacobStephens2/thirdshift`. Creation and
+updates allow only Repository Admin; a separate rule with no bypass blocks
+deletion. The interactive wizard guides browser changes and verification;
+automated tests never modify live rulesets. See [GitHub's ruleset rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets).
+
+Review Passes (`review --author`) and Fix Passes skip `release-*` pull requests
+targeting `main`, leaving their version-only heads to the Release run. Explicit
+`thirdshift fix <pr-url> --no-merge --no-base-fix` still repairs those PRs.
+Session destructive-command signals flag `thirdshift release` and tag pushes
+using `git push --tags` or `refs/tags/` refspecs.
+
+On tag pushes, the release workflow checks `github.actor` is `JacobStephens2`
+and the tagged Git tree is exactly a commit reachable on `origin/main` with
+only the root Cargo manifest and lockfile bumped to the tag's version.
+This gate precedes planning, artifact builds/hosting and crates.io publication.
+Embedded Process changes exercise the release workflow alongside skills and Rust source.
+
+### Release publication
 
 The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the two Linux musl binaries and the installer, smoke-checks that the `x86_64` binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, checks the `aarch64` binary's static linking and version on Ubuntu, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
 
