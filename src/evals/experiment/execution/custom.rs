@@ -364,16 +364,7 @@ pub(super) fn inspect(
         "Custom runner committed a git_exclude path on HEAD: {}",
         String::from_utf8_lossy(&matches.stdout).replace('\0', ", ")
     );
-    let status = crate::evals::repository::bytes_until(
-        repository,
-        &[
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            "--ignored=traditional",
-        ],
-        deadline,
-    )?;
+    let status = status(runner, repository, deadline)?;
     if status.is_empty() {
         return Ok(None);
     }
@@ -382,4 +373,79 @@ pub(super) fn inspect(
         "uncommitted working-tree files ignored by grading: {}",
         String::from_utf8_lossy(&status).trim()
     )))
+}
+
+/// The runner's uncommitted files, read through a host-owned Git directory
+/// whose index holds the runner's HEAD. The runner can write its repository's
+/// own config, which names commands (`core.fsmonitor`, clean filters) that
+/// `git status` there would run on the host, outside the sandbox.
+fn status(runner: &arms::Runner, repository: &Path, deadline: Instant) -> Result<Vec<u8>> {
+    let read = |args: &[&str]| -> Result<String> {
+        let bytes = crate::evals::repository::bytes_until(repository, args, deadline)?;
+        Ok(String::from_utf8(bytes)?.trim().to_owned())
+    };
+    let head = read(&["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let objects = read(&[
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-path",
+        "objects",
+    ])?;
+    let scratch = tempfile::tempdir()?;
+    crate::git::Git::new(scratch.path()).run(&["init", "-q", "--template="])?;
+    let git_dir = scratch.path().join(".git");
+    fs::create_dir_all(git_dir.join("objects/info"))?;
+    fs::write(git_dir.join("objects/info/alternates"), objects + "\n")?;
+    fs::create_dir_all(git_dir.join("info"))?;
+    fs::write(
+        git_dir.join("info/exclude"),
+        format!(
+            "/{}\n{}\n",
+            crate::prompt::ISSUE_FILE,
+            runner.manifest.git_exclude.join("\n")
+        ),
+    )?;
+    let git = |args: &[&str]| -> Result<Vec<u8>> {
+        let output = process::output_until(
+            std::process::Command::new("git")
+                .current_dir(repository)
+                .arg("--git-dir")
+                .arg(&git_dir)
+                .arg("--work-tree")
+                .arg(repository)
+                .args(["-c", "core.excludesFile=/dev/null", "-c", "gc.auto=0"])
+                .args(args)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_NO_REPLACE_OBJECTS", "1")
+                .env("GIT_NO_LAZY_FETCH", "1")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_OBJECT_DIRECTORY")
+                .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES"),
+            None,
+            Control {
+                name: "Custom runner status",
+                interruption: Interruption::Ordinary,
+                stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+            },
+            deadline,
+            &|| Ok(()),
+        )?;
+        ensure!(
+            output.status.success(),
+            "could not read Custom runner working tree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(output.stdout)
+    };
+    git(&["read-tree", &head])?;
+    git(&[
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignored=traditional",
+        "--ignore-submodules=all",
+    ])
 }

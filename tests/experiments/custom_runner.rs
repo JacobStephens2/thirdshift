@@ -1710,3 +1710,56 @@ fn host_attempt_writes_do_not_follow_links_planted_by_the_custom_runner() {
         assert_eq!(result["outcome"], "delivered", "{result}");
     }
 }
+
+/// The runner may write its repository's Git config. The host's own Git
+/// commands in that repository after the runner ends must not run commands
+/// that config names, outside the sandbox.
+#[test]
+fn host_git_in_the_runner_repository_ignores_runner_configured_commands() {
+    let namespaces = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--unshare-pid", "--unshare-net"])
+        .args(["--proc", "/proc", "--", "/bin/true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !namespaces {
+        println!("SKIPPED (runner Git config): bwrap namespaces unavailable");
+        return;
+    }
+    let fixture = process::fixture();
+    // This runner declares no Harness and makes no network call, so a relay
+    // stand-in that only answers the readiness probe suffices without socat.
+    harness_script(
+        &fixture,
+        "socat",
+        "case \"$*\" in *TCP-LISTEN*) exec sleep 600 ;; esac\nexit 0",
+    );
+    let monitor = fixture.scenario.path("host-ran-fsmonitor");
+    let filter = fixture.scenario.path("host-ran-filter");
+    runner(
+        &fixture,
+        &(DELIVER.to_string()
+            + &format!(
+                "subprocess.run(['git', 'config', 'core.fsmonitor', 'touch {monitor}; false'], check=True)\nsubprocess.run(['git', 'config', 'filter.probe.clean', 'touch {filter}; cat'], check=True)\npathlib.Path('.git/info/attributes').write_text('* filter=probe\\n')\nos.utime('feature.txt', (0, 0))\n",
+                monitor = monitor.display(),
+                filter = filter.display(),
+            )),
+    );
+    let result = fixture.scenario.run(&runner_args());
+    let ran: Vec<_> = [&monitor, &filter]
+        .into_iter()
+        .filter(|marker| marker.exists())
+        .collect();
+    assert!(
+        ran.is_empty(),
+        "the host ran {ran:?} from the runner's Git config: {}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        let diagnostic = result["attempts"][0]["cause"].as_str().unwrap_or("");
+        assert!(diagnostic.contains(".scratch/private.txt"), "{result}");
+        assert!(diagnostic.contains("feature.txt"), "{result}");
+    }
+}
