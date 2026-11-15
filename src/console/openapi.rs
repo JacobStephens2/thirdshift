@@ -128,7 +128,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             "manifest": {"type": ["string", "null"]}, "digest": {"type": ["string", "null"]},
             "ok": {"type": "boolean"},
             "problems": array(object(json!({
-                "check": {"enum": ["manifest", "files", "harnesses", "logins", "providers", "roles"]},
+                "check": {"enum": crate::evals::check_runner::check_names()},
                 "message": {"type": "string"}
             }))),
             "trial": {"oneOf": [{"type": "null"}, object(json!({

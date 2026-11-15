@@ -260,10 +260,7 @@ fn validate_runner_suites(options: &Options, root: &Path) -> Result<()> {
         return Ok(());
     }
     for name in &options.suites {
-        ensure!(
-            !matches!(name.as_str(), "code-review" | "spec-review"),
-            "Custom runners require process suites: {name}"
-        );
+        runner_suite(name)?;
         suite::Manifest::load(&root.join(name))?;
         for (_, directory) in suite::directories(&root.join(name).join("tasks"))? {
             ensure!(
@@ -272,6 +269,26 @@ fn validate_runner_suites(options: &Options, root: &Path) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Custom runners carry out a process; the review suites have none.
+fn runner_suite(name: &str) -> Result<()> {
+    ensure!(
+        !matches!(name, "code-review" | "spec-review"),
+        "Custom runners require process suites: {name}"
+    );
+    Ok(())
+}
+
+/// The Trial inputs every Trial needs before its repository is prepared.
+/// A proposed Eval task has no pull request yet; an Experiment needs one.
+fn trial_inputs(inputs: &crate::trial::Inputs) -> Result<()> {
+    crate::issue::IssueUrl::parse(&inputs.issue_url)?;
+    ensure!(
+        !inputs.base.is_empty() && !inputs.branch.is_empty(),
+        "Trial inputs must be nonempty"
+    );
     Ok(())
 }
 
@@ -810,11 +827,8 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
                 missing.push(format!("{name}/{task_name}"));
                 continue;
             };
-            crate::issue::IssueUrl::parse(&inputs.issue_url)?;
-            ensure!(
-                !inputs.base.is_empty() && !inputs.branch.is_empty() && !inputs.pr_url.is_empty(),
-                "Trial inputs must be nonempty"
-            );
+            trial_inputs(inputs)?;
+            ensure!(!inputs.pr_url.is_empty(), "Trial inputs must be nonempty");
             tasks.push(Task {
                 suite: name.clone(),
                 name: task_name,

@@ -41,10 +41,7 @@ pub(crate) struct Session {
 
 /// The process Eval task a dry run would use, refused before any check runs.
 pub(crate) fn task(suite: &str, task: &str) -> Result<TaskInput> {
-    ensure!(
-        !matches!(suite, "code-review" | "spec-review"),
-        "Custom runners require process suites: {suite}"
-    );
+    super::runner_suite(suite)?;
     let root = crate::config::home()?.join(".thirdshift/evals/suites");
     let directory = root.join(suite);
     suite::Manifest::load(&directory)?;
@@ -55,11 +52,12 @@ pub(crate) fn task(suite: &str, task: &str) -> Result<TaskInput> {
         manifest.session == format::Session::Process,
         "Custom runners require process Eval tasks: {suite}/{task}"
     );
-    let inputs = manifest
-        .trial
-        .as_ref()
-        .with_context(|| format!("Eval task {suite}/{task} needs a [trial] table"))?;
-    crate::issue::IssueUrl::parse(&inputs.issue_url)?;
+    super::trial_inputs(
+        manifest
+            .trial
+            .as_ref()
+            .with_context(|| format!("Eval task {suite}/{task} needs a [trial] table"))?,
+    )?;
     Ok(TaskInput(Task {
         suite: suite.into(),
         name: task.into(),

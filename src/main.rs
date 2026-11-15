@@ -281,7 +281,7 @@ fn main() -> ExitCode {
         }
         // A finished check prints its report even when the runner fails it.
         Ok(Command::Evals(evals::Action::CheckRunner(request))) => {
-            return match evals::check_runner(&request) {
+            return match evals::check_runner::execute(&request) {
                 Ok((report, ok)) => {
                     println!("{report}");
                     if ok {

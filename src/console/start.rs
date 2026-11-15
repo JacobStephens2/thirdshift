@@ -474,18 +474,11 @@ pub(super) async fn check_process(Json(mut request): Json<Request>) -> Response 
         let (repo, mut args) = request.arguments()?;
         args.insert(1, "check".into());
         let directory = super::commands::directory(&repo.slug())?;
-        let mut command = Command::new(std::env::current_exe()?);
-        command.args(args).current_dir(directory.path);
-        let output = crate::process::output_until(
-            &mut command,
-            None,
-            crate::process::Control {
-                name: "Process check",
-                interruption: crate::process::Interruption::Ordinary,
-                stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-            },
-            Instant::now() + Duration::from_secs(30),
-            &|| Ok(()),
+        let output = super::commands::cli_twin(
+            "Process check",
+            &args,
+            Some(&directory.path),
+            Duration::from_secs(30),
         )?;
         ensure!(
             output.status.success(),

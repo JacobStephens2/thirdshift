@@ -312,6 +312,11 @@ fn a_dry_run_reports_its_void_cause_and_fails_the_check() {
         "{}",
         text.stdout
     );
+    assert!(
+        report["trial"]["cost_usd"].is_null(),
+        "an accounting gap has no cost: {report}"
+    );
+    assert!(text.stdout.contains("Cost: incomplete"), "{}", text.stdout);
 }
 
 #[test]

@@ -35,6 +35,11 @@ pub(crate) struct Problem {
     pub message: String,
 }
 
+/// Every `check` a problem can name, for the API's description.
+pub(crate) fn check_names() -> [&'static str; 6] {
+    Check::ALL.map(Check::name)
+}
+
 /// The report, rendered as `--json` or text, and whether it is `ok`.
 pub fn execute(request: &Request) -> Result<(String, bool)> {
     let report = check(request)?;
@@ -121,12 +126,7 @@ fn render(report: &Report) -> String {
     } else {
         lines.push("Static checks: failed".into());
         for problem in &report.problems {
-            let check = serde_json::to_value(problem.check).unwrap_or_default();
-            lines.push(format!(
-                "  {}: {}",
-                check.as_str().unwrap_or("check"),
-                problem.message
-            ));
+            lines.push(format!("  {}: {}", problem.check.name(), problem.message));
         }
     }
     if let Some(trial) = &report.trial {
@@ -164,11 +164,11 @@ fn render(report: &Report) -> String {
                 (None, None) => format!("  Session {}: unpriced", session.role),
             });
         }
-        match trial.cost_usd {
-            Some(cost) => lines.push(format!("  Cost: ${cost:.6}")),
-            None if !trial.sessions.is_empty() => lines.push("  Cost: incomplete".into()),
-            None => lines.push("  Sessions: none recorded".into()),
-        }
+        lines.push(match (trial.sessions.is_empty(), trial.cost_usd) {
+            (true, _) => "  Sessions: none recorded".into(),
+            (false, Some(cost)) => format!("  Cost: ${cost:.6}"),
+            (false, None) => "  Cost: incomplete".into(),
+        });
     }
     lines.push(if report.ok {
         "Custom runner check passed.".into()

@@ -8,8 +8,7 @@ pub(crate) mod approval;
 mod arms;
 pub(crate) use arms::Runner;
 pub(crate) mod bug_origin;
-mod check_runner;
-pub use check_runner::{Request as CheckRunner, execute as check_runner};
+pub mod check_runner;
 pub(crate) mod experiment;
 mod format;
 mod import;
@@ -48,7 +47,7 @@ pub enum Action {
         options: Box<experiment::Options>,
         record: PathBuf,
     },
-    CheckRunner(CheckRunner),
+    CheckRunner(check_runner::Request),
 }
 
 pub fn parse(args: &[String]) -> Result<Action> {
@@ -171,7 +170,7 @@ fn check_runner_args(runner: &str, options: &[String]) -> Result<Action> {
         (None, None) => None,
         _ => bail!("a dry run needs both --suite and --task"),
     };
-    Ok(Action::CheckRunner(CheckRunner {
+    Ok(Action::CheckRunner(check_runner::Request {
         runner: runner.into(),
         task,
         json,
@@ -209,7 +208,13 @@ pub fn execute(action: Action) -> Result<String> {
                 &destination,
             )?)?)
         }
-        Action::CheckRunner(request) => Ok(check_runner(&request)?.0),
+        // The CLI prints a failed report before exiting 1; callers of this
+        // function get the same report as the error instead.
+        Action::CheckRunner(request) => {
+            let (report, ok) = check_runner::execute(&request)?;
+            anyhow::ensure!(ok, "{report}");
+            Ok(report)
+        }
         Action::Verify { repository, base } => {
             repository::verify(&repository, &base)?;
             Ok(r#"{"safe":true}"#.into())

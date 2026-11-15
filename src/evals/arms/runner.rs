@@ -93,9 +93,31 @@ pub(crate) enum Check {
     Roles,
 }
 
+impl Check {
+    pub const ALL: [Self; 6] = [
+        Self::Manifest,
+        Self::Files,
+        Self::Harnesses,
+        Self::Logins,
+        Self::Providers,
+        Self::Roles,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Manifest => "manifest",
+            Self::Files => "files",
+            Self::Harnesses => "harnesses",
+            Self::Logins => "logins",
+            Self::Providers => "providers",
+            Self::Roles => "roles",
+        }
+    }
+}
+
 /// Where `freeze` sends each problem: the first one ends an ordinary freeze,
 /// while `evals check-runner` collects them all.
-pub(crate) type Report<'a> = dyn FnMut(Check, anyhow::Error) -> Result<()> + 'a;
+pub(crate) type ProblemSink<'a> = dyn FnMut(Check, anyhow::Error) -> Result<()> + 'a;
 
 impl Runner {
     pub fn freeze(name: &str, directory: &Path) -> Result<Self> {
@@ -123,7 +145,7 @@ impl Runner {
     pub fn freeze_reporting(
         name: &str,
         directory: &Path,
-        report: &mut Report<'_>,
+        report: &mut ProblemSink<'_>,
     ) -> Result<Option<Self>> {
         let loaded = (|| -> Result<_> {
             let path = Self::manifest_path(name)?;

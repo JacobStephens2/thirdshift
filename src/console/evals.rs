@@ -1,7 +1,6 @@
 //! Machine-local Eval data changes, distinct from people's act-scoped judgments.
 use std::path::Path;
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, ensure};
 use axum::{Extension, Json, response::Response};
@@ -70,28 +69,25 @@ pub(super) async fn check_runner(Json(request): Json<CheckRunner>) -> Response {
             !request.runner.ends_with(".toml") || Path::new(&request.runner).is_absolute(),
             "a Custom runner file must be an absolute path"
         );
-        let mut args = vec!["check-runner".to_owned(), request.runner];
+        let mut args = vec![
+            "evals".to_owned(),
+            "check-runner".to_owned(),
+            request.runner,
+        ];
         for (flag, value) in [("--suite", request.suite), ("--task", request.task)] {
             if let Some(value) = value {
                 args.extend([flag.to_owned(), value]);
             }
         }
         args.push("--json".into());
-        crate::evals::parse(&args)?;
+        crate::evals::parse(&args[1..])?;
         let timeout = crate::evals::experiment::Bar::default().timeout_seconds;
-        let output = crate::process::output_until(
-            Command::new(std::env::current_exe()?)
-                .arg("evals")
-                .args(&args),
+        // The Trial and its code checks each have the Bar's timeout.
+        let output = super::commands::cli_twin(
+            "Custom runner check",
+            &args,
             None,
-            crate::process::Control {
-                name: "Custom runner check",
-                interruption: crate::process::Interruption::Ordinary,
-                stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-            },
-            // The Trial and its code checks each have the Bar's timeout.
-            Instant::now() + Duration::from_secs(3 * timeout),
-            &|| Ok(()),
+            Duration::from_secs(3 * timeout),
         )?;
         match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
             Ok(report) if output.status.success() || output.status.code() == Some(1) => Ok(report),
