@@ -16,6 +16,8 @@ pub(in crate::console) fn properties() -> Value {
         "candidate_effort",
         "baseline_process",
         "candidate_process",
+        "baseline_runner",
+        "candidate_runner",
         "name",
         "prices",
         "panel_vote",
@@ -80,6 +82,9 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
             _ => unreachable!(),
         };
         ensure!(valid, "invalid Experiment option: {key}");
+        if matches!(key.as_str(), "baseline_runner" | "candidate_runner") {
+            crate::console::evals::named_runner(value.as_str().unwrap())?;
+        }
         if key == "candidate" {
             let candidate = value.as_str().unwrap();
             ensure!(
@@ -113,6 +118,86 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_runner_options_follow_cli_validation() {
+        for (options, cli) in [
+            (
+                json!({"candidate_runner":"outside", "suite":["process"]}),
+                vec!["--candidate-runner", "outside", "--suite", "process"],
+            ),
+            (
+                json!({"baseline_runner":"outside", "candidate":"HEAD", "suite":["process"]}),
+                vec!["--baseline-runner", "outside", "HEAD", "--suite", "process"],
+            ),
+            (
+                json!({"baseline_runner":"before", "candidate_runner":"after", "suite":["process"]}),
+                vec![
+                    "--baseline-runner",
+                    "before",
+                    "--candidate-runner",
+                    "after",
+                    "--suite",
+                    "process",
+                ],
+            ),
+        ] {
+            let options = serde_json::from_value(options).unwrap();
+            let args = arguments(Some(&options)).unwrap();
+            assert_eq!(
+                args,
+                std::iter::once("--json").chain(cli).collect::<Vec<_>>()
+            );
+        }
+        for arm in ["baseline", "candidate"] {
+            for field in ["commit", "process", "harness", "model", "effort"] {
+                let runner = format!("{arm}_runner");
+                let key = match (arm, field) {
+                    ("baseline", "commit") => "baseline".into(),
+                    ("candidate", "commit") => "candidate".into(),
+                    _ => format!("{arm}_{field}"),
+                };
+                let mut options = BTreeMap::from([
+                    ("baseline_runner".into(), json!("before")),
+                    ("candidate_runner".into(), json!("after")),
+                    ("suite".into(), json!(["process"])),
+                ]);
+                options.insert(
+                    key.clone(),
+                    json!(if field == "harness" { "claude" } else { "HEAD" }),
+                );
+                let error = arguments(Some(&options)).unwrap_err().to_string();
+                assert!(error.contains("conflicts"), "{runner} + {key}: {error}");
+            }
+        }
+        for (options, expected) in [
+            (json!({"candidate_runner":"outside"}), "require --suite"),
+            (
+                json!({"candidate_runner":"outside", "suite":["process"], "release":true}),
+                "cannot use --release",
+            ),
+        ] {
+            let options = serde_json::from_value(options).unwrap();
+            assert!(
+                arguments(Some(&options))
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn custom_runner_file_paths_stay_cli_only() {
+        for options in [
+            json!({"candidate_runner":"/tmp/outside.toml", "suite":["process"]}),
+            json!({"baseline_runner":"/tmp/outside.toml", "candidate":"HEAD", "suite":["process"]}),
+        ] {
+            let options = serde_json::from_value(options).unwrap();
+            let error = arguments(Some(&options)).unwrap_err().to_string();
+            assert!(error.contains("CLI-only"), "{error}");
+        }
+    }
 
     #[test]
     fn each_panel_seat_becomes_its_own_flag() {

@@ -579,8 +579,14 @@ impl Scenario {
 
     /// Like [`Scenario::run`], launched from `dir` with the same isolated environment.
     pub fn run_from(&self, dir: &Path, args: &[&str]) -> RunResult {
+        self.run_from_with_env(dir, args, &[])
+    }
+
+    /// A Run from another directory with child-only environment overrides.
+    pub fn run_from_with_env(&self, dir: &Path, args: &[&str], env: &[(&str, &str)]) -> RunResult {
         let mut command = self.command(args);
         command.current_dir(dir);
+        command.envs(env.iter().copied());
         self.output(command)
     }
 

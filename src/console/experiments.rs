@@ -14,6 +14,7 @@ use crate::evals::{approval, experiment};
 
 mod pair;
 mod render;
+mod setup;
 
 #[derive(Template)]
 #[template(path = "console/experiment_pair.html")]

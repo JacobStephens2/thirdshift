@@ -28,6 +28,7 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `logs --export`: Log export writes to a caller-selected local path.
   - `evals prepare`: Eval preparation writes a repository to a caller-selected local path.
   - `evals prepare-arms`: Arm preparation writes its record to a caller-selected local path.
+  - Custom runner `.toml` file paths in `evals check-runner`, `--baseline-runner` and `--candidate-runner`: reading a caller-selected local file would echo its text in manifest problems, so the API names Custom runners under `~/.thirdshift/runners/` (#1468).
   - `console`: Console serving bootstraps the API listener itself; it is not a client operation.
   - `--trial`: The hidden Trial protocol consumes a local request and writes local Trial artifacts.
   - `--oom-exec`: The hidden OOM wrapper replaces its process inside an existing Trial scope.

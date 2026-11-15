@@ -5,6 +5,7 @@ fn seat(harness: &str, model: &str) -> Seat {
         harness: harness.into(),
         model: model.into(),
         effort: None,
+        provider_family: None,
     }
 }
 

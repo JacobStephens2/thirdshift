@@ -71,10 +71,16 @@ impl Adapter for Grok {
         let mut invocation = self.code_review_session(choice, resume, prompt);
         // Before `-p` and its prompt, which always come last.
         let at = invocation.args.len() - 2;
+        invocation.args.splice(
+            at..at,
+            self.trial_web_restrictions()
+                .iter()
+                .map(|arg| arg.to_string()),
+        );
         invocation
-            .args
-            .splice(at..at, ["--disable-web-search".to_string()]);
-        invocation
+    }
+    fn trial_web_restrictions(&self) -> &'static [&'static str] {
+        &["--disable-web-search"]
     }
     fn check(&self, choice: &mut Choice, _probe: super::Probe) -> Result<()> {
         crate::progress::step("checking the Model and Effort against grok models");

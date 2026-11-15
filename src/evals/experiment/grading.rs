@@ -565,8 +565,8 @@ fn evaluate(
                 counts.judged += 1;
                 counts.other_setup +=
                     usize::from(task.manifest.difficulty.as_ref().is_some_and(|difficulty| {
-                        difficulty.commit != baseline.commit
-                            || difficulty.harness != baseline.harness
+                        Some(&difficulty.commit) != baseline.commit.as_ref()
+                            || Some(&difficulty.harness) != baseline.harness.as_ref()
                             || difficulty.model != baseline.model
                             || difficulty.effort != baseline.effort
                     }));

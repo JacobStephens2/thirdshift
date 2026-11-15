@@ -248,7 +248,7 @@ impl Plan {
                     groups.push(Group {
                         suite: suite.clone(),
                         arm,
-                        harness: setup.harness.clone(),
+                        harness: setup.executor().into(),
                         trials,
                         mean: history
                             .get(&history_key(suite, setup))

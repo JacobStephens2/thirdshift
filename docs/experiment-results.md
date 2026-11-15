@@ -1,4 +1,4 @@
-# Experiment results (format 12)
+# Experiment results (format 13)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 12` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 12.
+`format: 13` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 13.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -22,6 +22,15 @@ to the machine retaining the Experiment.
 
 Format 11 adds `waiting_for`, `no_wait` and `commands_at_start`: the live host
 wait and the number of other live Commands at a start using `--no-wait`.
+
+Format 13 adds Custom runners: `Setup.commit` and `Setup.harness` are nullable,
+and `runner` plus `runner_digest` identify the manifest and frozen inputs.
+Prepared Custom-runner Arms have null `commit` and `harness`, an empty `binary`
+path, and `runner` holding the frozen manifest, hashes and Git provenance.
+`thirdshift evals check-runner` reports that same `runner_digest` as `digest`.
+Its dry run creates no Experiment and none of these files; it prints its own
+version-1 report, described under
+[Checking a Custom runner](eval-tasks.md#checking-a-custom-runner).
 
 The private `experiment.json` already has `format: 1`. The CLI view projects its
 metadata and retained evidence; it is not a copy of that internal storage file.
@@ -88,8 +97,12 @@ optional Effort), the `vote` unit (`family`, the default, or `model`) and
 `arm_family_rule` (on by default). Each seat reads every pair of process
 Trials in a blind packet, once in each presentation order, with the sides
 swapped in the second. Each `PanelPair` lists every seat as a `PanelGrader`:
-its `family` (its provider: the Harness's own, or the provider an OpenCode
-Model names), whether it `votes`, and its two `orders`. Each `PanelCall` names
+its `family` (its provider: the Harness's own, the provider an OpenCode
+Model names, or the resolved provider of a Kimi alias), whether it `votes`,
+and its two `orders`. New Kimi seats retain `provider_family` in the Bar,
+and native prepared Arms retain `families`, so reports use the identities
+fixed before Trials. Older records without those fields keep their original
+family classification. Each `PanelCall` names
 the Arm `shown_as_a`, gives each Arm's per-criterion `rubric`, merge
 reason and `ready_to_merge` call, then the comparison's `reason` and
 `preference`. A Grader's `preference` and `merge` calls stand only when both
@@ -144,7 +157,9 @@ input can't be read; `checklist` holds the items under its "Acceptance
 criteria" heading. `next` is the reader's next call. `mine` lists the reader's
 records and `revealed` stays null until the reader has given a preference;
 it then names the Arm on each side with its `Setup`, the panel's calls, and
-every reader's records. Each record is kept as
+every reader's records. Custom-runner sides also include `a_runner` or
+`b_runner`, the prepared `FrozenRunner` with its declared roles and recorded
+Git provenance; these fields exist only inside `revealed`. Each record is kept as
 `reviews/<pair-id>/<n>.json` with the `PairRecord` shape; records are only
 ever added, numbered from `000000`, beside a `lock` file.
 People's calls are reported beside the Verdict and change no Score, unless
@@ -265,7 +280,16 @@ text and Console reports mention exclusions only when the count is nonzero.
 
 `accounting` reports each Trial's cost and active attempt time, its sessions with
 their attempt indices, observed Models, and the role of the Step that started
-them. Resumes and fallback sessions belong to that same Step. Arm totals and
+them. Custom runner roles come from `record_command --role` or the session's
+`role` in `output_dir/sessions.json`; both live Harness recordings and imported
+Harness/SDK records become the same OTLP Session traces. Their costs use frozen
+prices, ignoring runner-reported USD. Provider traffic without Session evidence,
+unrecorded Harness runs across the proxy and declared provider/Harness runners
+finishing `delivered` or `stopped_to_ask` without sessions are accounting gaps,
+judged only for an outcome the runner reported in a valid `result.json`;
+timeouts and broken runner protocol stay failed.
+Normalized web-search tool calls void a Trial as `web_search`.
+Resumes and fallback sessions belong to that same Step. Arm totals and
 `roles` include all spent attempts, including Voids. A missing session usage
 measurement (input or output), unknown observed Model, or missing frozen price
 leaves cost null and makes a Trial Void with an `accounting_gap` cause naming
@@ -298,6 +322,8 @@ trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
 pairs/<pair-id>.json             # one pair's diffs, base-tests and cross-tests (evidence)
 reviews/<pair-id>/<n>.json       # one append-only blind pairwise record
 trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
+  session/                       # host-owned OTLP Session traces (read-only in Custom runner sandbox)
+  output/                        # Custom runner result.json, sessions.json and source streams
 ```
 
 Trial result files have the `TrialResult` shape below, governed by their parent
@@ -457,7 +483,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 12,
+    "format": 13,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -513,12 +539,20 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "suspended":"boolean", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
   "SessionAccounting": {"attempt?":"integer", "path":"string", "role":"string", "time_ms":"integer", "models":{"*":"Measurement"}, "cost_usd":"number?", "gap":"string?"},
   "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
-  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string"},
+  "Setup": {"commit": "string?", "harness": "string?", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string", "runner?": "string", "runner_digest?": "string"},
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
-    "commit": "string", "binary": "string",
-    "harness": "FixedHarness", "process?": "FrozenProcess"
+    "commit": "string?", "binary": "string",
+    "harness": "FixedHarness?", "process?": "FrozenProcess", "runner?": "FrozenRunner", "families?": ["string"]
   },
+  "FrozenRunner": {
+    "name": "string", "directory": "string", "files": {"*": "string"},
+    "manifest": {"command": ["string"], "harnesses?": {"*": ["string"]}, "providers?": ["string"], "files": {"*": "RunnerTarget"}, "roles": {"*": {"model": "string", "effort": "string?"}}, "git_exclude": ["string"]},
+    "harnesses?": {"*": {"binary": "FixedHarness", "hosts": ["string"], "families": ["string"]}},
+    "provenance": {"*": {"repository": "string", "origin": "string?", "path": "string", "commit": "string", "dirty": "boolean"}}
+  },
+  "RunnerTarget": "string|RunnerHomeTarget",
+  "RunnerHomeTarget": {"home": "string"},
   "FixedHarness": {"name": "string", "path": "string", "version": "string"},
   "FrozenProcess": {
     "name": "string", "directory": "string", "files": {"*": "string"},
@@ -535,7 +569,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "panel?": "Panel", "people?": "People"
   },
   "Panel": {
-    "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
+    "seats": [{"harness": "string", "model": "string", "effort": "string?", "provider_family?": "string"}],
     "vote": "family|model", "arm_family_rule": "boolean", "spending_limit?": "number",
     "role": "beside|counted", "families": "integer", "agreement": "number"
   },
@@ -547,7 +581,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "role": "off|beside|counted", "readers": ["string"], "sample": "integer?", "overlap": "integer"
   },
   "Agreement": {"compared": "integer", "agreed": "integer"},
-  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
+  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked|web_search",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
     "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"], "leaks?": ["LeakHit"]
@@ -594,6 +628,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "PairReveal": {
     "a": "baseline|candidate", "b": "baseline|candidate", "a_setup": "Setup", "b_setup": "Setup",
+    "a_runner?": "FrozenRunner", "b_runner?": "FrozenRunner",
     "panel": "PanelCalls?", "records": ["PairRecord"]
   },
   "PairRecord": {

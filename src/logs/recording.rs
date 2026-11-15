@@ -945,6 +945,13 @@ impl<O: Outside> Record<O> {
         self.custom_process = Some(identity);
     }
 
+    pub(super) fn name_executor(&mut self, executor: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.harness = executor.into();
+            self.write_record();
+        }
+    }
+
     pub(super) fn process_running(&mut self, identity: crate::processes::Identity) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.active().process = identity;

@@ -61,8 +61,10 @@ fn setup() -> Setup {
     Setup {
         process: None,
         process_digest: None,
-        commit: "a".repeat(40),
-        harness: "claude".into(),
+        runner: None,
+        runner_digest: None,
+        commit: Some("a".repeat(40)),
+        harness: Some("claude".into()),
         model: None,
         effort: None,
     }

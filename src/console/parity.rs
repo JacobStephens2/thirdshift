@@ -89,6 +89,11 @@ const EVALS: &[(&str, &str)] = &[
         "PrepareArms",
         "evals prepare-arms repository 0123456789012345678901234567890123456789 codex 0123456789012345678901234567890123456789 codex record.json",
     ),
+    ("CheckRunner", "evals check-runner fixture"),
+    (
+        "PrepareSelectedArms",
+        "evals prepare-arms repository record.json --baseline-runner old --candidate-runner new --suite process",
+    ),
 ];
 
 const FLEET: &[(&str, &str)] = &[
@@ -216,6 +221,10 @@ const EXCLUSIONS: &[(&str, &str)] = &[
     ),
     (
         "evals prepare-arms repository 0123456789012345678901234567890123456789 codex 0123456789012345678901234567890123456789 codex record.json",
+        "Arm preparation writes its record to a caller-selected local path.",
+    ),
+    (
+        "evals prepare-arms repository record.json --baseline-runner old --candidate-runner new --suite process",
         "Arm preparation writes its record to a caller-selected local path.",
     ),
     (

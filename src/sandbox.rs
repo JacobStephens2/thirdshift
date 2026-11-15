@@ -47,6 +47,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use crate::harness::Harness;
+
+pub(crate) mod custom;
 use crate::proxy;
 use crate::resend_key::{Credentials, OpenCodeKeys};
 use crate::{config, interrupt};
@@ -220,6 +222,11 @@ pub(crate) fn disabled() -> bool {
 }
 
 impl Prepared {
+    /// Host-observed provider traffic and Custom runner Harness invocations.
+    pub(crate) fn accounting(&self) -> proxy::Accounting {
+        self._proxy.accounting()
+    }
+
     /// What a session runner holds to launch inside the sandbox. The guards
     /// stay with the `Prepared` they came from, which outlives the sessions.
     pub(crate) fn launch(&self) -> Launch {
@@ -290,6 +297,20 @@ impl Launch {
     pub(crate) fn shell(mut self) -> Self {
         self.program = SHELL.into();
         self
+    }
+
+    /// The Custom runner's one memory scope encloses bwrap and all children.
+    pub(crate) fn trial_command(
+        &self,
+        args: &[String],
+        trial: &str,
+        attempt: usize,
+        caps: &crate::scope::Caps,
+    ) -> Result<crate::scope::Launch> {
+        let program = resolve_binary("bwrap")?;
+        let mut launched = crate::scope::trial_command(&program, &[], trial, attempt, caps)?;
+        self.configure_command(launched.command(), args)?;
+        Ok(launched)
     }
 
     /// The bwrap command running the Harness's `args` inside the sandbox.
@@ -462,7 +483,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         request.home.is_absolute(),
         "sandbox failed to start: home path must be absolute"
     );
-    let bwrap = find_bwrap().ok_or_else(|| {
+    find_bwrap().ok_or_else(|| {
         anyhow::Error::new(Unavailable {
             diagnostic: "bwrap is not on PATH".into(),
         })
@@ -501,7 +522,6 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             diagnostic: format!("{SHELL} is missing"),
         }));
     }
-    let socat = resolve_binary("socat")?;
     let mut binds = Binds::default();
     let mut environment = Environment::default();
     // The prepared repository, read-write, at its own path so the session's
@@ -527,7 +547,22 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             diagnostic: format!("{error:#}"),
         })
     })?;
-    let proxy = proxy::start(&allowed).map_err(|error| {
+    let program = harness_into(request, &mut binds, &mut environment, &binary);
+    finish(request, binds, environment, program, _grok, &allowed)
+}
+
+/// Shared native and Custom runner namespace, proxy relay and startup check.
+fn finish(
+    request: &Request<'_>,
+    mut binds: Binds,
+    mut environment: Environment,
+    program: PathBuf,
+    grok: Option<GrokGuard>,
+    allowed: &[String],
+) -> Result<Prepared> {
+    let bwrap = resolve_binary("bwrap")?;
+    let socat = resolve_binary("socat")?;
+    let proxy = proxy::start(allowed).map_err(|error| {
         anyhow::Error::new(Unavailable {
             diagnostic: format!("{error:#}"),
         })
@@ -544,7 +579,6 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     for name in ["NO_PROXY", "no_proxy"] {
         environment.set_str(name, "127.0.0.1,localhost");
     }
-    let program = harness_into(request, &mut binds, &mut environment, &binary);
     // Kept after every other bind, so no later mount can uncover a
     // credential's blank; hence apart from the toolchain binds above.
     if let Host::Tools { .. } = request.host {
@@ -595,7 +629,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         program,
         prefix,
         stderr: request.fresh_home.join("launcher.stderr"),
-        _grok,
+        _grok: grok,
         _proxy: proxy,
     })
 }
@@ -982,7 +1016,7 @@ fn home_into(
         Harness::Muse => {
             // Copy each login file. Muse writes its login in place (#1009);
             // that write stays in the copy.
-            for login in ["muse/auth.json", "muse/auth.json.lock"] {
+            for login in MUSE_LOGINS {
                 login_into(
                     request,
                     environment,
@@ -1032,6 +1066,9 @@ fn home_into(
 /// sandbox. An override always keeps its meaning inside, pointed at the
 /// fresh home, so session state the Harness writes beside a missing login
 /// still lands where its reader looks.
+/// Muse's login and its lock, copied for native and Custom-runner Trials.
+const MUSE_LOGINS: [&str; 2] = ["muse/auth.json", "muse/auth.json.lock"];
+
 fn login_into(
     request: &Request<'_>,
     environment: &mut Environment,
@@ -1210,15 +1247,7 @@ fn trials_home(home: &Path) -> PathBuf {
 fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
     let home = trials_home(request.home);
     let guard = GrokGuard::acquire(request.home)?;
-    if !home.join("auth.json").is_file() {
-        return Err(anyhow::Error::new(NoLogin {
-            diagnostic: format!(
-                "Grok Trial is not logged in; sign the Trials home in once with \
-                 GROK_HOME={} grok login",
-                home.display()
-            ),
-        }));
-    }
+    grok_login(request.home)?;
     let dest = request.fresh_home.join(GROK_HOME_NAME);
     reject_fresh_symlink(request.fresh_home, &dest)?;
     fs::create_dir_all(&dest).with_context(|| {
@@ -1236,6 +1265,21 @@ fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
         }
     }
     Ok(guard)
+}
+
+/// The Trials Grok home must hold a login before any Grok Trial starts.
+fn grok_login(home: &Path) -> Result<()> {
+    let home = trials_home(home);
+    if !home.join("auth.json").is_file() {
+        return Err(anyhow::Error::new(NoLogin {
+            diagnostic: format!(
+                "Grok Trial is not logged in; sign the Trials home in once with \
+                 GROK_HOME={} grok login",
+                home.display()
+            ),
+        }));
+    }
+    Ok(())
 }
 
 /// One Grok Trial at a time: the lock is a directory beside the Trials home,

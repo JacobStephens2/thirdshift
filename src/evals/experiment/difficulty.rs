@@ -50,8 +50,14 @@ pub(super) fn record(root: &Path, id: &str, json: bool) -> Result<String> {
             passes: 0,
             trials: 0,
             experiment: id.into(),
-            commit: setup.commit.clone(),
-            harness: setup.harness.clone(),
+            commit: setup
+                .commit
+                .clone()
+                .context("Custom runner Difficulty recording is not supported")?,
+            harness: setup
+                .harness
+                .clone()
+                .context("Custom runner Difficulty recording is not supported")?,
             model: setup.model.clone(),
             effort: setup.effort.clone(),
         };

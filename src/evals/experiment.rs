@@ -6,6 +6,7 @@ mod coordination;
 mod cost;
 pub(crate) mod deciders;
 mod difficulty;
+pub(crate) mod dry_run;
 mod efficiency;
 mod evidence;
 mod execution;
@@ -46,6 +47,7 @@ use crate::issue::Repo;
 use crate::trial::VoidCause;
 use crate::verdict::{Levels, decimal};
 use crate::{interrupt, logs, progress};
+pub(crate) use arms::{Arm as PreparedArm, Runner as CustomRunner};
 
 pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::{Conclusion, Flip, Pending};
@@ -159,34 +161,61 @@ impl Bar {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Setup {
-    pub commit: String,
-    pub harness: String,
+    pub commit: Option<String>,
+    pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_digest: Option<String>,
 }
 
 impl Setup {
     fn requested(&self) -> Result<arms::Requested> {
-        Ok(
-            arms::Requested::new(&self.commit, &self.harness)?.with_process(
-                self.process.as_deref(),
-                self.model.as_deref(),
-                self.effort.as_deref(),
-            ),
-        )
+        if let Some(runner) = &self.runner {
+            return Ok(arms::Requested::runner(runner));
+        }
+        Ok(arms::Requested::new(
+            self.commit.as_deref().context("missing Arm commit")?,
+            self.harness.as_deref().context("missing Arm Harness")?,
+        )?
+        .with_process(
+            self.process.as_deref(),
+            self.model.as_deref(),
+            self.effort.as_deref(),
+        ))
     }
 
     fn choice(&self) -> Choice {
         Choice {
-            harness: Harness::named(&self.harness).expect("validated Arm Harness"),
+            harness: self
+                .harness
+                .as_deref()
+                .and_then(Harness::named)
+                .unwrap_or(Harness::Claude),
             model: self.model.clone(),
             effort: self.effort.clone(),
             chosen_by: ChosenBy::Command,
         }
+    }
+
+    pub(crate) fn reference(&self) -> &str {
+        self.runner
+            .as_deref()
+            .or(self.commit.as_deref())
+            .unwrap_or("unknown")
+    }
+
+    pub(crate) fn executor(&self) -> &str {
+        self.runner
+            .as_deref()
+            .or(self.harness.as_deref())
+            .unwrap_or("unknown")
     }
 }
 
@@ -202,6 +231,14 @@ pub(crate) struct Description {
 }
 
 impl Description {
+    pub(crate) fn runner(&self, arm: Arm) -> Option<&arms::Runner> {
+        let prepared = self.prepared.as_ref()?;
+        match arm {
+            Arm::Baseline => prepared.baseline.runner.as_ref(),
+            Arm::Candidate => prepared.candidate.runner.as_ref(),
+        }
+    }
+
     pub(crate) fn setup(&self, arm: Arm) -> &Setup {
         match arm {
             Arm::Baseline => &self.baseline,
@@ -216,6 +253,121 @@ struct Task {
     name: String,
     directory: std::path::PathBuf,
     manifest: format::Task,
+}
+
+fn validate_runner_suites(options: &Options, root: &Path) -> Result<()> {
+    if options.baseline_setup.runner.is_none() && options.candidate_setup.runner.is_none() {
+        return Ok(());
+    }
+    for name in &options.suites {
+        runner_suite(name)?;
+        suite::Manifest::load(&root.join(name))?;
+        for (_, directory) in suite::directories(&root.join(name).join("tasks"))? {
+            ensure!(
+                format::Task::load(&directory)?.session == format::Session::Process,
+                "Custom runners require process suites: {name}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Custom runners carry out a process; the review suites have none.
+fn runner_suite(name: &str) -> Result<()> {
+    ensure!(
+        !matches!(name, "code-review" | "spec-review"),
+        "Custom runners require process suites: {name}"
+    );
+    Ok(())
+}
+
+/// The Trial inputs every Trial needs before its repository is prepared.
+/// A proposed Eval task has no pull request yet; an Experiment needs one.
+fn trial_inputs(inputs: &crate::trial::Inputs) -> Result<()> {
+    crate::issue::IssueUrl::parse(&inputs.issue_url)?;
+    ensure!(
+        !inputs.base.is_empty() && !inputs.branch.is_empty(),
+        "Trial inputs must be nonempty"
+    );
+    Ok(())
+}
+
+fn process_setups(setups: [&mut Setup; 2]) {
+    for setup in setups {
+        if setup.runner.is_none() {
+            setup.process.get_or_insert_with(|| "ticket-run".into());
+        }
+    }
+}
+
+struct SelectedArms {
+    baseline: Setup,
+    candidate: Setup,
+    baseline_reference: Option<String>,
+}
+
+/// Both CLI paths resolve native builds and Custom runners under one policy.
+fn select_arms(options: &Options, git: &Git, config: &UserConfig) -> Result<SelectedArms> {
+    let candidate = if options.candidate_setup.runner.is_some() {
+        String::new()
+    } else {
+        resolve(git, &options.candidate)?
+    };
+    let baseline_reference = if options.release && options.baseline.is_none() {
+        Some(git.run(&[
+            "--no-replace-objects",
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            "v[0-9]*",
+            &candidate,
+        ])?)
+    } else {
+        options.baseline.clone().or_else(|| {
+            (options.candidate_setup.runner.is_some() && options.baseline_setup.runner.is_none())
+                .then(|| "HEAD".into())
+        })
+    };
+    let baseline = if options.baseline_setup.runner.is_some() {
+        String::new()
+    } else {
+        match &baseline_reference {
+            Some(reference) => resolve(git, reference)?,
+            None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
+        }
+    };
+    Ok(SelectedArms {
+        baseline: options.baseline_setup.resolve(baseline, config),
+        candidate: options.candidate_setup.resolve(candidate, config),
+        baseline_reference,
+    })
+}
+
+pub(super) fn prepare_arms(
+    repository: &Path,
+    options: Options,
+    record: &Path,
+) -> Result<arms::Prepared> {
+    let root = crate::config::home()?.join(".thirdshift/evals/suites");
+    validate_runner_suites(&options, &root)?;
+    let SelectedArms {
+        mut baseline,
+        mut candidate,
+        ..
+    } = select_arms(&options, &Git::new(repository), &UserConfig::load()?)?;
+    if baseline.process.is_some()
+        || candidate.process.is_some()
+        || baseline.runner.is_some()
+        || candidate.runner.is_some()
+    {
+        process_setups([&mut baseline, &mut candidate]);
+    }
+    arms::prepare(
+        repository,
+        [baseline.requested()?, candidate.requested()?],
+        record,
+    )
 }
 
 pub fn run(options: Options) -> Result<()> {
@@ -257,34 +409,29 @@ fn print_results(experiment: &store::Stored, json: bool, render: bool) -> Result
 fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<View>> {
     interrupt::install()?;
     let git = Git::new(repository);
-    let candidate = resolve(&git, &options.candidate)?;
-    let baseline_reference = if options.release && options.baseline.is_none() {
-        Some(git.run(&[
-            "--no-replace-objects",
-            "describe",
-            "--tags",
-            "--abbrev=0",
-            "--match",
-            "v[0-9]*",
-            &candidate,
-        ])?)
-    } else {
-        options.baseline.clone()
-    };
-    let baseline = match &baseline_reference {
-        Some(reference) => resolve(&git, reference)?,
-        None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
-    };
     let root = crate::config::home()?.join(".thirdshift/evals");
     let suites_root = root.join("suites");
+    validate_runner_suites(&options, &suites_root)?;
+    let config = UserConfig::load()?;
+    let SelectedArms {
+        mut baseline,
+        mut candidate,
+        baseline_reference,
+    } = select_arms(&options, &git, &config)?;
     let suites = if options.suites.is_empty() {
         let paths = git.run(&[
             "--no-replace-objects",
             "diff",
             "--name-only",
             "--no-renames",
-            &baseline,
-            &candidate,
+            baseline
+                .commit
+                .as_deref()
+                .context("missing Baseline commit for suite selection")?,
+            candidate
+                .commit
+                .as_deref()
+                .context("missing Candidate commit for suite selection")?,
             "--",
         ])?;
         suite::touched(
@@ -306,9 +453,6 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         !suites.is_empty(),
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
-    let config = UserConfig::load()?;
-    let mut baseline = options.baseline_setup.resolve(baseline, &config);
-    let mut candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
     // Keep the judged list and the retained manifest snapshots on one reading
     // of Difficulty, fenced against approval and Difficulty publication.
@@ -329,9 +473,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         for (name, directory) in suite::directories(&suites_root.join(name).join("tasks"))? {
             let task = format::Task::load(&directory)?;
             if task.state == format::State::Approved && task.session == format::Session::Process {
-                for setup in [&mut baseline, &mut candidate] {
-                    setup.process.get_or_insert_with(|| "ticket-run".into());
-                }
+                process_setups([&mut baseline, &mut candidate]);
             }
             if task.state == format::State::Approved
                 && task
@@ -350,7 +492,11 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         "Trials per Eval task must be one or three"
     );
     for setup in [&mut baseline, &mut candidate] {
-        setup.process_digest = arms::Process::source_digest(&setup.requested()?)?;
+        if let Some(runner) = &setup.runner {
+            setup.runner_digest = Some(arms::Runner::source_digest(runner)?);
+        } else {
+            setup.process_digest = arms::Process::source_digest(&setup.requested()?)?;
+        }
     }
     let identity = serde_json::to_vec(&(&baseline, &candidate, &suites))?;
     let id = format!("{:x}", Sha256::digest(identity));
@@ -375,7 +521,15 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
             let tasks = tasks(&suites_root, &description.suites)?;
             deciders::check(&description.bar, &tasks)?;
             if options.release
-                && !release::supports_trials(repository, &root, &description.baseline.commit)?
+                && !release::supports_trials(
+                    repository,
+                    &root,
+                    description
+                        .baseline
+                        .commit
+                        .as_deref()
+                        .context("release Baseline has no commit")?,
+                )?
             {
                 return Ok(None);
             }
@@ -425,13 +579,22 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
             Some(baseline_reference.unwrap_or_else(|| "main (merge base)".into()));
-        experiment.details.candidate_ref = Some(options.candidate.clone());
-        experiment.details.title = Some(git.run(&[
-            "log",
-            "-1",
-            "--format=%s",
-            &experiment.description.candidate.commit,
-        ])?);
+        experiment.details.candidate_ref = Some(
+            options
+                .candidate_setup
+                .runner
+                .as_deref()
+                .unwrap_or(&options.candidate)
+                .to_owned(),
+        );
+        experiment.details.title = if let Some(commit) = &experiment.description.candidate.commit {
+            Some(git.run(&["log", "-1", "--format=%s", commit])?)
+        } else {
+            Some(format!(
+                "Custom runner {}",
+                experiment.description.candidate.reference()
+            ))
+        };
     }
     experiment.details.release |= options.release;
     let invocation = if render {
@@ -442,7 +605,12 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
             "--release".into(),
             options.candidate.clone(),
             "--baseline".into(),
-            experiment.description.baseline.commit.clone(),
+            experiment
+                .description
+                .baseline
+                .commit
+                .clone()
+                .context("release Baseline has no commit")?,
             "--yes".into(),
         ]
     };
@@ -462,10 +630,12 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         owner: "JacobStephens2".into(),
         name: "thirdshift".into(),
     };
-    logs::started(
-        logs::Work::Experiment(&repo),
-        &experiment.description.candidate.choice(),
-    );
+    let candidate = &experiment.description.candidate;
+    if candidate.runner.is_some() {
+        logs::started_custom_runner(logs::Work::Experiment(&repo));
+    } else {
+        logs::started(logs::Work::Experiment(&repo), &candidate.choice());
+    }
     logs::experiment(&experiment.description);
     logs::resumable(experiment.details.resume_command.as_deref().unwrap());
     experiment.details.command_log = logs::command_log_path();
@@ -499,6 +669,16 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
                 (&experiment.description.baseline, &prepared.baseline),
                 (&experiment.description.candidate, &prepared.candidate),
             ] {
+                if let Some(expected) = &setup.runner_digest {
+                    ensure!(
+                        arm.runner
+                            .as_ref()
+                            .context("missing frozen Custom runner")?
+                            .digest()?
+                            == *expected,
+                        "Custom runner inputs changed during Arm preparation; start the Experiment again"
+                    );
+                }
                 if let Some(expected) = &setup.process_digest {
                     ensure!(
                         arm.process
@@ -515,7 +695,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         }
         logs::stage(logs::Stage::EvalTasks);
         model_grader::prepare(&experiment, &config.harness)?;
-        panel::prepare(&experiment)?;
+        panel::prepare(&mut experiment)?;
         workers::run(&experiment)?;
         pairs::run(&experiment)?;
         // The panel grades last, so a pause in it holds back no model Score.
@@ -704,11 +884,8 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
                 missing.push(format!("{name}/{task_name}"));
                 continue;
             };
-            crate::issue::IssueUrl::parse(&inputs.issue_url)?;
-            ensure!(
-                !inputs.base.is_empty() && !inputs.branch.is_empty() && !inputs.pr_url.is_empty(),
-                "Trial inputs must be nonempty"
-            );
+            trial_inputs(inputs)?;
+            ensure!(!inputs.pr_url.is_empty(), "Trial inputs must be nonempty");
             tasks.push(Task {
                 suite: name.clone(),
                 name: task_name,

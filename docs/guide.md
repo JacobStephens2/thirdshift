@@ -875,6 +875,7 @@ JSON bodies use `Content-Type: application/json`. GET calls take no body.
 | GET `/evals` | `read` | none | `evals list` |
 | POST `/evals/touched` | `read` | JSON `paths` array of changed path names | `evals touched <paths>...` |
 | POST `/evals/verify` | `read` | JSON `repository` (a known Launch directory's owner/name), `base` commit | `evals verify <repository> <base>` |
+| POST `/evals/check-runner` | `run` | JSON `runner` (a Custom runner name; `.toml` file paths are CLI-only), optional `suite` and `task` together | `evals check-runner <runner> [--suite <suite> --task <task>] --json`; returns the report even when the check fails |
 | GET `/other-accounts` | `read` | none | `console other-accounts --json` |
 | POST `/other-accounts` | `admin` | JSON `value` (`none`, `readable`, or account list) | `console other-accounts <value>` |
 | POST `/email-test` | `admin` | JSON with optional `address` | `email-test [<address>]` |
@@ -912,6 +913,8 @@ requires `act`. POST `/api/v1/evals/import-replays` imports the machine's privat
 replay manifests and grading index from their standard locations, like the CLI.
 It accepts no paths. Eval task approval remains an `act` judgment. Eval verification
 uses a known Launch directory through POST `/api/v1/evals/verify` with `read`.
+A Custom runner check, and its dry-run Trial, runs as its own CLI process
+through POST `/api/v1/evals/check-runner` with `run`.
 Eval preparation and Arm preparation write caller-selected local paths, so remain
 CLI-only. Updates, imports and judgments name their requester
 in the Console log.
@@ -1317,6 +1320,115 @@ grading index to prepare on that host; private material stays outside the reposi
 
 ### Experiments
 
+Either Arm can use a **Custom runner** on explicitly selected process suites:
+
+```sh
+thirdshift experiment --candidate-runner workflow --suite process --baseline HEAD
+thirdshift experiment candidate --baseline-runner workflow --suite process
+thirdshift experiment --baseline-runner old --candidate-runner new --suite process
+```
+
+Runner names resolve `~/.thirdshift/runners/<name>.toml`; an explicit `.toml`
+path also works. Omit the candidate commit with `--candidate-runner`. A native
+Baseline then defaults to HEAD; two Custom runners need no thirdshift checkout
+or build. Runner selection conflicts with commit, Process, Harness, Model or
+Effort flags on that Arm, and requires `--suite` on process suites; review suites
+and `--release` are refused. Use `evals prepare-arms <repository> <record.json>`
+with the same runner and suite flags to freeze inputs without starting Trials.
+The manifest's argv command, mapped files and skill trees are frozen by SHA-256,
+including dirty local edits with Git provenance. The runner works unattended,
+commits HEAD and writes result.json; stopping to ask fails its Score. Code
+Graders ignore uncommitted scratch, and committing a manifest `git_exclude`
+path fails the Trial. The runner's process environment is an allowlist: a fresh
+HOME, PATH, the private XDG directories, and git settings that ignore system
+and operator git config. It does not include the operator's other environment
+variables. One Trial-wide bwrap sandbox and memory scope enclose the runner
+and its children. The manifest's `harnesses` map pins CLI paths and versions;
+OpenCode lists provider/model entries and Kimi lists aliases. `providers`
+lists direct-SDK providers whose Trials-only keys come from `[providers]`
+in Credentials. Only declared logins and keys enter fresh HOME and the
+environment; missing credentials void the Trial as `session_unavailable`.
+One provider-only HTTPS proxy and PATH wrappers disable Harness web search.
+Declared provider families also count in Grader panel voting and stand-in
+checks. See the [Custom runner contract](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#arm-preparation).
+Custom runner sessions stream live through the request's `record_command`
+argv prefix, followed by `--role <role> -- <harness> [args...]`, or import from
+`output_dir/sessions.json`. Both produce standard OTLP Session traces, priced
+from frozen Experiment prices and available in Trial Peek and Waterfall.
+Live 85% quota warnings pause the Experiment. Web-search tool calls void a
+Trial as `web_search`; provider traffic without recorded sessions, missing
+Harness sessions, or a declared provider/Harness runner delivering without
+sessions voids it as `accounting_gap`; a timed-out or crashed runner stays
+failed.
+
+A runner manifest at `~/.thirdshift/runners/<name>.toml` looks like this:
+
+```toml
+command = ["python3", "{runner_dir}/runner.py"]
+git_exclude = [".scratch/"]
+providers = ["openai"]
+harnesses = { claude = [], opencode = ["anthropic/claude"] }
+[files]
+"runner.py" = "runner.py"
+"skills/example" = { home = ".agents/skills/example" }
+[roles.implement]
+model = "claude-sonnet-4-6"
+effort = "high"
+```
+
+`command` is an argv array; `{runner_dir}` expands to the Trial's frozen
+bundle and the request.json path is appended. `files` maps sources beside the
+manifest to bundle targets, or `{ home = "…" }` targets in the fresh HOME.
+`roles` describes the configuration; observed Models decide pricing. Each
+Trial's request.json gives the prepared `repository`, `issue_file`,
+`issue_url`, `base`, `branch`, `runner_dir`, `output_dir` and `record_command`.
+The runner writes `output_dir/result.json`, such as
+`{"version":1,"outcome":"delivered"}`; `stopped_to_ask`, `failed` and `void`
+(with `void_cause` `session_unavailable`, `usage_limit` or `rate_limit`) are
+the other outcomes. Put direct-SDK keys in the Credentials, reserved for Trials:
+
+```toml
+[providers]
+openai = "…"
+```
+
+Check a runner before an Experiment spends Trials on it:
+
+```sh
+thirdshift evals check-runner workflow
+thirdshift evals check-runner workflow --suite process --task example --json
+```
+
+The static check reports every malformed manifest field, missing source file
+or skill directory, invalid or overlapping target path, unresolvable declared
+Harness or provider host, missing Harness login or `[providers]` key, and
+`roles` Model missing from the Trial price table, each under its `check` name.
+With `--suite` and `--task`, once the static checks pass, it runs one dry-run
+Trial on that process Eval task inside the real Trial sandbox: request.json,
+`git_exclude`, recorded or imported sessions, pricing, `accounting_gap` and
+`web_search` Void checks, and the task's offline code checks. It reports the
+outcome, Void cause, Score, code checks and each Session's cost, writes nothing
+under Experiment storage and creates no Experiment record. It exits `0` only
+when every check passes and the dry run's Score passes; a failed check still
+prints the report and exits `1`. `--json` prints the version-1 report described
+in [Checking a Custom runner](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#checking-a-custom-runner).
+Console clients with the `run` scope get the same report from POST
+`/api/v1/evals/check-runner` with JSON `runner` (a Custom runner name; a
+`.toml` file path is CLI-only) and optional `suite` and `task`.
+
+In Experiment JSON (format 13), a Custom-runner Arm's Setup has null `commit`
+and `harness`, and names `runner` and its frozen `runner_digest`, the `digest`
+`evals check-runner` reports.
+
+Console clients can start the same Experiment with `POST /api/v1/start` (also
+served at `/api/v1/runs`), putting `baseline_runner`, `candidate_runner` and
+`suite` in the request's `experiment` object. Each names a Custom runner; a
+`.toml` file path is CLI-only. The CLI's per-Arm conflicts and process-suite
+requirements apply. Experiment pages and Trial Peek show each
+Custom runner's name, digest, recorded Git HEAD and dirty state, and declared
+roles. Blind pairwise pages keep that identity hidden until the preference is
+submitted; `revealed` then includes the Custom runner's details.
+
 From a local thirdshift clone, `thirdshift experiment <candidate>` compares a
 branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
 another Baseline. Suites default to those touched by the change, using their
@@ -1704,8 +1816,9 @@ time per noisy metric, capping the pass rate near 72%.
 
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work,
-provider capacity or overload errors, a plan-limit stop, or a host kill or
-Trial-only memory cap makes a Trial void.
+provider capacity or overload errors, a plan-limit stop, a host kill or
+Trial-only memory cap, or a web-search tool call in any session transcript
+(`web_search`) makes a Trial void.
 Timeouts, context-window overflow, refusals and agent failures count as failed
 Trials. Void Trials retry fresh up to the Bar's limit and remain void if
 exhausted. A task still void in either Arm drops out of both Arms.
@@ -1871,7 +1984,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 12`.
+[Experiment results format](experiment-results.md), identified by `format: 13`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -3087,7 +3200,7 @@ no Resend API key. Either:
     (a crontab line, CI secret, or a shell profile the Ticket run's shell reads)
 ```
 
-Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values, and an `[opencode.keys]` table of quoted keys by OpenCode provider name. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it: one per provider under `[opencode.keys]`, such as `fireworks-ai = "…"` and `baseten = "…"`, or a single `api_key` under `[opencode]` for any provider without its own. Each OpenCode session takes the key for the provider its Model names, so two OpenCode sessions on different providers, such as two Graders in a Grader panel, each get their own; without one, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
+Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values, an `[opencode.keys]` table of quoted keys by OpenCode provider name, and a `[providers]` table of quoted Trials-only direct-SDK keys for Custom runners (`anthropic`, `openai`, `xai`, `meta`, `google`, `fireworks-ai`, `baseten`, `kimi`). Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it: one per provider under `[opencode.keys]`, such as `fireworks-ai = "…"` and `baseten = "…"`, or a single `api_key` under `[opencode]` for any provider without its own. Each OpenCode session takes the key for the provider its Model names, so two OpenCode sessions on different providers, such as two Graders in a Grader panel, each get their own; without one, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
 
 #### Run notifications
 

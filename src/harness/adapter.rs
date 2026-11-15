@@ -45,6 +45,12 @@ pub trait Adapter: Sync {
         self.code_review_session(choice, resume, prompt)
     }
 
+    /// Shared by native Trials and the Custom runner's PATH wrapper. Each
+    /// native invocation retains the argument position its CLI requires.
+    fn trial_web_restrictions(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// A one-shot release summary, using stdin or `prompt_file` so release
     /// input never exceeds the operating system's argument-size limit.
     /// The file contains `prompt` and remains available until the CLI exits.

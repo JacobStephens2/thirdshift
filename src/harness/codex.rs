@@ -65,9 +65,14 @@ impl Adapter for Codex {
         // After `exec`, before any Resume subcommand: repeated on each launch.
         invocation.args.splice(
             1..1,
-            ["-c".to_string(), "web_search=\"disabled\"".to_string()],
+            self.trial_web_restrictions()
+                .iter()
+                .map(|arg| arg.to_string()),
         );
         invocation
+    }
+    fn trial_web_restrictions(&self) -> &'static [&'static str] {
+        &["-c", "web_search=\"disabled\""]
     }
     fn security_session(
         &self,

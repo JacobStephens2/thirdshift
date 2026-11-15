@@ -212,6 +212,7 @@ enum View {
     Evals,
     TouchedEvals,
     VerifyEval,
+    CheckRunner,
     OtherAccounts,
     SetOtherAccounts,
     EmailTest,
@@ -294,6 +295,7 @@ impl PageRoute {
                 | View::Evals
                 | View::TouchedEvals
                 | View::VerifyEval
+                | View::CheckRunner
                 | View::OtherAccounts
                 | View::SetOtherAccounts
                 | View::EmailTest
@@ -420,6 +422,17 @@ const PAGES: &[PageRoute] = &[
         view: View::VerifyEval,
     },
     PageRoute {
+        path: "/api/v1/evals/check-runner",
+        api: "/api/v1/evals/check-runner",
+        scope: Some(Scope::Run),
+        cli: &[
+            "thirdshift evals check-runner fixture --json",
+            "thirdshift evals check-runner fixture --suite process --task fixture --json",
+        ],
+        method: Method::POST,
+        view: View::CheckRunner,
+    },
+    PageRoute {
         path: "/api/v1/other-accounts",
         api: "/api/v1/other-accounts",
         scope: Some(Scope::Read),
@@ -503,7 +516,7 @@ const PAGES: &[PageRoute] = &[
         path: "/api/v1/start",
         api: "/api/v1/start",
         scope: Some(Scope::Run),
-        cli: &["thirdshift release 1.2.3"],
+        cli: &["thirdshift experiment HEAD", "thirdshift release 1.2.3"],
         method: Method::POST,
         view: View::StartRun,
     },
@@ -1158,6 +1171,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Evals, Method::GET) => get(commands::evals),
             (View::TouchedEvals, Method::POST) => post(commands::touched),
             (View::VerifyEval, Method::POST) => post(commands::verify),
+            (View::CheckRunner, Method::POST) => post(evals::check_runner),
             (View::OtherAccounts, Method::GET) => get(commands::other_accounts),
             (View::SetOtherAccounts, Method::POST) => post(commands::set_other_accounts),
             (View::EmailTest, Method::POST) => post(commands::email_test),

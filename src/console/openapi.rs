@@ -139,6 +139,22 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::Evals => array(record),
         View::TouchedEvals => array(text),
         View::VerifyEval => object(json!({"safe":{"const":true}})),
+        View::CheckRunner => object(json!({
+            "version": version, "runner": text,
+            "manifest": {"type": ["string", "null"]}, "digest": {"type": ["string", "null"]},
+            "ok": {"type": "boolean"},
+            "problems": array(object(json!({
+                "check": {"enum": crate::evals::check_runner::check_names()},
+                "message": {"type": "string"}
+            }))),
+            "trial": {"oneOf": [{"type": "null"}, object(json!({
+                "suite": {"type": "string"}, "task": {"type": "string"},
+                "outcome": {"type": "string"}, "void_cause": {"type": ["string", "null"]},
+                "cause": {"type": ["string", "null"]}, "passed": {"type": "boolean"},
+                "checks": array(record.clone()), "sessions": array(record.clone()),
+                "cost_usd": {"type": ["number", "null"]}
+            }))]}
+        })),
         View::OtherAccounts | View::SetOtherAccounts => {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
@@ -435,6 +451,19 @@ fn action_body(view: View) -> Value {
                 vec!["repository", "base"],
             );
         }
+        View::CheckRunner => {
+            let mut body = json_request(
+                json!({
+                    "runner": {"type":"string","description":"A Custom runner name in ~/.thirdshift/runners; a .toml file path is CLI-only."},
+                    "suite": {"type":"string","description":"With task: run one dry-run Trial on this process Eval task."},
+                    "task": text
+                }),
+                vec!["runner"],
+            );
+            body["content"]["application/json"]["schema"]["dependentRequired"] =
+                json!({"suite":["task"],"task":["suite"]});
+            return body;
+        }
         View::SetOtherAccounts => return json_request(json!({"value":text}), vec!["value"]),
         View::EmailTest => return json_request(json!({"address":text}), vec![]),
         View::RenameExperiment => return json_request(json!({"name":text}), vec!["name"]),
@@ -686,11 +715,29 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 12}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 13}, "id": {"type": "string"},
+        "baseline": experiment_setup(), "candidate": experiment_setup(),
         "waiting_for": array(json!({"type":"string"})),
         "no_wait": {"type":"boolean"}, "commands_at_start": {"type":"integer"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))
     }))
+}
+
+fn experiment_setup() -> Value {
+    json!({
+        "type": "object",
+        "required": ["commit", "harness", "model", "effort"],
+        "properties": {
+            "commit": {"type": ["string", "null"]},
+            "harness": {"type": ["string", "null"]},
+            "model": {"type": ["string", "null"]},
+            "effort": {"type": ["string", "null"]},
+            "process": {"type": "string"},
+            "process_digest": {"type": "string"},
+            "runner": {"type": "string"},
+            "runner_digest": {"type": "string"}
+        }
+    })
 }

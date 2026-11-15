@@ -7,6 +7,14 @@ const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
+test("architecture describes the shipped Custom runner sandbox", async () => {
+  const page = await readFile(join(__dirname, "..", "architecture/index.html"), "utf8");
+  for (const text of ["One Trial-wide bwrap sandbox and memory scope enclose the runner and its children.",
+    "<code>record_command --role</code>", "<code>evals check-runner</code>"]) {
+    assert.ok(page.includes(text), `Architecture no longer describes the Custom runner: ${text}`);
+  }
+});
+
 test("release documentation describes scheduled Passes and on-demand Commands", async () => {
   for (const file of ["index.html", "how-it-works/index.html", "architecture/index.html", "docs/index.html"]) {
     const source = await readFile(join(__dirname, "..", file), "utf8");

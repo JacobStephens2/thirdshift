@@ -174,13 +174,21 @@ impl Process {
     }
 }
 
-fn digest(bytes: &[u8]) -> String {
+pub(super) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn hashes(directory: &Path) -> Result<BTreeMap<String, String>> {
+pub(super) fn hashes(directory: &Path) -> Result<BTreeMap<String, String>> {
     let mut hashes = BTreeMap::new();
-    collect(directory, directory, 0, &mut hashes)?;
+    collect(directory, directory, 0, false, &mut hashes)?;
+    Ok(hashes)
+}
+
+/// Custom runner trees retain directory entries, including empty folders.
+/// Legacy Process file inventories keep their original digest and identity.
+pub(super) fn tree_hashes(directory: &Path) -> Result<BTreeMap<String, String>> {
+    let mut hashes = BTreeMap::new();
+    collect(directory, directory, 0, true, &mut hashes)?;
     Ok(hashes)
 }
 
@@ -188,6 +196,7 @@ fn collect(
     root: &Path,
     directory: &Path,
     depth: usize,
+    directories: bool,
     hashes: &mut BTreeMap<String, String>,
 ) -> Result<()> {
     ensure!(
@@ -217,7 +226,16 @@ fn collect(
                 .with_context(|| format!("could not check frozen Arm file {name}"))?;
             hashes.insert(name.into(), digest(&bytes));
         } else {
-            collect(root, &path, depth + 1, hashes)?;
+            collect(root, &path, depth + 1, directories, hashes)?;
+            if directories {
+                let prefix = format!("{name}/");
+                let children: Vec<_> = hashes
+                    .range(prefix.clone()..)
+                    .take_while(|(path, _)| path.starts_with(&prefix))
+                    .collect();
+                let hash = digest(&serde_json::to_vec(&children)?);
+                hashes.insert(prefix, hash);
+            }
         }
     }
     Ok(())

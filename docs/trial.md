@@ -123,7 +123,8 @@ rules. Web search stays off by each Harness's own flag: Claude denies
 `--disable-web-search`, Muse passes `--disable-web-tools`, and the Trial's
 OpenCode config denies `webfetch` and `websearch`. agy and Kimi Code have no
 such switch, so a Trial keeps their session unchanged; the proxy still reaches only its provider
-hosts.
+hosts. In an Experiment, a Trial whose normalized session transcript records a
+web-search tool call, from any Harness, is void as `web_search`.
 
 The fresh home holds the login, and the user-level instructions, rules,
 settings and hooks a Run's session reads, those read-only. Codex's `auth.json`
@@ -262,3 +263,27 @@ killed work gets no further Resume, as in a Run.
 No Command record, Command log or Activity log is created. All Trial session
 artifacts stay in `output_dir`; the Inbox, Usual ranges and Silent therefore
 ignore them. An inherited Command owner is cleared before launching the Harness.
+
+## Custom runners
+
+A **Custom runner** Arm does not use `--trial`. Each of its Trials runs the
+runner's own argv inside one Trial-wide bwrap sandbox and memory scope, with a
+fresh HOME holding its mapped files, declared Harness logins and the
+Trials-only provider keys under `[providers]` in the Credentials. The runner
+receives its own version-1 request.json (`repository`, `issue_file`,
+`issue_url`, `base`, `branch`, `runner_dir`, `output_dir`, `record_command`),
+commits its change on HEAD and writes `output_dir/result.json`. Its sessions
+stream through `record_command --role <role> -- <harness> [args...]` or import
+from `output_dir/sessions.json` into the same OTLP Session traces native Trials
+leave, priced from the Experiment's frozen price table. The outcome and
+`void_cause` it may report, and the checks that override it (`accounting_gap`,
+`web_search`, committed `git_exclude` paths, outer supervision), are in the
+[Custom runner contract](eval-tasks.md#arm-preparation); its Setup in Experiment
+results format 13 has null `commit` and `harness` and a `runner` and
+`runner_digest` instead.
+
+`thirdshift evals check-runner <name-or-file.toml> --suite <suite> --task <task>`
+runs one such Trial on a process Eval task through the same execution, outside
+Experiment storage, and reports its outcome, Score, Session costs and any Void
+cause without creating an Experiment record; see
+[Checking a Custom runner](eval-tasks.md#checking-a-custom-runner).

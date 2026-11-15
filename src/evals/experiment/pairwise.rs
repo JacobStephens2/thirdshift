@@ -167,6 +167,10 @@ pub(crate) struct Reveal {
     pub b: Arm,
     pub a_setup: Setup,
     pub b_setup: Setup,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a_runner: Option<crate::evals::arms::Runner>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b_runner: Option<crate::evals::arms::Runner>,
     pub panel: Option<PanelCalls>,
     pub records: Vec<Record>,
 }
@@ -430,13 +434,20 @@ pub(crate) fn next_command(page: &Page) -> String {
 
 /// Which Arm made one side, with its setup, for the CLI and the page alike.
 pub(crate) fn revealed_side(arm: Arm, setup: &Setup) -> String {
+    if let Some(runner) = &setup.runner {
+        return format!(
+            "{} arm · Custom runner {runner} · digest {}",
+            capitalized(arm),
+            setup.runner_digest.as_deref().unwrap_or("not recorded")
+        );
+    }
     format!(
         "{} arm · {} · {} · {} · {}",
         capitalized(arm),
-        setup.harness,
+        setup.executor(),
         setup.model.as_deref().unwrap_or("default Model"),
         setup.effort.as_deref().unwrap_or("default Effort"),
-        setup.commit
+        setup.reference()
     )
 }
 
@@ -648,8 +659,10 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
         Arm::Candidate => std::mem::take(&mut candidate),
     };
     let (mut a, mut b) = (take(sides[0]), take(sides[1]));
+    let runner_identities = runner_identities(&stored.description);
     for side in [&mut a, &mut b] {
         side.diff.sort_by_key(|file| file.test);
+        blind_runner_side(side, &runner_identities);
         // Blinded as the panel's packet is: added lines that would name the
         // Arm go, and so does error text, which can name retained paths.
         for file in &mut side.diff {
@@ -681,10 +694,175 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
             b: sides[1],
             a_setup: stored.description.setup(sides[0]).clone(),
             b_setup: stored.description.setup(sides[1]).clone(),
+            a_runner: stored.description.runner(sides[0]).cloned(),
+            b_runner: stored.description.runner(sides[1]).cloned(),
             panel,
             records: all,
         }),
     })
+}
+
+/// Retained diffs and check diagnostics can name an outside workflow even
+/// though its Setup and prepared metadata are confined to the reveal.
+#[derive(Default)]
+struct RunnerIdentities {
+    attribution: Vec<String>,
+    role_metadata: Vec<String>,
+}
+
+fn runner_identities(description: &super::Description) -> RunnerIdentities {
+    let mut identities = RunnerIdentities::default();
+    for arm in [Arm::Baseline, Arm::Candidate] {
+        let setup = description.setup(arm);
+        identities
+            .attribution
+            .extend(setup.runner.iter().chain(&setup.runner_digest).cloned());
+        if let Some(runner) = description.runner(arm) {
+            for (role, choice) in &runner.manifest.roles {
+                identities
+                    .role_metadata
+                    .extend([role.clone(), choice.model.clone()]);
+                identities
+                    .role_metadata
+                    .extend(choice.effort.iter().cloned());
+            }
+            for git in runner.provenance.values() {
+                identities.attribution.push(git.commit.clone());
+                identities.attribution.extend(git.origin.iter().cloned());
+            }
+        }
+    }
+    for values in [&mut identities.attribution, &mut identities.role_metadata] {
+        values.retain(|value| !value.is_empty());
+        // Redact a full identity before any other identity that is its prefix.
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        values.dedup();
+    }
+    identities
+}
+
+fn blind_runner_side(side: &mut pairs::Side, identities: &RunnerIdentities) {
+    if identities.attribution.is_empty() {
+        return;
+    }
+    let blind = |text: &mut String, values: &[String]| {
+        for identity in values {
+            *text = withhold(text, identity);
+        }
+    };
+    for file in &mut side.diff {
+        file.patch = blind_runner_diff(&file.patch, identities);
+        blind(&mut file.path, &identities.attribution);
+        blind(&mut file.patch, &identities.attribution);
+    }
+    for file in &mut side.test_files {
+        blind(file, &identities.attribution);
+    }
+    for check in side.base.iter_mut().chain(&mut side.cross) {
+        for argument in check.command.iter_mut().flatten() {
+            blind(argument, &identities.attribution);
+        }
+        blind(&mut check.reason, &identities.attribution);
+        blind(&mut check.reason, &identities.role_metadata);
+    }
+}
+
+/// Byte offsets where `identity` occurs in `text` as a whole word, so a
+/// runner named `review` never matches inside `reviewer`. Separators such as
+/// `_` still bound it, as in `review_test.py`.
+fn whole_matches<'a>(text: &'a str, identity: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let identifier = |c: char| c.is_alphanumeric();
+    text.match_indices(identity)
+        .map(|(index, _)| index)
+        .filter(move |&index| {
+            !text[..index].chars().next_back().is_some_and(identifier)
+                && !text[index + identity.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(identifier)
+        })
+}
+
+fn withhold(text: &str, identity: &str) -> String {
+    let mut withheld = String::with_capacity(text.len());
+    let mut copied = 0;
+    for index in whole_matches(text, identity).collect::<Vec<_>>() {
+        withheld.push_str(&text[copied..index]);
+        withheld.push_str("[withheld]");
+        copied = index + identity.len();
+    }
+    withheld.push_str(&text[copied..]);
+    withheld
+}
+
+fn blind_runner_diff(diff: &str, identities: &RunnerIdentities) -> String {
+    let names_runner = |value: &str| {
+        identities
+            .attribution
+            .iter()
+            .chain(&identities.role_metadata)
+            .any(|identity| {
+                whole_matches(value, &identity.to_ascii_lowercase())
+                    .next()
+                    .is_some()
+            })
+    };
+    // Added table rows wait until the table ends: a table with a role column
+    // that names the runner's identity is dropped whole, any other is kept.
+    let mut table: Vec<&str> = Vec::new();
+    let mut role_table = false;
+    let mut identifying = false;
+    let mut blinded = String::new();
+    let flush = |table: &mut Vec<&str>, drop: bool, blinded: &mut String| {
+        if !drop {
+            for line in table.iter() {
+                blinded.push_str(line);
+                blinded.push('\n');
+            }
+        }
+        table.clear();
+    };
+    for line in diff.lines() {
+        let Some(added) = line.strip_prefix('+').filter(|_| !line.starts_with("+++")) else {
+            flush(&mut table, role_table && identifying, &mut blinded);
+            (role_table, identifying) = (false, false);
+            blinded.push_str(line);
+            blinded.push('\n');
+            continue;
+        };
+        let normalized = added
+            .trim()
+            .trim_start_matches(['#', '>', '-', ' '])
+            .replace(['*', '_', '`'], "")
+            .to_ascii_lowercase();
+        if normalized.starts_with('|') {
+            let cells: Vec<_> = normalized
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            role_table |= cells.iter().any(|cell| matches!(*cell, "role" | "roles"));
+            identifying |= cells.iter().any(|cell| names_runner(cell));
+            table.push(line);
+            continue;
+        }
+        flush(&mut table, role_table && identifying, &mut blinded);
+        (role_table, identifying) = (false, false);
+        let attribution = ["runner", "runner digest", "roles", "role"]
+            .iter()
+            .any(|key| {
+                normalized
+                    .strip_prefix(key)
+                    .and_then(|rest| rest.trim_start().strip_prefix([':', '=']))
+                    .is_some_and(names_runner)
+            });
+        if !attribution {
+            blinded.push_str(line);
+            blinded.push('\n');
+        }
+    }
+    flush(&mut table, role_table && identifying, &mut blinded);
+    blinded
 }
 
 /// The retained pair named by `key`, which must be one of the Experiment's.
@@ -772,6 +950,23 @@ fn checklist(ticket: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runner_blinding_keeps_ordinary_role_tables_and_words() {
+        let identities = RunnerIdentities {
+            attribution: vec!["review".into()],
+            role_metadata: vec!["implement".into()],
+        };
+        let patch = "+| Role | Permission |\n+|---|---|\n+| admin | write |\n+fn reviewer() {}\n";
+        let mut side = pairs::Side::default();
+        side.diff.push(pairs::FileDiff {
+            path: "docs/roles.md".into(),
+            test: false,
+            patch: patch.into(),
+        });
+        blind_runner_side(&mut side, &identities);
+        assert_eq!(side.diff[0].patch, patch);
+    }
 
     #[test]
     fn sides_are_drawn_per_pair_from_the_seed() {

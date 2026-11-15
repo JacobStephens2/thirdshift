@@ -14,8 +14,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -44,6 +44,91 @@ const BASETEN_HOSTS: &[&str] = &["inference.baseten.co"];
 const KIMI_HOSTS: &[&str] = &["api.kimi.com", "auth.kimi.com"];
 const KIMI_GLOBAL_HOSTS: &[&str] = &["api.kimi.ai", "auth.kimi.ai"];
 
+/// Direct-SDK providers accepted by a Custom runner manifest and Credentials.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Provider {
+    Anthropic,
+    Openai,
+    Xai,
+    Meta,
+    Google,
+    FireworksAi,
+    Baseten,
+    Kimi,
+}
+
+impl Provider {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+            Self::Xai => "xai",
+            Self::Meta => "meta",
+            Self::Google => "google",
+            Self::FireworksAi => "fireworks-ai",
+            Self::Baseten => "baseten",
+            Self::Kimi => "kimi",
+        }
+    }
+
+    pub(crate) fn environment(self) -> &'static str {
+        match self {
+            Self::Anthropic => "ANTHROPIC_API_KEY",
+            Self::Openai => "OPENAI_API_KEY",
+            Self::Xai => "XAI_API_KEY",
+            Self::Meta => "META_API_KEY",
+            Self::Google => "GOOGLE_API_KEY",
+            Self::FireworksAi => "FIREWORKS_API_KEY",
+            Self::Baseten => "BASETEN_API_KEY",
+            Self::Kimi => "KIMI_API_KEY",
+        }
+    }
+
+    pub(crate) fn hosts(self) -> &'static [&'static str] {
+        match self {
+            Self::Anthropic => &["api.anthropic.com"],
+            Self::Openai => &["api.openai.com"],
+            Self::Xai => XAI_HOSTS,
+            Self::Meta => META_HOSTS,
+            Self::Google => &["generativelanguage.googleapis.com"],
+            Self::FireworksAi => FIREWORKS_HOSTS,
+            Self::Baseten => BASETEN_HOSTS,
+            Self::Kimi => &["api.kimi.com", "api.kimi.ai"],
+        }
+    }
+
+    pub(crate) fn family(self) -> &'static str {
+        match self {
+            Self::Kimi => "moonshot",
+            Self::Anthropic
+            | Self::Openai
+            | Self::Xai
+            | Self::Meta
+            | Self::Google
+            | Self::FireworksAi
+            | Self::Baseten => self.name(),
+        }
+    }
+}
+
+/// A Harness Model's provider family, using its resolved hosts for Kimi aliases.
+pub(crate) fn harness_family(harness: Harness, model: Option<&str>, hosts: &[String]) -> String {
+    match harness {
+        Harness::Claude => "anthropic",
+        Harness::Codex => "openai",
+        Harness::Grok => "xai",
+        Harness::Muse => "meta",
+        Harness::Agy => "google",
+        Harness::OpenCode => opencode_provider(model).unwrap_or("opencode"),
+        Harness::Kimi if hosts.iter().any(|host| host == "api.fireworks.ai") => "fireworks-ai",
+        Harness::Kimi => "moonshot",
+    }
+    .to_owned()
+}
+
 /// One provider's hosts by the name an OpenCode Model uses for it.
 fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
     match provider {
@@ -62,8 +147,9 @@ fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
 pub(crate) fn opencode_provider(model: Option<&str>) -> Option<&str> {
     model
         .and_then(|model| model.split('#').next())
-        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
-        .filter(|provider| !provider.is_empty())
+        .and_then(|model| model.split_once('/'))
+        .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
+        .map(|(provider, _)| provider)
 }
 
 /// What the proxy allows, per Harness: that Harness's provider hosts.
@@ -129,7 +215,7 @@ fn kimi_trial_hosts(
 /// A Kimi provider's hosts, by the host of the base URL its Model's
 /// provider sends requests to. A provider this lookup does not know fails
 /// before the session starts rather than reaching further than its list.
-fn kimi_hosts(base_url: &str) -> Result<Vec<&'static str>> {
+pub(crate) fn kimi_hosts(base_url: &str) -> Result<Vec<&'static str>> {
     let host = base_url
         .split_once("://")
         .map_or(base_url, |(_, rest)| rest)
@@ -227,7 +313,28 @@ pub(crate) struct Guard {
     dir: tempfile::TempDir,
     shutdown: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    accounting: Arc<Mutex<Accounting>>,
 }
+
+/// Provider connections and Harness executions observed outside the Trial.
+/// The runner can connect to the proxy, but cannot read or edit this state.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Accounting {
+    pub(crate) provider_connections: u64,
+    pub(crate) harness_invocations: Vec<HarnessInvocation>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HarnessInvocation {
+    pub(crate) harness: Harness,
+    pub(crate) provider_connections: u64,
+}
+
+/// A wrapper registers once, then prefixes its forwarded CONNECTs with the
+/// returned invocation number. Its own loopback relay uses the same number.
+pub(crate) const HARNESS_REGISTER_METHOD: &str = "THIRDSHIFT-HARNESS";
+pub(crate) const HARNESS_CONNECTION_PREFIX: &str = "THIRDSHIFT-INVOCATION ";
+pub(crate) const HARNESS_RELAY_BASE: u16 = 10000;
 
 impl Guard {
     /// The socket path to bind into the sandbox: a short directory of its
@@ -235,6 +342,10 @@ impl Guard {
     /// and never fits deep under an Experiment's folder.
     pub(crate) fn socket_path(&self) -> std::path::PathBuf {
         self.dir.path().join("proxy.sock")
+    }
+
+    pub(crate) fn accounting(&self) -> Accounting {
+        self.accounting.lock().unwrap().clone()
     }
 }
 
@@ -268,10 +379,12 @@ fn start_with(allowed: &[String], network: impl Network + 'static) -> Result<Gua
     listener
         .set_nonblocking(true)
         .context("sandbox failed to start: could not listen without blocking")?;
+    let accounting = Arc::new(Mutex::new(Accounting::default()));
     let shared = Arc::new(Shared {
         allowed: allowed.to_vec(),
         local: network.local_addresses(),
         network: Box::new(network),
+        accounting: Arc::clone(&accounting),
     });
     let shutdown = Arc::new(AtomicBool::new(false));
     let thread = std::thread::Builder::new()
@@ -285,6 +398,7 @@ fn start_with(allowed: &[String], network: impl Network + 'static) -> Result<Gua
         dir,
         shutdown,
         thread: Some(thread),
+        accounting,
     })
 }
 
@@ -294,6 +408,7 @@ struct Shared {
     allowed: Vec<String>,
     local: Vec<IpAddr>,
     network: Box<dyn Network>,
+    accounting: Arc<Mutex<Accounting>>,
 }
 
 /// Accept connections until `shutdown` is set.
@@ -333,7 +448,42 @@ fn serve_one(mut stream: std::os::unix::net::UnixStream, shared: &Shared) {
     let Some(head) = read_head(&mut stream) else {
         return;
     };
-    let decision = decide(&head, shared);
+    if let Some(harness) = head
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix(&format!("{HARNESS_REGISTER_METHOD} ")))
+        .and_then(|line| line.strip_suffix(" HTTP/1.1"))
+        .and_then(Harness::named)
+    {
+        let mut accounting = shared.accounting.lock().unwrap();
+        if accounting.harness_invocations.len() >= usize::from(u16::MAX - HARNESS_RELAY_BASE) {
+            return;
+        }
+        accounting.harness_invocations.push(HarnessInvocation {
+            harness,
+            provider_connections: 0,
+        });
+        let _ = writeln!(stream, "{}", accounting.harness_invocations.len());
+        return;
+    }
+    let (invocation, head) = if let Some(tagged) = head.strip_prefix(HARNESS_CONNECTION_PREFIX) {
+        let Some((id, head)) = tagged.split_once('\n') else {
+            return;
+        };
+        let Some(index) = id
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|id| id.checked_sub(1))
+            .filter(|index| *index < shared.accounting.lock().unwrap().harness_invocations.len())
+        else {
+            return;
+        };
+        (Some(index), head)
+    } else {
+        (None, head.as_str())
+    };
+    let decision = decide(head, shared);
     if let Decision::Refuse { status, message } = &decision {
         eprintln!("thirdshift proxy: refused CONNECT {message} ({status})");
     }
@@ -341,6 +491,13 @@ fn serve_one(mut stream: std::os::unix::net::UnixStream, shared: &Shared) {
         Decision::Refuse { .. } => None,
         Decision::Tunnel(request) => dial(request, shared.network.as_ref()),
     };
+    if tunnel.is_some() {
+        let mut accounting = shared.accounting.lock().unwrap();
+        accounting.provider_connections += 1;
+        if let Some(index) = invocation {
+            accounting.harness_invocations[index].provider_connections += 1;
+        }
+    }
     let (status, body) = match (&decision, &tunnel) {
         (Decision::Tunnel(_), Some(_)) => ("200 Connection Established".to_string(), None),
         (Decision::Tunnel(request), None) => (
@@ -888,6 +1045,77 @@ mod tests {
             "GET https://api.anthropic.com/ HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n",
         );
         assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
+        assert_eq!(guard.accounting().provider_connections, 0);
+    }
+
+    #[test]
+    fn accounting_distinguishes_harness_invocations_from_direct_provider_calls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let guard = start_with(
+            &["api.anthropic.com".to_string()],
+            LocalProvider(listener.local_addr().unwrap()),
+        )
+        .unwrap();
+        for (harness, expected) in [("claude", "1"), ("codex", "2"), ("claude", "3")] {
+            assert_eq!(
+                connect_status(
+                    &guard.socket_path(),
+                    &format!("{HARNESS_REGISTER_METHOD} {harness} HTTP/1.1\r\n\r\n"),
+                ),
+                expected
+            );
+        }
+        // More than one provider connection may belong to a single session.
+        for invocation in [Some(1), Some(1), Some(2), None] {
+            let prefix = invocation.map_or_else(String::new, |id| {
+                format!("{HARNESS_CONNECTION_PREFIX}{id}\n")
+            });
+            assert_eq!(
+                connect_status(
+                    &guard.socket_path(),
+                    &format!("{prefix}CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n"),
+                ),
+                "HTTP/1.1 200 Connection Established"
+            );
+            drop(listener.accept().unwrap());
+        }
+        assert_eq!(
+            connect_status(
+                &guard.socket_path(),
+                &format!("{HARNESS_CONNECTION_PREFIX}3\nCONNECT github.com:443 HTTP/1.1\r\n\r\n"),
+            ),
+            "HTTP/1.1 403 Forbidden"
+        );
+        let accounting = guard.accounting();
+        assert_eq!(accounting.provider_connections, 4);
+        assert_eq!(
+            accounting
+                .harness_invocations
+                .iter()
+                .map(|invocation| (invocation.harness, invocation.provider_connections))
+                .collect::<Vec<_>>(),
+            [
+                (Harness::Claude, 2),
+                (Harness::Codex, 1),
+                (Harness::Claude, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_provider_dials_do_not_create_accounting_gaps() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let guard = start_with(&["api.anthropic.com".to_string()], LocalProvider(address)).unwrap();
+        assert_eq!(
+            connect_status(
+                &guard.socket_path(),
+                "CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n",
+            ),
+            "HTTP/1.1 502 Bad Gateway"
+        );
+        assert_eq!(guard.accounting().provider_connections, 0);
     }
 
     #[test]

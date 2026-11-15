@@ -6,7 +6,8 @@
 //! that sends no email, nor `update`, `version` or
 //! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
 //! The same Credentials also keep `claude.setup_token`, `opencode.api_key`
-//! and per-provider OpenCode keys under `[opencode.keys]`, reserved for
+//! per-provider OpenCode keys under `[opencode.keys]`, and direct-SDK keys
+//! under `[providers]`, reserved for
 //! Trials; ordinary Runs never receive them.
 //! Fleet pairing stores holder tokens under `[fleet]`, keyed by entry name,
 //! and report destinations their `report` tokens under `[report]`.
@@ -97,6 +98,7 @@ struct Secrets {
     key: Option<String>,
     claude_setup_token: Option<String>,
     opencode: OpenCodeKeys,
+    providers: BTreeMap<crate::proxy::Provider, String>,
     fleet: BTreeMap<String, String>,
     report: BTreeMap<String, String>,
 }
@@ -183,6 +185,10 @@ impl Credentials {
     /// missing key fails an OpenCode Trial before its session.
     pub(crate) fn opencode_keys(&self) -> OpenCodeKeys {
         self.secrets.opencode.clone()
+    }
+
+    pub(crate) fn provider_key(&self, provider: crate::proxy::Provider) -> Option<&str> {
+        self.secrets.providers.get(&provider).map(String::as_str)
     }
 
     pub fn has_fleet_token(&self, name: &str) -> bool {
@@ -329,7 +335,7 @@ fn path() -> Result<PathBuf> {
 
 /// `resend.key` in `text`, the contents of `file`, if it is there and not
 /// empty. Also accepts `claude.setup_token`, `opencode.api_key` and the
-/// `[opencode.keys]` table, reserved for Trials. Any other section or key is
+/// `[opencode.keys]` and `[providers]` tables, reserved for Trials. Any other section or key is
 /// an error, as in the User config.
 fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let table: Table = text
@@ -338,10 +344,11 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let mut found = Secrets::default();
     for (section, value) in &table {
         let settings = match (section.as_str(), value) {
-            ("resend" | "claude" | "opencode" | "fleet" | "report", Value::Table(settings)) => {
-                settings
-            }
-            ("resend" | "claude" | "opencode" | "fleet" | "report", _) => {
+            (
+                "resend" | "claude" | "opencode" | "fleet" | "report" | "providers",
+                Value::Table(settings),
+            ) => settings,
+            ("resend" | "claude" | "opencode" | "fleet" | "report" | "providers", _) => {
                 bail!("{section} must be the section [{section}] in {file}")
             }
             (_, Value::Table(_)) => bail!("unknown section [{section}] in {file}"),
@@ -349,6 +356,14 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
         };
         for (key, value) in settings {
             match (section.as_str(), key.as_str(), value) {
+                ("providers", name, Value::String(key)) => {
+                    let provider = serde_json::from_value(serde_json::json!(name))
+                        .with_context(|| format!("unknown Trial provider {name} in {file}"))?;
+                    if let Some(key) = nonempty(key) {
+                        found.providers.insert(provider, key);
+                    }
+                }
+                ("providers", _, _) => bail!("provider keys must be quoted strings in {file}"),
                 ("fleet", name, Value::String(token)) => {
                     if let Some(token) = nonempty(token) {
                         found.fleet.insert(name.to_owned(), token);

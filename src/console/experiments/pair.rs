@@ -156,14 +156,20 @@ fn revealed(page: &PairPage) -> String {
         return String::new();
     };
     let mut html = String::from("<section aria-label=\"Revealed\"><h2>Revealed</h2><dl>");
-    for (label, arm, setup) in [
-        ("A", reveal.a, &reveal.a_setup),
-        ("B", reveal.b, &reveal.b_setup),
+    for (label, arm, setup, runner) in [
+        ("A", reveal.a, &reveal.a_setup, reveal.a_runner.as_ref()),
+        ("B", reveal.b, &reveal.b_setup, reveal.b_runner.as_ref()),
     ] {
         html.push_str(&format!(
             "<dt>Change {label}</dt><dd>{}</dd>",
             esc(&pairwise::revealed_side(arm, setup))
         ));
+        if setup.runner.is_some() {
+            html.push_str(&format!(
+                "<dd>{}</dd>",
+                super::setup::runner_details(setup, runner)
+            ));
+        }
     }
     html.push_str(&format!(
         "</dl><h3>Grader panel</h3><p>{}</p><h3>Every reader's calls</h3><ul>",

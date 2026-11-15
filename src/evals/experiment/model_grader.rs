@@ -54,6 +54,13 @@ impl Grader {
 /// Fix the Grader before Trials can change PATH or a later resume loads a
 /// different User config. Reuse an Arm's pinned executable when appropriate.
 pub(super) fn prepare(experiment: &store::Stored, settings: &Settings) -> Result<()> {
+    if experiment
+        .tasks
+        .iter()
+        .all(|task| task.manifest.session == crate::evals::format::Session::Process)
+    {
+        return Ok(());
+    }
     let path = experiment.directory.join("grader.json");
     if path.exists() {
         return Ok(());
@@ -80,8 +87,9 @@ pub(super) fn prepare(experiment: &store::Stored, settings: &Settings) -> Result
     let prepared = description.prepared.as_ref().context("Arms not prepared")?;
     let harness = [&prepared.baseline, &prepared.candidate]
         .into_iter()
-        .find(|arm| arm.harness.name == choice.harness.name())
-        .map(|arm| Ok(arm.harness.clone()))
+        .filter_map(|arm| arm.harness.as_ref())
+        .find(|harness| harness.name == choice.harness.name())
+        .map(|harness| Ok(harness.clone()))
         .unwrap_or_else(|| arms::fixed_harness(choice.harness))?;
     store::write(
         &path,
@@ -108,6 +116,13 @@ struct Trial {
 }
 
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
+    if experiment
+        .tasks
+        .iter()
+        .all(|task| task.manifest.session == crate::evals::format::Session::Process)
+    {
+        return Ok(());
+    }
     let grader: Grader =
         serde_json::from_slice(&fs::read(experiment.directory.join("grader.json"))?)?;
     // Machine caps are read live, not fixed with the Bar.

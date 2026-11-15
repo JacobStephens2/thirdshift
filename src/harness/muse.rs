@@ -63,10 +63,16 @@ impl Adapter for Muse {
         let mut invocation = self.code_review_session(choice, resume, prompt);
         // Before the prompt, which always comes last.
         let at = invocation.args.len() - 1;
+        invocation.args.splice(
+            at..at,
+            self.trial_web_restrictions()
+                .iter()
+                .map(|arg| arg.to_string()),
+        );
         invocation
-            .args
-            .splice(at..at, ["--disable-web-tools".to_string()]);
-        invocation
+    }
+    fn trial_web_restrictions(&self) -> &'static [&'static str] {
+        &["--disable-web-tools"]
     }
     fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
         let settled = check_model_and_effort(

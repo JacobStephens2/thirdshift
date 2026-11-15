@@ -2,11 +2,13 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 pub(crate) mod approval;
 mod arms;
+pub(crate) use arms::Runner;
 pub(crate) mod bug_origin;
+pub mod check_runner;
 pub(crate) mod experiment;
 mod format;
 mod import;
@@ -37,9 +39,15 @@ pub enum Action {
     },
     PrepareArms {
         repository: PathBuf,
-        arms: [arms::Requested; 2],
+        arms: Box<[arms::Requested; 2]>,
         record: PathBuf,
     },
+    PrepareSelectedArms {
+        repository: PathBuf,
+        options: Box<experiment::Options>,
+        record: PathBuf,
+    },
+    CheckRunner(check_runner::Request),
 }
 
 pub fn parse(args: &[String]) -> Result<Action> {
@@ -87,11 +95,26 @@ pub fn parse(args: &[String]) -> Result<Action> {
                 destination: destination.into(),
             })
         }
+        [action, runner, options @ ..] if action == "check-runner" => {
+            check_runner_args(runner, options)
+        }
         [action, repository, base] if action == "verify" => {
             format::commit_id(base)?;
             Ok(Action::Verify {
                 repository: repository.into(),
                 base: base.clone(),
+            })
+        }
+        [action, repository, record, options @ ..]
+            if action == "prepare-arms"
+                && options.iter().any(|flag| {
+                    matches!(flag.as_str(), "--baseline-runner" | "--candidate-runner")
+                }) =>
+        {
+            Ok(Action::PrepareSelectedArms {
+                repository: repository.into(),
+                record: record.into(),
+                options: Box::new(experiment::parse(options)?),
             })
         }
         [
@@ -111,14 +134,47 @@ pub fn parse(args: &[String]) -> Result<Action> {
             arms::Requested::options(&mut arms, options)?;
             Ok(Action::PrepareArms {
                 repository: repository.into(),
-                arms,
+                arms: Box::new(arms),
                 record: record.into(),
             })
         }
         _ => bail!(
-            "usage: thirdshift evals list | approve <suite> <task> [--json] | import-replays | propose-process <repository> [--limit <1..100>] | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
+            "usage: thirdshift evals list | approve <suite> <task> [--json] | import-replays | propose-process <repository> [--limit <1..100>] | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | check-runner <name-or-file.toml> [--suite <suite> --task <task>] [--json] | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
         ),
     }
+}
+
+fn check_runner_args(runner: &str, options: &[String]) -> Result<Action> {
+    let (mut suite, mut task, mut json) = (None, None, false);
+    let mut options = options.iter();
+    while let Some(flag) = options.next() {
+        let slot = match flag.as_str() {
+            "--json" if !json => {
+                json = true;
+                continue;
+            }
+            "--suite" if suite.is_none() => &mut suite,
+            "--task" if task.is_none() => &mut task,
+            _ => bail!(
+                "usage: thirdshift evals check-runner <name-or-file.toml> [--suite <suite> --task <task>] [--json]"
+            ),
+        };
+        let value = options
+            .next()
+            .with_context(|| format!("{flag} requires a value"))?;
+        format::name(value)?;
+        *slot = Some(value.clone());
+    }
+    let task = match (suite, task) {
+        (Some(suite), Some(task)) => Some((suite, task)),
+        (None, None) => None,
+        _ => bail!("a dry run needs both --suite and --task"),
+    };
+    Ok(Action::CheckRunner(check_runner::Request {
+        runner: runner.into(),
+        task,
+        json,
+    }))
 }
 
 pub fn execute(action: Action) -> Result<String> {
@@ -152,6 +208,13 @@ pub fn execute(action: Action) -> Result<String> {
                 &destination,
             )?)?)
         }
+        // The CLI prints a failed report before exiting 1; callers of this
+        // function get the same report as the error instead.
+        Action::CheckRunner(request) => {
+            let (report, ok) = check_runner::execute(&request)?;
+            anyhow::ensure!(ok, "{report}");
+            Ok(report)
+        }
         Action::Verify { repository, base } => {
             repository::verify(&repository, &base)?;
             Ok(r#"{"safe":true}"#.into())
@@ -162,7 +225,16 @@ pub fn execute(action: Action) -> Result<String> {
             record,
         } => Ok(serde_json::to_string_pretty(&arms::prepare(
             &repository,
-            arms,
+            *arms,
+            &record,
+        )?)?),
+        Action::PrepareSelectedArms {
+            repository,
+            options,
+            record,
+        } => Ok(serde_json::to_string_pretty(&experiment::prepare_arms(
+            &repository,
+            *options,
             &record,
         )?)?),
     }
