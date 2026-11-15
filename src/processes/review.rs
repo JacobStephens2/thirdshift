@@ -654,6 +654,7 @@ impl ReviewProcess {
             },
             interrupted: outcome == "interrupted",
             pr_url: Some(&pr.url),
+            release_url: None,
             advice: &[],
             base_fix: None,
             log: last_log.as_deref(),

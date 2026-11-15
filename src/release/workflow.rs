@@ -7,6 +7,23 @@ pub(super) struct Notes<'a> {
     pub trace: &'a mut Option<std::path::PathBuf>,
 }
 
+pub(super) struct Links<'a> {
+    pub pr_url: &'a mut Option<String>,
+    pub release_url: &'a mut Option<String>,
+}
+
+impl Links<'_> {
+    fn record_pull_request(&mut self, url: &str) {
+        *self.pr_url = Some(url.to_owned());
+        logs::pull_request(url);
+    }
+
+    fn record_release(&mut self, url: &str) {
+        *self.release_url = Some(url.to_owned());
+        logs::release_url(url);
+    }
+}
+
 pub(super) fn finish(
     git: &Git,
     github: &GitHub,
@@ -14,10 +31,10 @@ pub(super) fn finish(
     request: &Request<'_>,
     notes: &mut Notes<'_>,
     automatic: Option<Option<String>>,
-    pr_url: &mut Option<String>,
+    links: &mut Links<'_>,
 ) -> Result<()> {
     let mut label = None;
-    if !cut.published {
+    if !cut.published() {
         let same_tag = cut.tagged.as_deref() == Some(&cut.head);
         if cut.tagged.is_none() || cut.recut || !same_tag {
             let merged = match &cut.pr {
@@ -57,8 +74,7 @@ pub(super) fn finish(
             .pr
             .as_ref()
             .context("release tag has no bump pull request; restore or open its exact-bump PR")?;
-        *pr_url = Some(pr.url.clone());
-        logs::pull_request(&pr.url);
+        links.record_pull_request(&pr.url);
         let merged = github.pr_state(&pr.issue, &pr.url)? == PrState::Merged;
         if !same_tag || cut.tagged.is_none() {
             if !merged {
@@ -66,7 +82,7 @@ pub(super) fn finish(
                 ready(git, github, cut, request, notes, &mut label)?;
             }
             ensure!(
-                !github.release_published(&cut.tag())?,
+                github.release_published(&cut.tag())?.is_none(),
                 "{} was published while waiting; its tag will not be moved",
                 cut.tag()
             );
@@ -108,18 +124,22 @@ pub(super) fn finish(
             }
         }
         wait_for_release(github, &cut.head)?;
-        ensure!(
-            github.release_published(&cut.tag())?,
-            "release workflow succeeded but {} is not published; inspect GitHub Releases before retrying",
-            cut.tag()
-        );
+        let url = github.release_published(&cut.tag())?.with_context(|| {
+            format!(
+                "release workflow succeeded but {} is not published; inspect GitHub Releases before retrying",
+                cut.tag()
+            )
+        })?;
+        cut.release_url = Some(url);
+    }
+    if let Some(url) = &cut.release_url {
+        links.record_release(url);
     }
     let pr = cut
         .pr
         .as_ref()
         .context("published release has no bump PR; the Day shift must restore it")?;
-    *pr_url = Some(pr.url.clone());
-    logs::pull_request(&pr.url);
+    links.record_pull_request(&pr.url);
     if github.pr_state(&pr.issue, &pr.url)? == PrState::Merged {
         if let Some(old) = &cut.supersedes {
             github.close_superseded_release(old)?;

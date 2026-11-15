@@ -559,6 +559,10 @@ pub(crate) fn pull_request(url: &str) {
     record().pull_request(url);
 }
 
+pub(crate) fn release_url(url: &str) {
+    record().release_url(url);
+}
+
 /// Title of the target pull request, available while the Command is running.
 pub(crate) fn pull_request_title(title: Option<String>) {
     record().pull_request_title(title);

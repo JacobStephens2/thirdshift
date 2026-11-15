@@ -840,3 +840,135 @@ fn token_input_is_hidden_on_a_terminal_and_echo_is_restored() {
     let saved: toml::Table = scenario.credentials().unwrap().parse().unwrap();
     assert_eq!(saved["fleet"]["remote"].as_str(), Some(token.as_str()));
 }
+
+#[test]
+fn status_keeps_fleet_release_urls_safe_and_on_the_repository_the_row_names() {
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(remote_home.path());
+    let release_dir = remote_home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/release");
+    fs::create_dir_all(&release_dir).unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    let base_record = serde_json::json!({
+        "version": 1,
+        "kind": "Release run",
+        "name": "acme/widgets#v0.2.0",
+        "repository": "acme/widgets",
+        "issue": null,
+        "hostname": "peer-host",
+        "process_id": 0,
+        "process_start": "gone",
+        "harness": "claude",
+        "model": null,
+        "effort": null,
+        "started_at": now,
+        "ended_at": now,
+        "outcome": "merged",
+        "cause": null,
+        "issue_branch": null,
+        "pull_request": "https://github.com/acme/widgets/pull/18",
+        "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0",
+        "stages": []
+    });
+    fs::write(
+        release_dir.join("1-20261115T120000-0500.command.json"),
+        serde_json::to_vec(&base_record).unwrap(),
+    )
+    .unwrap();
+    let mut doc = api::cli(remote_home.path(), &["status", "--all", "--json"]);
+    let template = doc["commands"][0].clone();
+
+    let mut off_repo = template.clone();
+    off_repo["name"] = json!("acme/widgets#v0.2.1");
+    off_repo["release_url"] = json!("https://github.com/attacker/widgets/releases/tag/v0.2.1");
+
+    let mut control_escape = template.clone();
+    control_escape["name"] = json!("acme/widgets#v0.2.2");
+    control_escape["release_url"] = json!(
+        "https://evil.example/tag\u{1b}]0;fixture-title\u{7}\u{1b}[2J\nInjected: forged-release"
+    );
+
+    let mut non_release_kind = template.clone();
+    non_release_kind["kind"] = json!("Review run");
+    non_release_kind["name"] = json!("acme/widgets#v0.2.3");
+    non_release_kind["release_url"] = json!("https://github.com/acme/widgets/releases/tag/v0.2.3");
+
+    doc["commands"] = json!([template, off_repo, control_escape, non_release_kind]);
+    let status_body = doc.to_string();
+    let whoami_body = json!({
+        "version": 1,
+        "api_version": "v1",
+        "hostname": "peer-host",
+        "thirdshift_version": "0.33.0",
+        "scopes": ["read"],
+        "identity": {"kind": "token", "holder": "watcher"}
+    })
+    .to_string();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line != "\r\n" {
+                line.clear();
+            }
+            let path = request_line.split_whitespace().nth(1).unwrap_or("");
+            let body = if path.starts_with("/api/v1/whoami") {
+                whoami_body.as_str()
+            } else {
+                status_body.as_str()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+
+    let local_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    let paired = add(local_home.path(), "remote", &address, "watcher-token");
+    assert!(paired.status.success(), "{paired:?}");
+
+    let output = Command::new(Path::new(env!("CARGO_BIN_EXE_thirdshift")))
+        .env("HOME", local_home.path())
+        .args(["status", "--all", "--machine", "remote"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+        "valid Release run link missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("attacker/widgets"),
+        "off-repository release_url printed: {stdout}"
+    );
+    assert!(
+        !stdout.contains(['\u{1b}', '\u{7}']) && !stderr.contains(['\u{1b}', '\u{7}']),
+        "control characters leaked from release_url: stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("Injected:")),
+        "forged line leaked from release_url: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("https://github.com/acme/widgets/releases/tag/v0.2.3"),
+        "non-Release run printed release_url: {stdout}"
+    );
+}

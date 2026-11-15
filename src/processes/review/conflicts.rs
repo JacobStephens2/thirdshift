@@ -85,6 +85,7 @@ pub(super) fn eligible(
         ended: Err(Cause::of(&conflict.error)),
         interrupted: false,
         pr_url: Some(&pr.url),
+        release_url: None,
         advice: &[],
         base_fix: None,
         log: None,

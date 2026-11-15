@@ -829,6 +829,7 @@ fn notify(
                         | crate::run::Resolution::BaseCiUnchanged { .. } => None,
                     })
             }),
+        release_url: failed.and_then(|failed| failed.release_url.as_deref()),
         advice: &[],
         base_fix: None,
         log: failed.and_then(|failed| failed.log.as_deref()),

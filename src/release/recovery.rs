@@ -14,7 +14,7 @@ pub(super) struct Cut {
     pub head: String,
     pub pr: Option<crate::review::PullRequestUrl>,
     pub tagged: Option<String>,
-    pub published: bool,
+    pub release_url: Option<String>,
     pub recut: bool,
     pub supersedes: Option<String>,
     pub expected_branch: Option<String>,
@@ -27,6 +27,9 @@ impl Cut {
     }
     pub fn tag(&self) -> String {
         format!("v{}", self.version)
+    }
+    pub fn published(&self) -> bool {
+        self.release_url.is_some()
     }
 
     pub fn commit(&mut self, git: &Git) -> Result<()> {
@@ -114,13 +117,13 @@ impl Cut {
 
     pub fn push(&self, git: &Git, github: &GitHub) -> Result<()> {
         ensure!(
-            !github.release_published(&self.tag())?,
+            github.release_published(&self.tag())?.is_none(),
             "{} is already published; its branch and tag will not be moved",
             self.tag()
         );
         if let Some(old) = &self.supersedes {
             ensure!(
-                !github.release_published(&format!("v{old}"))?,
+                github.release_published(&format!("v{old}"))?.is_none(),
                 "superseded release v{old} was published; retry discovery before continuing"
             );
         }
@@ -261,12 +264,12 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
     for (parsed, version) in tags {
         let tag = format!("v{version}");
         match github.release_published(&tag) {
-            Ok(true) => {
+            Ok(Some(_)) => {
                 previous = Some(tag);
                 boundary = Some(parsed);
                 break;
             }
-            Ok(false) => {
+            Ok(None) => {
                 let head = git_run(git, &["rev-parse", &format!("{tag}^{{commit}}")])?;
                 live.entry(parsed)
                     .or_insert_with(|| Unfinished::new(&version))
@@ -373,7 +376,7 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
     };
     let result = (|| -> Result<Cut> {
         let tag = format!("v{version}");
-        let published = github.release_published(&tag)?;
+        let release_url = github.release_published(&tag)?;
         let expected_tag =
             git_optional(git, &["rev-parse", "--verify", &format!("refs/tags/{tag}")])?;
         let tagged = if expected_tag.is_some() {
@@ -415,7 +418,7 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
             head,
             pr,
             tagged,
-            published,
+            release_url,
             recut: false,
             supersedes: None,
             expected_branch: branch_head,
@@ -423,7 +426,7 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
         };
         cut.validate(git, github)?;
         if cut.tagged.is_none()
-            && !cut.published
+            && !cut.published()
             && let Some(previous) = &cut.previous
             && git_run(git, &["merge-base", previous, &cut.base])?
                 != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
@@ -432,10 +435,10 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
         }
         if let Some(tagged) = cut.tagged.clone() {
             ensure!(
-                !published || tagged == cut.head,
+                !cut.published() || tagged == cut.head,
                 "published tag differs from the release PR; never move a published tag"
             );
-            if !published {
+            if !cut.published() {
                 let run = github.release_push_run("release.yml", "", &tagged)?;
                 if tagged != cut.head {
                     ensure!(
@@ -566,7 +569,7 @@ fn pinned_cut(
         head: String::new(),
         pr: None,
         tagged: None,
-        published: false,
+        release_url: None,
         recut: false,
         supersedes: None,
         expected_branch: None,
@@ -586,7 +589,7 @@ pub(super) fn ensure_previous(git: &Git, github: &GitHub, previous: Option<&str>
         .collect::<Vec<_>>();
     versions.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, tag) in versions {
-        if github.release_published(&tag)? {
+        if github.release_published(&tag)?.is_some() {
             ensure!(
                 Some(tag.as_str()) == previous,
                 "a newer published release {tag} appeared; retry release discovery"

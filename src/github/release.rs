@@ -69,7 +69,7 @@ impl GitHub {
     }
     /// Only a verified missing/draft Release is safe to re-cut. Authentication,
     /// transport errors and malformed responses must never authorize a tag move.
-    pub(crate) fn release_published(&self, tag: &str) -> Result<bool> {
+    pub(crate) fn release_published(&self, tag: &str) -> Result<Option<String>> {
         let args = [
             "release",
             "view",
@@ -84,7 +84,7 @@ impl GitHub {
             if output.status.code() == Some(1)
                 && String::from_utf8_lossy(&output.stderr).trim() == "release not found"
             {
-                return Ok(false);
+                return Ok(None);
             }
             bail!(
                 "cannot verify GitHub Release publication for {tag}: {}",
@@ -95,11 +95,11 @@ impl GitHub {
         let draft = value["isDraft"]
             .as_bool()
             .context("release publication response has no isDraft")?;
-        anyhow::ensure!(
-            value["url"].as_str().is_some_and(|url| !url.is_empty()),
-            "release publication response has no URL"
-        );
-        Ok(!draft)
+        let url = value["url"]
+            .as_str()
+            .filter(|url| !url.is_empty())
+            .context("release publication response has no URL")?;
+        Ok((!draft).then(|| url.to_owned()))
     }
 
     pub(crate) fn release_prs(&self) -> Result<Vec<ReleasePr>> {

@@ -204,6 +204,7 @@ pub(crate) fn account_tickets(
             Err(FailedRun {
                 error: interrupted_or(error, interrupted),
                 pr_url: outside.spec_pr_url(),
+                release_url: None,
                 log: failed_log,
                 interrupted,
                 ticket_lines,
@@ -994,6 +995,7 @@ mod tests {
                 Err(error) => Err(FailedRun {
                     error,
                     pr_url: Some(SPEC_PR.to_string()),
+                    release_url: None,
                     log: Some(PathBuf::from(DELIVERY_LOG)),
                     interrupted: false,
                     recovery: None,

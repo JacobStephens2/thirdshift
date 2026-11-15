@@ -54,6 +54,7 @@ pub(crate) struct Row {
     pub subject_url: Option<String>,
     pub target_pr: Option<crate::review::PullRequestUrl>,
     pub base_branch: Option<String>,
+    pub release_link: Option<ReleaseLink>,
     pub title: String,
     pub command_kind: String,
     pub state: String,
@@ -75,6 +76,65 @@ pub(crate) struct Row {
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
     pub sessions: Vec<std::path::PathBuf>,
+}
+
+/// Verified same-repository GitHub Release link shown beside a Release run's bump PR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReleaseLink {
+    pub url: String,
+    pub version: String,
+}
+
+impl ReleaseLink {
+    fn parse(url: &str, repository: &str) -> Option<Self> {
+        if url
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+            || !crate::github::valid_repo_slug(repository)
+            || !super::target::is_safe_github_url(url)
+        {
+            return None;
+        }
+        let parsed = reqwest::Url::parse(url).ok()?;
+        let segments: Vec<_> = parsed.path_segments()?.collect();
+        let [owner, repo, "releases", "tag", tag] = segments.as_slice() else {
+            return None;
+        };
+        if owner.is_empty()
+            || repo.is_empty()
+            || !format!("{owner}/{repo}").eq_ignore_ascii_case(repository)
+        {
+            return None;
+        }
+        let version = tag.strip_prefix('v')?;
+        let valid_version = !version.is_empty()
+            && version
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_digit())
+            && !version.starts_with('.')
+            && !version.ends_with('.')
+            && !version.contains("..")
+            && version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'));
+        valid_version.then(|| Self {
+            url: parsed.as_str().to_owned(),
+            version: version.to_owned(),
+        })
+    }
+}
+
+/// Validate a Command's optional published release URL against its kind and repository.
+pub(super) fn command_release_link(
+    kind: &str,
+    release_url: Option<&str>,
+    repository: &str,
+) -> Option<ReleaseLink> {
+    (kind == "Release run")
+        .then_some(release_url)
+        .flatten()
+        .and_then(|url| ReleaseLink::parse(url, repository))
 }
 
 #[derive(Clone, Copy)]
@@ -120,12 +180,20 @@ impl Row {
         if !matches!(kind, "Review run" | "Triage run") {
             return;
         }
-        let Ok(pr) = crate::review::PullRequestUrl::parse(&self.pull_request) else {
-            return;
-        };
-        if !pr.issue.repo_slug().eq_ignore_ascii_case(repository) {
+        self.set_pr_subject(repository);
+    }
+
+    fn present_release_target(&mut self, kind: &str, repository: &str) {
+        if kind != "Release run" || self.release_link.is_none() {
             return;
         }
+        self.set_pr_subject(repository);
+    }
+
+    fn set_pr_subject(&mut self, repository: &str) {
+        let Some(pr) = super::target::validated_pr_url(&self.pull_request, repository) else {
+            return;
+        };
         self.subject = format!("{repository}#{}", pr.issue.number);
         self.subject_url = Some(pr.url);
         // The subject now carries the PR, including for a live problem row.
@@ -352,6 +420,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         command_log: Option<std::path::PathBuf>,
         cause: Option<String>,
         pull_request: Option<String>,
+        release_url: Option<String>,
         base_branch: Option<String>,
         harness: Option<String>,
         model: Option<String>,
@@ -432,6 +501,8 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             group.state_word(kind, value["stopping"] == true, &facts.state)
         })
         .to_owned();
+    let release_link =
+        command_release_link(&facts.kind, facts.release_url.as_deref(), &facts.repository);
     let mut row = Row {
         order: group
             .unwrap_or(Group::History)
@@ -479,6 +550,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .and_then(|url| crate::review::PullRequestUrl::parse(url).ok())
             .filter(|pr| pr.issue.repo_slug().eq_ignore_ascii_case(&facts.repository)),
         base_branch: facts.base_branch.filter(|_| live_target),
+        release_link,
         title,
         command_kind: process.map_or_else(
             || crate::logs::display_name(&facts.kind).to_owned(),
@@ -563,6 +635,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     } else if group == Some(Group::NeedsYou) {
         row.present_needs_you_target(&facts.kind, &facts.repository);
     }
+    row.present_release_target(&facts.kind, &facts.repository);
     // A record can name one repository and carry another repository's issue
     // URL. The visible subject stays; the href has to name that same record.
     bind_subject_link(&mut row);
@@ -743,6 +816,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 subject_url: issue_url(command.issue.as_ref()),
                 target_pr: None,
                 base_branch: None,
+                release_link: None,
                 title,
                 command_kind: crate::logs::display_name(&command.kind).to_owned(),
                 state: command.state.into(),
@@ -1236,5 +1310,359 @@ mod tests {
             ready[0].subject_url.as_deref(),
             Some("https://github.com/acme/widgets/pull/7")
         );
+    }
+
+    #[test]
+    fn a_published_release_row_links_both_its_bump_pr_and_release() {
+        let now = chrono::Local::now();
+        let make = |group: &str,
+                    needs_you_kind: Option<&str>,
+                    kind: &str,
+                    name: &str,
+                    pr: Option<&str>,
+                    release_url: Option<&str>| {
+            serde_json::json!({
+                "source": "command_record",
+                "repository": "acme/widgets",
+                "kind": kind,
+                "name": name,
+                "group": group,
+                "needs_you_kind": needs_you_kind,
+                "state": if outcome_is_ended(group) { "ended" } else { "failed" },
+                "started_at": "2026-11-15T08:00:00Z",
+                "ended_at": "2026-11-15T08:05:00Z",
+                "outcome": if group == "needs you" { "failed" } else { "merged" },
+                "pull_request": pr,
+                "release_url": release_url,
+            })
+        };
+        fn outcome_is_ended(group: &str) -> bool {
+            matches!(group, "done" | "resolved" | "history")
+        }
+
+        let done = super::present(
+            &make(
+                "done",
+                None,
+                "Release run",
+                "release-20261115T080000",
+                Some("https://github.com/acme/widgets/pull/18"),
+                Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(done.subject, "acme/widgets#18");
+        assert_eq!(
+            done.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/18")
+        );
+        assert_eq!(
+            done.release_link,
+            Some(super::ReleaseLink {
+                url: "https://github.com/acme/widgets/releases/tag/v0.2.0".into(),
+                version: "0.2.0".into(),
+            })
+        );
+        assert_eq!(done.target_pr, None);
+
+        let needs = super::present(
+            &make(
+                "needs you",
+                Some("Failed"),
+                "Release run",
+                "release-20261115T070000",
+                Some("https://github.com/acme/widgets/pull/17"),
+                Some("https://github.com/acme/widgets/releases/tag/v0.1.9-rc.1+build.4"),
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(needs.subject, "acme/widgets#17");
+        assert_eq!(
+            needs.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/17")
+        );
+        assert_eq!(
+            needs.release_link,
+            Some(super::ReleaseLink {
+                url: "https://github.com/acme/widgets/releases/tag/v0.1.9-rc.1+build.4".into(),
+                version: "0.1.9-rc.1+build.4".into(),
+            })
+        );
+
+        for group in ["resolved", "history"] {
+            let preserved = super::present(
+                &make(
+                    group,
+                    None,
+                    "Release run",
+                    "release-20261115T063000",
+                    Some("https://github.com/acme/widgets/pull/18"),
+                    Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+                ),
+                now,
+            )
+            .unwrap();
+            assert_eq!(preserved.subject, "acme/widgets#18", "{group}");
+            assert_eq!(
+                preserved.subject_url.as_deref(),
+                Some("https://github.com/acme/widgets/pull/18"),
+                "{group}"
+            );
+            assert_eq!(
+                preserved.release_link,
+                Some(super::ReleaseLink {
+                    url: "https://github.com/acme/widgets/releases/tag/v0.2.0".into(),
+                    version: "0.2.0".into(),
+                }),
+                "{group}"
+            );
+        }
+
+        let unlinked = super::present(
+            &make(
+                "done",
+                None,
+                "Release run",
+                "release-20261115T060000",
+                Some("https://github.com/acme/widgets/pull/16"),
+                None,
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(unlinked.subject, "release-20261115T060000 on acme/widgets");
+        assert_eq!(unlinked.subject_url, None);
+        assert_eq!(unlinked.release_link, None);
+
+        let without_pr = super::present(
+            &make(
+                "needs you",
+                Some("Failed"),
+                "Release run",
+                "release-20261115T050000",
+                None,
+                Some("https://github.com/acme/widgets/releases/tag/v0.1.8"),
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            without_pr.subject,
+            "release-20261115T050000 on acme/widgets"
+        );
+        assert_eq!(without_pr.subject_url, None);
+        assert_eq!(
+            without_pr.release_link,
+            Some(super::ReleaseLink {
+                url: "https://github.com/acme/widgets/releases/tag/v0.1.8".into(),
+                version: "0.1.8".into(),
+            })
+        );
+
+        let ticket = super::present(
+            &serde_json::json!({
+                "repository": "acme/widgets",
+                "kind": "Run",
+                "name": "7",
+                "group": "done",
+                "state": "ended",
+                "started_at": "2026-11-15T08:00:00Z",
+                "ended_at": "2026-11-15T08:05:00Z",
+                "outcome": "merged",
+                "issue": {
+                    "number": 7,
+                    "url": "https://github.com/acme/widgets/issues/7",
+                    "title": "Fix bug"
+                },
+                "pull_request": "https://github.com/acme/widgets/pull/7",
+                "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0"
+            }),
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            ticket.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/7")
+        );
+        assert_eq!(ticket.release_link, None);
+    }
+
+    #[test]
+    fn a_fleet_release_link_stays_on_the_repository_the_row_names() {
+        use crate::config::console::fleet::Entry;
+
+        let command = |name: &str, kind: &str, pr: Option<&str>, release_url: Option<&str>| {
+            serde_json::json!({
+                "machine_name": "remote",
+                "record_path": format!("/tmp/{name}.command.json"),
+                "group": "needs you",
+                "landing": false,
+                "stopping": false,
+                "count": 1,
+                "repository": "acme/widgets",
+                "kind": kind,
+                "name": name,
+                "state": "failed",
+                "started_at": "2026-11-15T08:00:00Z",
+                "pull_request": pr,
+                "release_url": release_url
+            })
+        };
+        let mut commands = vec![
+            command(
+                "valid",
+                "Release run",
+                Some("https://github.com/acme/widgets/pull/18"),
+                Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+            ),
+            command(
+                "case-match",
+                "Release run",
+                Some("https://github.com/Acme/Widgets/pull/19"),
+                Some("https://github.com/Acme/Widgets/releases/tag/v0.2.1"),
+            ),
+            command(
+                "foreign-pr-and-release",
+                "Release run",
+                Some("https://github.com/attacker/widgets/pull/18"),
+                Some("https://github.com/attacker/widgets/releases/tag/v0.2.0"),
+            ),
+            command(
+                "valid-pr-foreign-release",
+                "Release run",
+                Some("https://github.com/acme/widgets/pull/22"),
+                Some("https://github.com/attacker/widgets/releases/tag/v0.2.2"),
+            ),
+            command(
+                "foreign-pr-valid-release",
+                "Release run",
+                Some("https://github.com/attacker/widgets/pull/23"),
+                Some("https://github.com/acme/widgets/releases/tag/v0.2.3"),
+            ),
+            command(
+                "non-release-kind",
+                "Review run",
+                Some("https://github.com/acme/widgets/pull/20"),
+                Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+            ),
+        ];
+        for (index, bad) in [
+            "http://github.com/acme/widgets/releases/tag/v0.2.0",
+            "https://github.com/acme/widgets/releases/tag/v0.2.0/",
+            "https://github.com/acme/widgets/releases/tag/v0.2.0?x=1",
+            "https://github.com/acme/widgets/releases/tag/v0.2.0#frag",
+            "https://github.com/acme/widgets/releases/download/v0.2.0/bin",
+            "https://github.com/acme/widgets/releases/tag/v",
+            "https://github.com/acme/widgets/releases/tag/latest",
+            "https://github.com/acme/widgets/releases/tag/v0.2..0",
+            "https://github.com/acme/widgets/releases/tag/v0.2.0.",
+            "https://github.com/acme/widgets/releases/tag/v0.2\n.0",
+            "https://github.com/acme/widgets/releases/tag/v0.2\u{1b}.0",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            commands.push(command(
+                &format!("bad-{index}"),
+                "Release run",
+                Some("https://github.com/acme/widgets/pull/21"),
+                Some(bad),
+            ));
+        }
+
+        let document: crate::logs::status::fleet::Document =
+            serde_json::from_value(serde_json::json!({
+                "version": 2,
+                "hostname": "remote-host",
+                "active_runs": 0,
+                "commands": commands,
+                "machines": []
+            }))
+            .unwrap();
+        let mut inbox = super::Inbox {
+            active_runs: 0,
+            sections: vec![super::Section {
+                group: "needs you",
+                title: "Needs you",
+                rows: Vec::new(),
+                references: Vec::new(),
+            }],
+            idle_passes: Vec::new(),
+            pass_starts: Vec::new(),
+            github_quota_wait: None,
+            plan_usage_banner: None,
+            warning: None,
+            github_warning: None,
+        };
+        inbox
+            .merge_remote(
+                &document,
+                &Entry {
+                    name: "remote".into(),
+                    address: "https://fleet.example".into(),
+                    hostname: None,
+                    thirdshift_version: None,
+                    scopes: Vec::new(),
+                    last_contact: None,
+                },
+                false,
+            )
+            .unwrap();
+
+        let rows = &inbox.sections[0].rows;
+        let row = |marker: &str| {
+            rows.iter()
+                .find(|row| row.selector.contains(marker))
+                .unwrap_or_else(|| panic!("missing {marker}"))
+        };
+        let valid = row("/valid.command.json");
+        assert_eq!(
+            valid.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/18")
+        );
+        assert_eq!(
+            valid.release_link.as_ref().map(|link| link.url.as_str()),
+            Some("https://github.com/acme/widgets/releases/tag/v0.2.0")
+        );
+        let case_match = row("/case-match.command.json");
+        assert_eq!(
+            case_match.subject_url.as_deref(),
+            Some("https://github.com/Acme/Widgets/pull/19")
+        );
+        assert_eq!(
+            case_match
+                .release_link
+                .as_ref()
+                .map(|link| link.version.as_str()),
+            Some("0.2.1")
+        );
+        let foreign = row("/foreign-pr-and-release.command.json");
+        assert_eq!(foreign.subject_url, None);
+        assert_eq!(foreign.release_link, None);
+        let valid_pr_foreign_release = row("/valid-pr-foreign-release.command.json");
+        assert_eq!(valid_pr_foreign_release.subject_url, None);
+        assert_eq!(valid_pr_foreign_release.release_link, None);
+        let foreign_pr_valid_release = row("/foreign-pr-valid-release.command.json");
+        assert_eq!(foreign_pr_valid_release.subject_url, None);
+        assert_eq!(
+            foreign_pr_valid_release
+                .release_link
+                .as_ref()
+                .map(|link| link.version.as_str()),
+            Some("0.2.3")
+        );
+        let review = row("/non-release-kind.command.json");
+        assert_eq!(
+            review.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/20")
+        );
+        assert_eq!(review.release_link, None);
+        for index in 0..9 {
+            let bad = row(&format!("/bad-{index}.command.json"));
+            assert_eq!(bad.subject_url, None, "bad-{index}");
+            assert_eq!(bad.release_link, None, "bad-{index}");
+        }
     }
 }

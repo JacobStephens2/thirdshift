@@ -542,6 +542,9 @@ fn body(
             text += &format!("Triage notes: {url}\n");
         }
     }
+    if let Some(release_url) = account.release_url {
+        text += &format!("Release:      {release_url}\n");
+    }
     // Security failure causes can quote private verifier work or Harness
     // diagnostics. Only fixed operational and safeguard categories are safe to send.
     if let Err(cause) = &account.ended
@@ -703,6 +706,7 @@ mod tests {
         let subject = Subject::ReleaseRun(Repo::of_origin("https://github.com/acme/widgets.git"));
         let ending = crate::command::Ending::Release(Ok(crate::release::Ended {
             pr_url: PR.into(),
+            release_url: "https://github.com/acme/widgets/releases/tag/v1.2.3".into(),
             version: "1.2.3".into(),
         }));
         let account = crate::run_ending::read(&ending).ok().unwrap();
@@ -711,9 +715,16 @@ mod tests {
         assert_eq!(line, "[thirdshift] acme/widgets Release run: merged");
         assert!(text.contains("Command:      Release run"), "{text}");
         assert!(text.contains("Release 1.2.3 published"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "Pull request: {PR}\nRelease:      https://github.com/acme/widgets/releases/tag/v1.2.3\n"
+            )),
+            "{text}"
+        );
 
         let ending = crate::command::Ending::Release(Err(crate::failed_run::FailedRun {
             pr_url: Some(PR.into()),
+            release_url: Some("https://github.com/acme/widgets/releases/tag/v1.2.3".into()),
             ..anyhow!("published, but merge failed").into()
         }));
         let account = crate::run_ending::read(&ending).ok().unwrap();
@@ -721,7 +732,22 @@ mod tests {
         let (line, text) = told(&subject, &account).unwrap();
         assert_eq!(line, "[thirdshift] acme/widgets Release run: failed");
         assert!(text.contains("published, but merge failed"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "Pull request: {PR}\nRelease:      https://github.com/acme/widgets/releases/tag/v1.2.3\n"
+            )),
+            "{text}"
+        );
+
+        let ending = crate::command::Ending::Release(Err(crate::failed_run::FailedRun {
+            pr_url: Some(PR.into()),
+            release_url: None,
+            ..anyhow!("bump checks failed").into()
+        }));
+        let account = crate::run_ending::read(&ending).ok().unwrap();
+        let (_, text) = told(&subject, &account).unwrap();
         assert!(text.contains(PR), "{text}");
+        assert!(!text.contains("Release:"), "{text}");
     }
 
     /// A merged Run's account.
@@ -731,6 +757,7 @@ mod tests {
             ended: Ok(format!("PR {PR} is merged")),
             interrupted: false,
             pr_url: Some(PR),
+            release_url: None,
             advice: &[],
             base_fix: None,
             log: Some(Path::new(LOG)),
@@ -756,6 +783,7 @@ mod tests {
             ended: Err(Cause::of(&anyhow!("{cause}"))),
             interrupted: false,
             pr_url: None,
+            release_url: None,
             advice: &[],
             base_fix: None,
             log: None,

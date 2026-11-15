@@ -84,7 +84,7 @@ fn non_empty(text: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn is_safe_github_url(raw: &str) -> bool {
+pub(super) fn is_safe_github_url(raw: &str) -> bool {
     reqwest::Url::parse(raw).is_ok_and(|parsed| {
         parsed.scheme() == "https"
             && parsed.host_str() == Some("github.com")
@@ -110,7 +110,7 @@ fn validated_issue_url(url: &str, repository: &str, expected_number: u64) -> Opt
         .filter(|parsed| parsed.number == expected_number && valid_repo_issue(parsed, repository))
 }
 
-fn validated_pr_url(url: &str, repository: &str) -> Option<PullRequestUrl> {
+pub(super) fn validated_pr_url(url: &str, repository: &str) -> Option<PullRequestUrl> {
     is_safe_github_url(url)
         .then(|| PullRequestUrl::parse(url).ok())
         .flatten()
