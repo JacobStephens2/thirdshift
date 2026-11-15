@@ -1552,3 +1552,73 @@ fn an_open_fork_pr_on_a_release_branch_name_does_not_block_releases() {
         Some(release.pr_head("release-0.2.0"))
     );
 }
+
+/// A fake summary Harness run by `interpreter` that replies `reply`, or
+/// `Host file readable` if it can read a file under `~/.nvm`. Returns the
+/// `~/.nvm` directory.
+fn nvm_probe_summary(release: &Release, interpreter: &str, reply: &str) -> std::path::PathBuf {
+    let nvm = release.root().join("home/.nvm");
+    fs::create_dir_all(&nvm).unwrap();
+    fs::write(nvm.join("host-only.txt"), "host file").unwrap();
+    let binary = release.bin().join("claude");
+    fs::remove_file(&binary).unwrap();
+    write_executable(
+        &binary,
+        &format!(
+            r#"#!{interpreter}
+if [ "$1 $2" = 'auth status' ]; then exit 0; fi
+cat >/dev/null
+if [ -r '{nvm}/host-only.txt' ]; then summary='Host file readable'; else summary='{reply}'; fi
+printf '%s\n' '{{"type":"system","subtype":"init","session_id":"release-summary-test"}}'
+printf '{{"type":"result","subtype":"success","is_error":false,"result":"%s"}}\n' "$summary"
+"#,
+            nvm = nvm.display()
+        ),
+    );
+    nvm
+}
+
+#[test]
+fn release_summary_sandbox_binds_no_host_toolchain_directories() {
+    let release = Release::new();
+    shipped(&release);
+    nvm_probe_summary(&release, "/bin/sh", "Sealed summary (#2).");
+    let output = with_input(
+        command(&release, "").arg("--patch").env_remove("NVM_DIR"),
+        "",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.1.1");
+    assert!(
+        body.contains("Sealed summary (#2)."),
+        "summary Session read a host toolchain file: {body}"
+    );
+}
+
+#[test]
+fn release_summary_sandbox_binds_only_node_for_an_npm_installed_harness() {
+    let release = Release::new();
+    shipped(&release);
+    // npm-installed: the Harness asks `env` for `node`, and a fake `node`
+    // under `~/.nvm` runs it as a shell script.
+    let nvm = nvm_probe_summary(&release, "/usr/bin/env node", "Node-run summary (#2).");
+    let node_bin = nvm.join("versions/node/v22.0.0/bin");
+    fs::create_dir_all(&node_bin).unwrap();
+    write_executable(&node_bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n");
+    let path = format!(
+        "{}:{}:{}",
+        release.bin().display(),
+        node_bin.display(),
+        std::env::var("PATH").unwrap()
+    );
+    let output = with_input(
+        command(&release, "")
+            .arg("--patch")
+            .env("PATH", path)
+            .env_remove("NVM_DIR"),
+        "",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.1.1");
+    assert!(body.contains("Node-run summary (#2)."), "{body}");
+}
