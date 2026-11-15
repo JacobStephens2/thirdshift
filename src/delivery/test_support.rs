@@ -11,6 +11,7 @@ pub(crate) enum Fails {
     CatchUp,
     Session,
     Push,
+    OpenMissingPr,
     Annotation,
     Checklist,
     Ready,
@@ -26,6 +27,7 @@ pub(crate) enum Call {
     CatchUp,
     Session(Kind),
     Push,
+    OpenMissingPr,
     Annotation,
     Checklist,
     Ready,
@@ -102,6 +104,10 @@ impl Outside for Scripted {
     fn push(&mut self) -> Result<()> {
         self.calls.push(Call::Push);
         self.check(Fails::Push)
+    }
+    fn open_missing_pr(&mut self) -> Result<()> {
+        self.calls.push(Call::OpenMissingPr);
+        self.check(Fails::OpenMissingPr)
     }
     fn write_built_with(&mut self, _: &Choice) -> Result<()> {
         self.calls.push(Call::Annotation);

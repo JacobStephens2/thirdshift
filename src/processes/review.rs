@@ -12,6 +12,7 @@ use crate::review::{Mode, PullRequestUrl, Reservation};
 mod admission;
 mod conflicts;
 mod delivery;
+mod self_merge;
 
 pub(crate) fn run(command: ReviewArgs) -> Result<String> {
     let (pr, reservation) = match command.target {
@@ -77,11 +78,8 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
         "a Process takes an issue or a pull request, not both"
     );
     ensure!(
-        command.goal != Some(Goal::Merged)
-            && command.security_fix.is_none()
-            && command.security_close.is_none()
-            && !command.plan_only,
-        "merge, security-fix, security-close and plan-only flags do not apply to pull-request Processes"
+        command.security_fix.is_none() && command.security_close.is_none() && !command.plan_only,
+        "security-fix, security-close and plan-only flags do not apply to pull-request Processes"
     );
     let process = if checking && command.name == "review-run" {
         ReviewProcess::built_in()?
@@ -109,6 +107,7 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
             harness: command.asked.clone(),
             email: command.email.clone(),
             security_review: command.security_review,
+            goal: command.goal,
             ..Flags::default()
         },
         Mode::Address,
@@ -129,11 +128,12 @@ impl ReviewProcess {
     fn built_in() -> Result<Self> {
         let file = load_inherited_builtin("review-run")?;
         ensure!(
-            file.steps.len() == 3
+            file.steps.len() == 4
                 && matches!(file.steps[0].kind, DraftKind::ReviewAndAddress { .. })
                 && matches!(file.steps[1].kind, DraftKind::SecurityReview { .. })
-                && matches!(file.steps[2].kind, DraftKind::Delivery { .. }),
-            "review-run needs review-and-address, security-review and delivery"
+                && matches!(file.steps[2].kind, DraftKind::Delivery { .. })
+                && matches!(file.steps[3].kind, DraftKind::SelfMerge { .. }),
+            "review-run needs review-and-address, security-review, delivery and self-merge"
         );
         Ok(Self {
             name: "review-run".into(),
@@ -154,6 +154,18 @@ impl ReviewProcess {
     ) -> Result<String> {
         interrupt::install()?;
         let config = UserConfig::load()?;
+        // A recommend-only review changes nothing, so the machine's default
+        // cannot make it merge; only an explicit merge word is refused.
+        let goal = Goal::from_flag(flags.goal, config.review.merge && mode == Mode::Address);
+        ensure!(
+            mode != Mode::RecommendOnly || goal != Goal::Merged,
+            "--recommend-only cannot be combined with merge"
+        );
+        // Freeze the effective choice for Recovery, even if config changes.
+        let flags = &Flags {
+            goal: Some(goal),
+            ..flags.clone()
+        };
         let security_review = mode == Mode::Address && flags.security_review(&config);
         let launch = Git::new(std::env::current_dir()?);
         let origin = launch.run(&["config", "remote.origin.url"])?;
@@ -228,8 +240,18 @@ impl ReviewProcess {
             },
             &command.choice,
         );
+        let retry = crate::args::review_retry(&pr.url, flags);
+        // Only a merge request has a Continuation for its Self-merge.
+        let resumable = mode == Mode::Address && self.built_in && goal == Goal::Merged;
+        if resumable {
+            logs::resumable(&retry);
+        }
         let mut last_log = None;
         let mut delivered = false;
+        let mut merged = false;
+        let mut recovery = None;
+        let pass = reservation.is_some();
+        let run_started = Utc::now() - crate::run::STARTED_MARGIN;
         let result = (|| {
             let github = GitHub::new();
             // Validate before reserving, so an ineligible explicit PR changes
@@ -273,6 +295,7 @@ impl ReviewProcess {
             let mut began = Vec::new();
             let mut findings = None;
             let mut validation_head = None;
+            let mut security_outcomes = Vec::new();
             let mut last = String::new();
             // Captured before any session. A session can read a private
             // Security report and delete it, and its final message is posted.
@@ -437,8 +460,9 @@ impl ReviewProcess {
                                     },
                                 );
                                 last_log = log.clone();
-                                let entry =
-                                    crate::security::review::Outcome::of(review, log).entry();
+                                let outcome = crate::security::review::Outcome::of(review, log);
+                                let entry = outcome.entry();
+                                security_outcomes.push(outcome);
                                 let current_private_reports =
                                     crate::security::review::private_report_material(&repo);
                                 let entry = withhold_private(
@@ -516,6 +540,7 @@ impl ReviewProcess {
                                 pr,
                                 snapshot: &snapshot,
                                 mode,
+                                merge: goal == Goal::Merged,
                                 input: &input,
                             }.run(findings, self.file.limits.repair_cap, |kind, failed, expected| {
                                 let text = prompt::pull_request_ci_fix_repair(
@@ -543,12 +568,47 @@ impl ReviewProcess {
                             delivered = true;
                             pr.url.clone()
                         }
+                        StepKind::SelfMerge => {
+                            if goal != Goal::Merged || self.file.limits.forbid_self_merge {
+                                "Self-merge skipped: not requested or forbidden by Process".into()
+                            } else {
+                                if let Some(hold) = security_outcomes
+                                    .iter()
+                                    .find_map(crate::security::review::Outcome::hold)
+                                {
+                                    return Err(hold.into());
+                                }
+                                let worktree = checkout.take_for_delivery(&snapshot.branch);
+                                let logs = session::Logs::of_process_review(&repo, index + 1);
+                                match (self_merge::SelfMerge {
+                                    pr,
+                                    snapshot: &snapshot,
+                                    choice: &step.choice,
+                                    logs: &logs,
+                                    retry: &retry,
+                                    limits: &self.file.limits,
+                                    started: run_started,
+                                })
+                                .run(worktree)
+                                {
+                                    Ok(reached) => {
+                                        last_log = reached.log.or(last_log.take());
+                                        merged = true;
+                                        pr.url.clone()
+                                    }
+                                    Err(failed) => {
+                                        last_log = failed.log.or(last_log.take());
+                                        recovery = failed.recovery;
+                                        return Err(failed.error);
+                                    }
+                                }
+                            }
+                        }
                         StepKind::Implement
                         | StepKind::ArchitectureReview
                         | StepKind::SpecReview
                         | StepKind::SecurityAudit
                         | StepKind::ReproduceFindings
-                        | StepKind::SelfMerge
                         | StepKind::RunPublishedIssue { .. }
                         | StepKind::LandTickets { .. }
                         | StepKind::FixFindings { .. }
@@ -573,13 +633,19 @@ impl ReviewProcess {
             Ok(last)
         })();
         skills::remove_written();
+        let held = result
+            .as_ref()
+            .err()
+            .is_some_and(crate::failed_run::is_hold);
         let outcome = match &result {
+            Ok(_) if merged => "merged",
             Ok(_) if delivered => "ready for review",
+            Err(_) if held => "ready for review",
             Ok(_) => "succeeded",
             Err(error) => failure_outcome(error),
         };
         let account = Account {
-            recovery: None,
+            recovery: recovery.as_deref(),
             outcome,
             ended: match &result {
                 Err(error) => Err(Cause::of(error)),
@@ -604,7 +670,17 @@ impl ReviewProcess {
         logs::finished(&account);
         logs::ended(outcome);
         notification.finish(&account);
-        result
+        if result.is_err() && !held && resumable {
+            progress::step(format_args!("Recovery: {retry}"));
+        }
+        if held && pass {
+            if let Err(error) = &result {
+                progress::step(format_args!("Self-merge held: {error:#}"));
+            }
+            Ok(pr.url.clone())
+        } else {
+            result
+        }
     }
 
     fn resolve(
@@ -782,14 +858,33 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
                         && file.steps[index + 1..].iter().all(|later| {
                             matches!(
                                 later.kind,
-                                DraftKind::SecurityReview { .. } | DraftKind::Delivery { .. }
+                                DraftKind::SecurityReview { .. }
+                                    | DraftKind::Delivery { .. }
+                                    | DraftKind::SelfMerge { .. }
                             )
                         }) =>
                 {
                     None
                 }
                 DraftKind::Skill { .. } | DraftKind::Command { .. } => None,
-                DraftKind::Delivery { .. } if reviewed && index + 1 == file.steps.len() => None,
+                DraftKind::Delivery { .. }
+                    if reviewed
+                        && (index + 1 == file.steps.len()
+                            || (index + 2 == file.steps.len()
+                                && matches!(
+                                    file.steps[index + 1].kind,
+                                    DraftKind::SelfMerge { .. }
+                                ))) =>
+                {
+                    None
+                }
+                DraftKind::SelfMerge { .. }
+                    if index > 0
+                        && index + 1 == file.steps.len()
+                        && matches!(file.steps[index - 1].kind, DraftKind::Delivery { .. }) =>
+                {
+                    None
+                }
                 DraftKind::ReviewAndAddress { .. }
                 | DraftKind::Delivery { .. }
                 | DraftKind::Implement { .. }
@@ -803,7 +898,7 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
                 | DraftKind::LandTickets { .. }
                 | DraftKind::FixFindings { .. }
                 | DraftKind::CloseFindings { .. } => Some(
-                    "pull-request Processes support skill, command, one review-and-address, security-review after the editing Steps, and delivery as the final Step after a review",
+                    "pull-request Processes support skill, command, one review-and-address, security-review after the editing Steps, and delivery after a review, optionally followed by self-merge",
                 ),
             }
         };

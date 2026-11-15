@@ -186,7 +186,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
-       thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
+       thirdshift review <PR URL> | --author <login> [merge | no-merge]  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
        thirdshift release [<version> | --major | --minor | --patch] [--with-experiment] [--review]  Release or resume green shipped changes; no version runs a Pass

@@ -1722,3 +1722,93 @@ fi
             .all(|prompt| prompt.contains("guidance mode"))
     );
 }
+
+#[test]
+fn reformatted_pre_existing_review_fingerprints_reuse_records_and_keep_written_fingerprints() {
+    for private in [false, true] {
+        for graded in [false, true] {
+            let scenario = Scenario::new();
+            let mut state = scenario.gh_state();
+            state["private"] = json!(private);
+            scenario.write_gh_state(&state);
+
+            let mut first_finding = old_finding();
+            first_finding["fingerprint"] = json!("a.php.fn.sqli");
+            scenario.agent_does_in_session(1, OPENS_PR);
+            scenario.agent_does_in_session(2, &review_script(&json!([first_finding]), &[]));
+            let first = scenario.run(&[&scenario.issue_url(7), "security-review"]);
+            assert_eq!(first.code, Some(0), "{}", first.stderr);
+
+            let mut state = scenario.gh_state();
+            let stored_before = if private {
+                assert!(state["advisories"].is_null());
+                assert_eq!(state["issues"].as_object().unwrap().len(), 2);
+                if graded {
+                    state["labels"]["8"] = json!(["security-finding", "low"]);
+                    scenario.write_gh_state(&state);
+                }
+                state["bodies"]["8"].as_str().unwrap().to_string()
+            } else {
+                assert_eq!(state["advisories"].as_array().unwrap().len(), 1);
+                if graded {
+                    state["advisories"][0]["state"] = json!("published");
+                    state["advisories"][0]["severity"] = json!("low");
+                    scenario.write_gh_state(&state);
+                }
+                state["advisories"][0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            };
+            assert!(
+                stored_before.contains("Fingerprint: `a.php.fn.sqli`"),
+                "{stored_before}"
+            );
+
+            let mut reformatted = old_finding();
+            reformatted["fingerprint"] = json!("sqli:a.php:fn");
+            reformatted["description"] = json!("Later review must reuse the existing record.");
+            let mut distinct = old_finding();
+            distinct["fingerprint"] = json!("a.php.other_fn.sqli");
+            distinct["title"] = json!("Other unchecked bound");
+            scenario.agent_does_in_session(3, "true");
+            scenario.agent_does_in_session(4, &review_script(&json!([reformatted, distinct]), &[]));
+            let second = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+            assert_eq!(second.code, Some(0), "{}", second.stderr);
+
+            let after = scenario.gh_state();
+            assert_eq!(after["prs"][0]["state"], "MERGED");
+            if private {
+                assert!(after["advisories"].is_null());
+                assert_eq!(after["issues"].as_object().unwrap().len(), 3);
+                assert_eq!(after["bodies"]["8"], stored_before);
+                assert_eq!(after["labels"]["8"], state["labels"]["8"]);
+                assert!(
+                    after["bodies"]["9"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Fingerprint: `a.php.other_fn.sqli`")
+                );
+            } else {
+                let advisories = after["advisories"].as_array().unwrap();
+                assert_eq!(advisories.len(), 2, "{advisories:?}");
+                assert_eq!(advisories[0]["description"], stored_before);
+                assert_eq!(advisories[0]["state"], state["advisories"][0]["state"]);
+                assert_eq!(
+                    advisories[0]["severity"],
+                    state["advisories"][0]["severity"]
+                );
+                assert!(
+                    advisories[1]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Fingerprint: `a.php.other_fn.sqli`")
+                );
+            }
+            let body = after["prs"][0]["body"].as_str().unwrap();
+            assert!(!body.contains("a.php.fn.sqli"));
+            assert!(!body.contains("sqli:a.php:fn"));
+            assert!(!body.contains("a.php.other_fn.sqli"));
+        }
+    }
+}

@@ -17,12 +17,24 @@ fn spec_delivery_pushes_then_annotates_then_restores_checklist_before_readiness(
             Call::CatchUp,
             Call::Session(Kind::SpecReview),
             Call::Push,
+            Call::OpenMissingPr,
             Call::Annotation,
             Call::Checklist,
             Call::Ready,
             Call::Goal(Goal::ReadyForReview)
         ]
     );
+}
+
+#[test]
+fn a_missing_pr_that_cannot_be_opened_stops_before_annotation_and_readiness() {
+    let mut outside = Scripted {
+        failing: Some(Fails::OpenMissingPr),
+        ..Default::default()
+    };
+    assert!(spec_delivery(&mut outside, Goal::Merged).is_err());
+    assert!(!outside.calls.contains(&Call::Annotation));
+    assert!(!outside.calls.contains(&Call::Ready));
 }
 
 #[test]
@@ -42,9 +54,9 @@ fn annotation_failure_warns_and_still_restores_checklist_and_marks_ready() {
         ..Default::default()
     };
     assert!(spec_delivery(&mut outside, Goal::ReadyForReview).is_ok());
-    assert!(matches!(&outside.calls[4], Call::Warning(line) if line.contains("could not write")));
+    assert!(matches!(&outside.calls[5], Call::Warning(line) if line.contains("could not write")));
     assert_eq!(
-        outside.calls[5..],
+        outside.calls[6..],
         [
             Call::Checklist,
             Call::Ready,
@@ -59,6 +71,7 @@ fn each_delivery_failure_preserves_work_then_finishes_the_pr_with_its_primary_ca
         Fails::CatchUp,
         Fails::Session,
         Fails::Push,
+        Fails::OpenMissingPr,
         Fails::Checklist,
         Fails::Ready,
         Fails::Goal,

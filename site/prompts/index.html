@@ -1144,6 +1144,8 @@ Also include in both prompts: "Prioritize changed hunks and supporting symbols, 
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
+Start both sub-agents in the foreground, in one message so they still run in parallel, where your Harness lets you choose (on Claude Code, `run_in_background: false` on each Agent call), so your turn waits for their reports. Wait for every sub-agent you start to report before going on, and never end your turn while one is still running. In a headless session, such as a thirdshift session, ending your turn can end the session and stop a sub-agent partway, leaving the rest of the session's work undone.
+
 ### 5. Close unread changed files once
 
 Compare each reviewer's files-read list and confirmed generated-output exclusions with the complete changed-file list captured in step 1. For each reviewer with changed files neither read nor covered by a confirmed exclusion, send all those missing files back to that reviewer in **one follow-up**, scoped to those files and retaining its axis's brief and reporting instruction. Ask for any additional findings, the list of files it read on this pass and any confirmed exclusions with their evidence.

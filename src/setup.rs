@@ -1258,6 +1258,7 @@ from = \"ts@acme.dev\"
 to_by_repo = {}
 
 [review]
+merge = false
 commands_by_repo = { \"Acme/Widgets\" = [\"cargo test --test slow\"] }
 
 [logs]
