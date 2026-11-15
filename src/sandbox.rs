@@ -926,7 +926,7 @@ fn home_into(
         Harness::Muse => {
             // Copy each login file. Muse writes its login in place (#1009);
             // that write stays in the copy.
-            for login in ["muse/auth.json", "muse/auth.json.lock"] {
+            for login in MUSE_LOGINS {
                 login_into(
                     request,
                     environment,
@@ -976,6 +976,9 @@ fn home_into(
 /// sandbox. An override always keeps its meaning inside, pointed at the
 /// fresh home, so session state the Harness writes beside a missing login
 /// still lands where its reader looks.
+/// Muse's login and its lock, copied for native and Custom-runner Trials.
+const MUSE_LOGINS: [&str; 2] = ["muse/auth.json", "muse/auth.json.lock"];
+
 fn login_into(
     request: &Request<'_>,
     environment: &mut Environment,

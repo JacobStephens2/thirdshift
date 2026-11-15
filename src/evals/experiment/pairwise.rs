@@ -813,7 +813,7 @@ fn blind_runner_diff(diff: &str, identities: &RunnerIdentities) -> String {
     let mut role_table = false;
     let mut identifying = false;
     let mut blinded = String::new();
-    let mut flush = |table: &mut Vec<&str>, drop: bool, blinded: &mut String| {
+    let flush = |table: &mut Vec<&str>, drop: bool, blinded: &mut String| {
         if !drop {
             for line in table.iter() {
                 blinded.push_str(line);

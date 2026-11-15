@@ -128,13 +128,13 @@ fn login(
         Harness::Codex => {
             required_login(request, env, Some("CODEX_HOME"), ".codex", "auth.json")?;
         }
-        Harness::Muse => required_login(
-            request,
-            env,
-            Some("XDG_CONFIG_HOME"),
-            ".config",
-            "muse/auth.json",
-        )?,
+        Harness::Muse => {
+            // The login is required; its lock is copied when present, as in
+            // native Trials.
+            let [login, lock] = MUSE_LOGINS;
+            required_login(request, env, Some("XDG_CONFIG_HOME"), ".config", login)?;
+            login_into(request, env, Some("XDG_CONFIG_HOME"), ".config", lock)?;
+        }
         Harness::Agy => required_login(
             request,
             env,
