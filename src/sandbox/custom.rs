@@ -18,7 +18,18 @@ pub(crate) fn prepare(
     let fresh_home = attempt.join("home");
     let credentials = Credentials::read().map_err(|error| no_login(format!("{error:#}")))?;
     let mut binds = Binds::default();
-    binds.read_write(attempt, attempt);
+    // Only the repository, fresh home and output are writable. The host
+    // writes its own records beside them in the attempt after the runner
+    // ends, so the attempt itself is never bound: a link planted there would
+    // redirect those writes onto host files outside the sandbox.
+    fs::create_dir_all(&fresh_home)?;
+    for path in [
+        attempt.join("repository"),
+        fresh_home.clone(),
+        attempt.join("output"),
+    ] {
+        binds.read_write(&path, &path);
+    }
     binds.read_only(&attempt.join("runner"), &attempt.join("runner"));
     for path in [
         attempt.join("session"),

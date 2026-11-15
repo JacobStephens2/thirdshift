@@ -1658,3 +1658,55 @@ fn custom_runner_experiment_command_record_names_no_fabricated_harness() {
         .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
     assert_eq!(record["harness"], "custom runner", "{record}");
 }
+
+/// The Custom runner sandbox binds its attempt directory read-write. Files the
+/// host writes there after the runner ends must not follow links the runner
+/// planted to host files outside the sandbox.
+#[test]
+fn host_attempt_writes_do_not_follow_links_planted_by_the_custom_runner() {
+    let namespaces = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--unshare-pid", "--unshare-net"])
+        .args(["--proc", "/proc", "--", "/bin/true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !namespaces {
+        println!("SKIPPED (planted attempt links): bwrap namespaces unavailable");
+        return;
+    }
+    let fixture = process::fixture();
+    // This runner declares no Harness and makes no network call, so a relay
+    // stand-in that only answers the readiness probe suffices without socat.
+    harness_script(
+        &fixture,
+        "socat",
+        "case \"$*\" in *TCP-LISTEN*) exec sleep 600 ;; esac\nexit 0",
+    );
+    let outside = fixture.scenario.path("host-owned");
+    fs::create_dir_all(&outside).unwrap();
+    let names = ["stdout", "stderr", "exit-status", "uncommitted.txt"];
+    for name in names {
+        fs::write(outside.join(name), "host-owned\n").unwrap();
+    }
+    runner(
+        &fixture,
+        &(format!(
+            "assert not pathlib.Path({outside:?}).exists(), 'the runner is not sandboxed'\nattempt = pathlib.Path(request['output_dir']).parent\nfor name in {names:?}:\n    try:\n        (attempt / name).unlink(missing_ok=True)\n        (attempt / name).symlink_to(pathlib.Path({outside:?}) / name)\n    except OSError:\n        pass\nprint('written through a planted link')\n",
+            names = names,
+            outside = outside.to_str().unwrap(),
+        ) + DELIVER),
+    );
+    let result = fixture.scenario.run(&runner_args());
+    let view: Value = serde_json::from_str(&result.stdout).unwrap_or(Value::Null);
+    for name in names {
+        assert_eq!(
+            fs::read_to_string(outside.join(name)).unwrap(),
+            "host-owned\n",
+            "the host wrote {name} through a runner-planted link: {view}\n{}",
+            result.stderr
+        );
+    }
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+    }
+}
