@@ -598,6 +598,13 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn pull_request_title(&mut self, title: Option<String>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().pull_request_title = title.filter(|title| !title.trim().is_empty());
+            self.write_record();
+        }
+    }
+
     pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
         self.check_suspension();
         let name = stage.name();

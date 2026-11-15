@@ -17,6 +17,7 @@ use super::subscription::{Readiness, Subscription};
 use crate::config::UserConfig;
 use crate::logs::Framing;
 use crate::logs::catalog::{self, Log};
+use crate::logs::status::GitHubTarget;
 
 #[derive(Template)]
 #[template(path = "console/logs.html")]
@@ -61,6 +62,7 @@ fn by_repository(logs: Vec<Log>) -> Vec<LogGroup> {
 struct ReaderPage {
     page: super::PageContext,
     log: ReaderLog,
+    target: Option<GitHubTarget>,
     html: String,
     offset: u64,
     live: bool,
@@ -95,6 +97,15 @@ pub(super) fn remote(
         let contents = value["contents"]
             .as_str()
             .context("incompatible remote log")?;
+        let target = (!command.is_empty())
+            .then(|| {
+                let peek_route = crate::logs::status::inspect::url("/peek", command, None);
+                remote
+                    .get(&peek_route)
+                    .ok()
+                    .and_then(|details| GitHubTarget::from_details(&details["command"]))
+            })
+            .flatten();
         let kind = if session.is_some() {
             catalog::Kind::Session
         } else {
@@ -122,6 +133,7 @@ pub(super) fn remote(
                 ),
                 selector: command.into(),
             },
+            target,
             html: conversation::render(contents, kind),
             offset: 0,
             live: false,
@@ -222,6 +234,24 @@ pub(super) async fn reader(
     Extension(viewer): Extension<super::auth::Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
+    render_reader(id, viewer, format, None).await
+}
+
+pub(super) async fn reader_for_command(
+    id: String,
+    command: String,
+    viewer: super::auth::Viewer,
+    format: super::api::Format,
+) -> Response {
+    render_reader(id, viewer, format, Some(command)).await
+}
+
+async fn render_reader(
+    id: String,
+    viewer: super::auth::Viewer,
+    format: super::api::Format,
+    selected_command: Option<String>,
+) -> Response {
     if let Some(response) = security_refusal(&viewer, &id).await {
         return response;
     }
@@ -234,12 +264,10 @@ pub(super) async fn reader(
     }
     let result = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let config = UserConfig::load()?;
-        let Some(log) = catalog::load(&config, None)?
-            .into_iter()
-            .find(|log| log.id == id)
-        else {
+        let Some(opened) = catalog::open(&config, &id, selected_command.as_deref())? else {
             return Ok(None);
         };
+        let log = opened.log;
         let lines = log.reader.read(0, Framing::Lines, usize::MAX)?;
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
         Ok(Some(
@@ -254,6 +282,7 @@ pub(super) async fn reader(
                     name: log.name,
                     selector: log.selector,
                 },
+                target: opened.target,
                 html,
                 offset: lines.offset,
                 live: !lines.done,

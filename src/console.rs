@@ -1694,6 +1694,7 @@ async fn log(
         })
         .await;
     }
+    let command_for_reader = command.clone();
     match tokio::task::spawn_blocking(move || {
         let config = UserConfig::load()?;
         let path = status::inspect::log_path(
@@ -1709,9 +1710,7 @@ async fn log(
     })
     .await
     {
-        Ok(Ok(id)) => {
-            logs::reader(Path(id), axum::Extension(viewer), axum::Extension(format)).await
-        }
+        Ok(Ok(id)) => logs::reader_for_command(id, command_for_reader, viewer, format).await,
         _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
     }
 }

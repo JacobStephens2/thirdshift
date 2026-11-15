@@ -277,11 +277,124 @@ pub(super) fn list(
     Ok(logs)
 }
 
+pub(crate) struct Opened {
+    pub log: Log,
+    pub target: Option<crate::logs::status::GitHubTarget>,
+}
+
 pub(crate) fn find(config: &UserConfig, selected: &str) -> Result<Log> {
     load(config, None)?
         .into_iter()
         .find(|log| log.id == selected)
         .context(UNLISTED)
+}
+
+/// Open one listed log by ID along with its selected Command target, if any.
+pub(crate) fn open(
+    config: &UserConfig,
+    id: &str,
+    selected_command: Option<&str>,
+) -> Result<Option<Opened>> {
+    for source in crate::logs::accounts::discover(config).logs {
+        let loaded = Snapshot::load_using(super::files_for(&source), &source.root, Local::now());
+        let snapshot = match loaded {
+            Ok(snapshot) => snapshot,
+            Err(_) if source.account.is_some() => continue,
+            Err(error) => return Err(error),
+        };
+        let listed = match list(&snapshot, &source, None) {
+            Ok(logs) => logs,
+            Err(_) if source.account.is_some() => continue,
+            Err(error) => return Err(error),
+        };
+        let Some(mut log) = listed.into_iter().find(|log| log.id == id) else {
+            continue;
+        };
+        let observation = find_observation(&snapshot, &log.path, selected_command);
+        if let Some(selector) = observation.and_then(Observation::selector) {
+            log.selector = selector;
+        }
+        let kept = source
+            .account
+            .is_none()
+            .then(|| crate::logs::github::load(&source.root));
+        let target = observation.and_then(|obs| {
+            crate::logs::status::GitHubTarget::from_observation(obs, kept.as_ref())
+        });
+        return Ok(Some(Opened { log, target }));
+    }
+    Ok(None)
+}
+
+fn observation_matches_log(observation: Observation<'_>, log_path: &Path) -> bool {
+    observation.command_log() == Some(log_path)
+        || observation
+            .sessions()
+            .is_ok_and(|sessions| sessions.iter().any(|path| path == log_path))
+}
+
+fn find_nested_session<'a>(command: &'a Command, log_path: &Path) -> Option<Observation<'a>> {
+    for child in command.children.iter().chain(&command.dispatched) {
+        if let Some(found) = find_nested_session(child, log_path) {
+            return Some(found);
+        }
+        let obs = Observation::Record(child);
+        let child_owns_different_log =
+            child.command_log == log_path && child.command_log != command.command_log;
+        let child_owns_session = log_path != child.command_log
+            && obs
+                .sessions()
+                .is_ok_and(|sessions| sessions.iter().any(|path| path == log_path));
+        if child_owns_different_log || child_owns_session {
+            return Some(obs);
+        }
+    }
+    None
+}
+
+fn find_command_observation<'a>(command: &'a Command, log_path: &Path) -> Option<Observation<'a>> {
+    if let Some(found) = find_nested_session(command, log_path) {
+        return Some(found);
+    }
+    let obs = Observation::Record(command);
+    if observation_matches_log(obs, log_path) {
+        return Some(obs);
+    }
+    for child in command.children.iter().chain(&command.dispatched) {
+        if let Some(found) = find_command_observation(child, log_path) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_observation<'a>(
+    snapshot: &'a Snapshot,
+    log_path: &Path,
+    selected_command: Option<&str>,
+) -> Option<Observation<'a>> {
+    if let Some(selector) = selected_command
+        && let Ok(resolved) = snapshot.resolve(selector)
+        && observation_matches_log(resolved.observation, log_path)
+    {
+        return Some(resolved.observation);
+    }
+    for entry in snapshot.entries() {
+        if let Entry::Record(command) = entry
+            && let Some(found) = find_command_observation(command, log_path)
+        {
+            return Some(found);
+        }
+    }
+    for entry in snapshot.entries() {
+        if let Entry::History(historical) = entry {
+            let obs = Observation::History(historical);
+            if observation_matches_log(obs, log_path) {
+                return Some(obs);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {

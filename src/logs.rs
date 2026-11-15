@@ -509,6 +509,11 @@ pub(crate) fn pull_request(url: &str) {
     record().pull_request(url);
 }
 
+/// Title of the target pull request, available while the Command is running.
+pub(crate) fn pull_request_title(title: Option<String>) {
+    record().pull_request_title(title);
+}
+
 /// The selected Base branch of a Fix Pass's CI repair, before a PR exists.
 pub(crate) fn base_branch(branch: &str) {
     record().base_branch(branch);

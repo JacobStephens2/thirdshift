@@ -3,12 +3,14 @@
 pub(crate) mod fleet;
 mod inbox;
 pub mod inspect;
+mod target;
 mod text;
 pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::validate_remote;
 pub(crate) use inbox::{Archive, ArchivePage};
 pub(crate) use inbox::{Inbox, Row, issue_url, subject, subject_link_matches};
+pub(crate) use target::GitHubTarget;
 pub(crate) use watching::{Process, watching};
 
 use anyhow::Result;

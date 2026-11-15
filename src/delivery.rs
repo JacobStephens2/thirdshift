@@ -186,6 +186,7 @@ impl Delivery<'_> {
                     crate::review::Reservation::take(worktree.launch(), &GitHub::new(), &pr)?
                         .context("Base CI fix PR is already reserved")?;
                 crate::logs::pull_request(&pr.url);
+                crate::logs::pull_request_title(Some(title.to_owned()));
                 outside.write_built_with(&outside.child_asks.harness.clone())?;
                 outside.stage(Stage::PullRequestReadiness);
                 outside.mark_pr_ready(None)?;
@@ -210,6 +211,7 @@ impl Delivery<'_> {
             }
             if let Some(pr) = pull_request.info() {
                 crate::logs::pull_request(&pr.url);
+                crate::logs::pull_request_title(Some(title.to_owned()));
                 failed.pr_url = Some(pr.url);
             }
         }
