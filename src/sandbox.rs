@@ -545,6 +545,8 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         environment.set_str(name, "127.0.0.1,localhost");
     }
     let program = harness_into(request, &mut binds, &mut environment, &binary);
+    // Kept after every other bind, so no later mount can uncover a
+    // credential's blank; hence apart from the toolchain binds above.
     if let Host::Tools { .. } = request.host {
         conceal_toolchain_credentials(request, &mut binds)?;
     }
@@ -797,14 +799,14 @@ fn node_into(binary: &Path, binds: &mut Binds, environment: &mut Environment) ->
         })
     };
     match interpreter {
-        Some(path) => {
+        Node::At(path) => {
             let node = path
                 .canonicalize()
                 .with_context(|| format!("could not resolve {}", path.display()))
                 .map_err(unresolved)?;
             binds.read_only(&node, &path);
         }
-        None => {
+        Node::OnPath => {
             let node = resolve_binary("node").map_err(unresolved)?;
             binds.read_only(&node, &node);
             if let Some(directory) = node.parent() {
@@ -815,10 +817,17 @@ fn node_into(binary: &Path, binds: &mut Binds, environment: &mut Environment) ->
     Ok(())
 }
 
-/// The `node` a script's `#!` line runs it with: `Some(Some(path))` for an
-/// absolute interpreter, `Some(None)` for `env node`, and `None` when it
-/// names no `node`.
-fn node_interpreter(binary: &Path) -> Option<Option<PathBuf>> {
+/// The `node` a script's `#!` line runs it with.
+#[derive(Debug, PartialEq)]
+enum Node {
+    /// An absolute interpreter path.
+    At(PathBuf),
+    /// `env node`: whichever `node` is first on `PATH`.
+    OnPath,
+}
+
+/// The `node` a script's `#!` line names, if it names one.
+fn node_interpreter(binary: &Path) -> Option<Node> {
     let mut head = [0; 256];
     let read = fs::File::open(binary)
         .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
@@ -831,9 +840,9 @@ fn node_interpreter(binary: &Path) -> Option<Option<PathBuf>> {
         words
             .find(|word| !word.starts_with('-'))
             .filter(|word| *word == "node")
-            .map(|_| None)
+            .map(|_| Node::OnPath)
     } else {
-        (program.file_name()? == "node").then(|| Some(program.to_path_buf()))
+        (program.file_name()? == "node").then(|| Node::At(program.to_path_buf()))
     }
 }
 
@@ -1689,11 +1698,11 @@ mod tests {
     fn a_harness_names_node_only_in_its_interpreter_line() {
         let dir = tempfile::tempdir().unwrap();
         for (head, expected) in [
-            ("#!/usr/bin/env node\n", Some(None)),
-            ("#!/usr/bin/env -S node --no-warnings\n", Some(None)),
+            ("#!/usr/bin/env node\n", Some(Node::OnPath)),
+            ("#!/usr/bin/env -S node --no-warnings\n", Some(Node::OnPath)),
             (
                 "#!/opt/node/bin/node\n",
-                Some(Some(PathBuf::from("/opt/node/bin/node"))),
+                Some(Node::At(PathBuf::from("/opt/node/bin/node"))),
             ),
             ("#!/usr/bin/env python3\n", None),
             ("#!/bin/sh\nnode\n", None),
