@@ -24,6 +24,9 @@ fn code_review_reports_count_only_actionable_findings() {
         "nonnegative integer actionable finding count",
         "`0` when no change or human follow-up is needed",
         "Exclude declined or accepted observations that require no change",
+        // #2231: a review that outlives its session's turn is stopped partway.
+        "never end your turn while one is still running",
+        "Start both sub-agents in the foreground",
     ] {
         assert!(skill.contains(rule), "missing {rule:?} in Factory skill");
     }

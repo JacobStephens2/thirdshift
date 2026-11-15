@@ -16,7 +16,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Architect run](#architect-runs)**, `thirdshift architect`: reviews the codebase's architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an **Architect idea** for the **Day shift**.
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
-- **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
+- **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `merge` for an opt-in Self-merge, or `--recommend-only` to get findings without fixes.
 - **[Fix run](#fix-runs)**, `thirdshift fix [<PR URL or number>]`: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review. With no target, a Pass first checks Base branch CI unless scoped by author, then selects the lowest-numbered eligible non-draft PR with a Merge conflict or CI red.
 - **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
@@ -49,7 +49,7 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 2. Picks the **Issue branch** (`issue-<n>`, or `issue-<n>-branch-<k>` once earlier ones are finished) and the **Base branch**, normally the branch you have checked out. Then it makes the [Claim](#the-claim): it labels the issue `in-progress`, in place of `ready-for-agent` if it has that.
 3. Creates a git worktree next to your clone, named `<repo>-<Issue branch>`, so your own checkout is never touched.
 4. Runs a headless agent session in that worktree on the **Harness**, Claude Code unless you [choose another](#harness-model-and-effort), with the **Factory skills** in [`skills/`](../skills) linked into its `.claude/skills/`, or `.agents/skills/` on the other Harnesses, as `thirdshift-<skill>` and kept out of git by a `.git/info/exclude` entry ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)), started with one of the **Session prompts** in [`prompts/`](../prompts). The agent implements the issue, reviews its work against the Base branch, addresses the **Standards findings** and **Spec findings** it agrees with, and opens a ready-for-review pull request that lists every **Unaddressed finding** with a reason and closes the issue. With a [Security review](#security-review) asked for, a second session then reviews the change for vulnerabilities.
-5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft.
+5. Takes over deterministically: pushes the Issue branch, skipping your repo's git hooks since the session runs the tests and CI gates the pull request, checks through `gh` that the pull request exists, is open and targets the Base branch, and marks it ready for review (`gh pr ready`) if the agent left it as a draft. If the session ended without opening the pull request, as when its review outlived its turn, and the Issue branch has commits ahead of the Base branch, thirdshift opens the pull request itself at **Pull request readiness**, saying `the implement session pushed <Issue branch> without opening a pull request; opening it in the session's place`: into the Base branch (the Spec branch for a Spec's Ticket), titled after the issue, with `Closes #<n>` and the Built-with line in its body. The Ticket run then goes on to readiness, CI and any Self-merge as usual. With no commits ahead either, the Ticket run fails with `the implement session made no commits and opened no pull request`.
 6. Keeps the pull request mergeable and green: merges the Base branch in and watches CI, starting a **Repair** session for a merge conflict or failing checks, at most 5 per Ticket run. A failed check that also failed, under the same name, on the Base branch commit the head last merged in is an **Inherited failure**, not the branch's to fix: the CI-fix Repair is given only the branch's own failures, with the Inherited failures listed as not to fix. If every failed check is an Inherited failure, no Repair starts: the Ticket run merges the Base branch again if it has moved since, and otherwise ends as a [Failed ticket run](#failed-ticket-runs) that says to fix the Base branch first, unless it was given `base-fix` or the [User config](#user-config) sets `base.fix`, when it starts a [Base fix](#base-fix) first. A check that is pending, passed or missing on that Base branch commit is the branch's own, and thirdshift never triggers or waits for the Base branch's CI. If a CI-fix Repair leaves the head unchanged, with no commit of its own and no Base branch move to merge, thirdshift does a **Check re-run**, once for that head: it asks GitHub to re-run the branch's own failed checks (`gh run rerun <run-id> --failed`, once per workflow run), says so on stderr as `re-running the failed checks on <short sha>: <check>[, <check>…]`, and watches CI on that head again, from the new attempt on. The re-run counts as started once one of a workflow run's failed jobs has a new attempt; a job that `needs` another failed job may get its new attempt only after that job finishes, and counts as pending until then. Once nothing else is running, such a job has one more grace period to get its new attempt: after that, an old failed attempt still listed counts as failed, and a job missing from the listing cannot establish green CI. A check that failed for a reason that does not repeat, such as a flaky test or a runner fault, then passes, and the Ticket run goes on as for any green head. If CI is red again, the Ticket run ends as a Failed ticket run, with no second Repair or re-run for that head. It ends the same way, with nothing re-run, if one of those checks can't be re-run (a commit status, or a check run that is not a GitHub Actions job), since the head could not go green. When GitHub refuses a re-run, stderr shows the refusal and thirdshift reads all checks on that head again: a Repair may already have re-run them. Green continues the Ticket run, pending checks are watched, and the branch's own checks still red fail as before, without another Repair or request for that head. Checks that cannot be read or disappear after known failures cannot establish green CI. Any earlier successful workflow request still waits for its new attempt before the whole head is assessed. What the Repair concluded is never read, Inherited failures are never re-run on their own account, and a Check re-run is no Repair, so it counts against no budget ([ADR-0010](adr/0010-one-check-re-run-before-a-declined-ci-fix.md)). Before any Repair, a head whose own failed checks are all **Abandoned jobs**, GitHub Actions jobs GitHub ended as failed with no failed step and a step not completed, as when a runner is lost, has them re-run once, saying `<check> lost its runner on <short sha>; re-running it`, and CI watched again the same way: green goes on, and red again, or a refused or unseen re-run, gets the CI-fix Repair as before. This too is no Repair and counts against no budget ([ADR-0020](adr/0020-an-abandoned-job-is-re-run-before-any-repair.md)). If the Base branch moves while CI runs, it merges it again and goes round, at most 5 times per Ticket run. In a Ticket run that Self-merges, each round also takes in **Foreign commits** first: see [Foreign commits in a Ticket run that Self-merges](#foreign-commits-in-a-ticket-run-that-self-merges).
 7. In a **Ticket run** that Self-merges (`thirdshift merge <Issue URL>`), does the **Self-merge**: once the pull request is open, ready for review, mergeable and green, thirdshift merges it into the Base branch with a merge commit, on exactly the head commit whose CI it watched (`gh pr merge --merge --match-head-commit <sha>`). Just before each attempt, it reads the PR's `reviewDecision`: `REVIEW_REQUIRED` or `CHANGES_REQUESTED` ends the Ticket run as **review required**, a policy refusal, without attempting the merge or taking another Repair round. An empty or `APPROVED` decision, or a failed read, keeps the existing merge behavior. It never uses GitHub's auto-merge ([ADR-0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)). A merge that fails goes back round step 6, within the same budgets, and is tried again on the new green head. If that round finds nothing to fix, the refusal is a **policy refusal**, such as merge commits being disallowed or a review being required. After the merge, thirdshift deletes the Issue branch on `origin`, and closes the issue if it is still open, with the comment `Closed by #<pr>, merged into <base> by a thirdshift Ticket run with Self-merge.` GitHub closes it on its own only for a merge into the repository's default branch, and then thirdshift leaves it alone. Once the issue is closed, either way, thirdshift takes `in-progress` off it, [removing the Claim](#when-the-claim-ends).
 8. Cleans up: removes the worktree, the local Issue branch and the temporary directory the Factory skills were written out to, whether the Ticket run succeeded or not. The one exception is a **Failed ticket run** whose work could not be pushed: see below.
@@ -1139,7 +1139,7 @@ Sessions run headless with the full permissions of that user account, including 
 
 Every factory session on Claude Code, Repairs, reviews and Resumes included, also passes `--settings '{"attribution":{"commit":"","pr":""}}'`. These per-session settings override the user's and repository's attribution settings, hiding Claude Code's commit trailer and pull request attribution. The pull request keeps thirdshift's `Built with` line as its only attribution; nothing replaces the commit trailer. Claude Code run by hand keeps its own settings. The release-summary invocation, which runs with tools disabled, keeps its existing arguments.
 
-`claude -p` exits as soon as the agent ends its turn, killing any background task it started. So every prompt tells the agent to run long commands, such as tests, in the foreground, and to stop any background task it no longer needs, with the `TaskStop` tool, before it ends its turn. If a session still ends with background work running, thirdshift takes it as work the session was waiting on and gives it a **Resume**: it continues that same session once (`claude -p --resume`), asking the agent to re-run the work in the foreground and finish. If the Resume ends the same way, the work may have been abandoned, such as a hung test run the agent could not stop: thirdshift says which task was killed and carries on, so the pull request check, CI and the rest decide how the Ticket run ends. If the Ticket run then fails, its cause names the killed task ahead of what failed.
+`claude -p` exits as soon as the agent ends its turn, killing any background task it started. So every prompt tells the agent to run long commands, such as tests, in the foreground, and to stop any background task it no longer needs, with the `TaskStop` tool, before it ends its turn. If a session still ends with background work running, thirdshift takes it as work the session was waiting on and gives it a **Resume**: it continues that same session once (`claude -p --resume`), asking the agent to re-run the work in the foreground and finish. If the Resume ends the same way, the work may have been abandoned, such as a hung test run the agent could not stop: thirdshift says which task was killed and carries on, so the pull request check, CI and the rest decide how the Ticket run ends. If the Ticket run then fails, its cause names the killed task ahead of what failed. Claude Code waits only so long, 10 minutes by default, for background work after the session's last turn, then stops it, a sub-agent such as a review included; thirdshift reads that stop from the session's stream as killed work too, and the Factory code-review skill tells the session to wait for its reviewers before ending its turn.
 
 ### What sessions leave behind
 
@@ -2830,6 +2830,7 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
 [review]
+merge = false          # Review runs Self-merge only with this opt-in or a merge command word; default false
 commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
 
 [logs]
@@ -3576,11 +3577,31 @@ From a clone of the pull request's repository:
 
 ```sh
 thirdshift review https://github.com/you/widgets/pull/42
+thirdshift review https://github.com/you/widgets/pull/42 merge
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
 thirdshift review https://github.com/you/widgets/pull/42 harness codex
 thirdshift review https://github.com/you/widgets/pull/42 security-review
 thirdshift review --author colleague
+thirdshift review --author colleague merge
 ```
+
+`merge` (or `--merge`) asks the Review run to Self-merge after Delivery.
+`no-merge` (or `--no-merge`) turns it off. The command wins over `[review] merge`
+in the User config, which defaults to `false`. `merge.always` does not affect
+Review runs. Repeated or conflicting merge words are argument errors, as is
+`--recommend-only` with `merge`. A recommend-only review ignores `[review] merge`.
+
+Self-merge uses the Fix run's Repair loop and ADR 0004's reviewed-code gate:
+it merges only the head reviewed by an agent and watched green, with
+`gh pr merge --merge --match-head-commit`. Merge-time conflicts, CI failures and
+Foreign commits use the existing Repairs. A head pushed after review and before
+Delivery completes holds the merge; green CI on the older head cannot authorize it.
+A required review, a base that is another open PR, or an incomplete or unsuccessful
+configured Security review also holds Self-merge and leaves the PR ready for review.
+An author Pass logs a hold or policy refusal and exits `0`; a targeted Review run
+asked to merge exits non-zero. A completed Self-merge reports **merged** in the
+Run notification, Command log and Inbox, closes linked closing issues and deletes
+the branch, as any Self-merge does.
 
 For cron, `thirdshift review --author <login>` takes the lowest-numbered eligible
 open pull request by that author, one per invocation. The Pass form requires
@@ -3702,8 +3723,8 @@ and Check re-run allowances across all heads. An unchanged Repair gets its one
 eligible Check re-run and then fails if still red, without another session on
 that head. Repair reports receive the same private Security-material filtering.
 
-Review runs never merge or rebase the author's branch or stack, force-update
-history, replace the pull request or Self-merge. A concurrent change to the
+Without Self-merge, Review runs never merge or rebase the author's branch or stack,
+force-update history or replace the pull request. A concurrent change to the
 captured PR's identity, head, base or eligibility stops waiting or publication;
 green CI on an older head cannot authorize readiness. A final merge conflict
 ends failed and asks the author to update the branch. `--recommend-only`
@@ -3724,7 +3745,7 @@ read-only.
 
 Command records, the Activity log, `status` and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
-The Inbox keeps a successful review under **Ready for review** until GitHub shows
+The Inbox keeps a successful unmerged review under **Ready for review** until GitHub shows
 the pull request merged or closed. Failed reviews appear under **Needs you**.
 
 Inspect the Built-in process with `thirdshift process show review-run`. Copy it
@@ -3735,7 +3756,8 @@ an optional `security-review` Step follows the editing Steps before `delivery`
 pushes fixes and posts the comment. Custom pull-request Processes can
 also run skill and command Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
 the filtered input is in `.thirdshift-review-input.md`. This version keeps these
-Steps sequential and requires `review-and-address` before a final `delivery`.
+Steps sequential and requires `review-and-address` before `delivery`, optionally
+followed directly by `self-merge`. Copied Processes retain the opt-in merge choice.
 
 ## Architect runs
 

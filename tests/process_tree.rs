@@ -255,8 +255,15 @@ test -f "{started}"
     if slow_cleanup {
         assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
     } else {
-        // The session completed; this fixture intentionally opens no PR.
-        assert!(result.stderr.contains("no PR found"), "{}", result.stderr);
+        // The session completed; this fixture intentionally commits
+        // nothing and opens no PR.
+        assert!(
+            result
+                .stderr
+                .contains("the implement session made no commits and opened no pull request"),
+            "{}",
+            result.stderr
+        );
     }
     // Observe whether the holder expired: timing the whole Run also counts
     // finishing Git work and Claim release, which can be slow under CI load.
