@@ -396,7 +396,7 @@ fn action_body(view: View) -> Value {
         View::CheckRunner => {
             let mut body = json_request(
                 json!({
-                    "runner": {"type":"string","description":"A Custom runner name, or an absolute path to its .toml manifest."},
+                    "runner": {"type":"string","description":"A Custom runner name in ~/.thirdshift/runners; a .toml file path is CLI-only."},
                     "suite": {"type":"string","description":"With task: run one dry-run Trial on this process Eval task."},
                     "task": text
                 }),

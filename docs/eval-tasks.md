@@ -648,9 +648,11 @@ check still prints its report and exits `1`. An unusable Eval task or
 argument prints only an error.
 
 The Console serves the same check at POST `/api/v1/evals/check-runner` with
-the `run` scope. Its JSON body takes `runner` (a name, or an absolute `.toml`
-path) and optional `suite` and `task`; it returns the CLI's `--json` report,
-whether or not `ok` is true, and refuses an unusable request with 422.
+the `run` scope. Its JSON body takes `runner`, a Custom runner name from
+`~/.thirdshift/runners`, and optional `suite` and `task`; a `.toml` file path
+stays CLI-only, so the API cannot read a caller-chosen local file. It
+returns the CLI's `--json` report, whether or not `ok` is true, and refuses an
+unusable request with 422.
 
 Before its first Trial, an Experiment prepares both Arms together:
 

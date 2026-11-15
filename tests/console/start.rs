@@ -368,7 +368,7 @@ fn api_checks_a_custom_runner_with_the_cli_report() {
     }
     assert_eq!(post(&reader, json!({"runner":"fixture"})).status(), 403);
     for (body, evidence) in [
-        (json!({"runner":"fixture.toml"}), "absolute path"),
+        (json!({"runner":"fixture.toml"}), "CLI-only"),
         (
             json!({"runner":"fixture","suite":"process"}),
             "both --suite and --task",
@@ -383,6 +383,30 @@ fn api_checks_a_custom_runner_with_the_cli_report() {
         let message = refused.json::<Value>().unwrap()["error"].to_string();
         assert!(message.contains(evidence), "{body}: {message}");
     }
+}
+
+/// A `run` token cannot make the Console read a caller-chosen local `.toml`
+/// file and echo its text back in a manifest problem (ADR 0026).
+#[test]
+fn api_check_runner_does_not_read_caller_selected_files() {
+    let scenario = fixture();
+    let secret = "dummy-check-runner-secret-6d1f";
+    let private = scenario.path("home/private");
+    fs::create_dir_all(&private).unwrap();
+    let file = private.join("tool.toml");
+    fs::write(&file, format!("api_key = \"{secret}\"\n")).unwrap();
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/evals/check-runner", console.address))
+        .bearer_auth(&runner)
+        .json(&json!({"runner": file.to_str().unwrap()}))
+        .send()
+        .unwrap();
+    let status = response.status();
+    let body = response.text().unwrap();
+    assert!(!body.contains(secret), "{status}: {body}");
+    assert_eq!(status, 422, "{body}");
 }
 
 #[test]

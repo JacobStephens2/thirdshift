@@ -915,7 +915,7 @@ JSON bodies use <code>Content-Type: application/json</code>. GET calls take no b
 <tr>
 <td>POST <code>/evals/check-runner</code></td>
 <td><code>run</code></td>
-<td>JSON <code>runner</code> (a name or absolute <code>.toml</code> path), optional <code>suite</code> and <code>task</code> together</td>
+<td>JSON <code>runner</code> (a Custom runner name; <code>.toml</code> file paths are CLI-only), optional <code>suite</code> and <code>task</code> together</td>
 <td><code>evals check-runner &lt;runner&gt; [--suite &lt;suite&gt; --task &lt;task&gt;] --json</code>; returns the report even when the check fails</td>
 </tr>
 <tr>
@@ -1456,8 +1456,8 @@ when every check passes and the dry run&#39;s Score passes; a failed check still
 prints the report and exits <code>1</code>. <code>--json</code> prints the version-1 report described
 in <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#checking-a-custom-runner">Checking a Custom runner</a>.
 Console clients with the <code>run</code> scope get the same report from POST
-<code>/api/v1/evals/check-runner</code> with JSON <code>runner</code> (a name or absolute <code>.toml</code>
-path) and optional <code>suite</code> and <code>task</code>.</p>
+<code>/api/v1/evals/check-runner</code> with JSON <code>runner</code> (a Custom runner name; a
+<code>.toml</code> file path is CLI-only) and optional <code>suite</code> and <code>task</code>.</p>
 <p>In Experiment JSON (format 13), a Custom-runner Arm&#39;s Setup has null <code>commit</code>
 and <code>harness</code>, and names <code>runner</code> and its frozen <code>runner_digest</code>, the <code>digest</code>
 <code>evals check-runner</code> reports.</p>

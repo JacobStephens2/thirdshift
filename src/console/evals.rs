@@ -1,5 +1,4 @@
 //! Machine-local Eval data changes, distinct from people's act-scoped judgments.
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, ensure};
@@ -64,10 +63,11 @@ pub(super) struct CheckRunner {
 /// Its `--json` report is the response, whether or not the runner passed.
 pub(super) async fn check_runner(Json(request): Json<CheckRunner>) -> Response {
     api::action(api::Format::Json, "/", move || {
-        // The Console's working directory means nothing to its caller.
+        // A caller-selected local file stays CLI-only (ADR 0026): reading any
+        // `.toml` path would echo its text back in the manifest problem.
         ensure!(
-            !request.runner.ends_with(".toml") || Path::new(&request.runner).is_absolute(),
-            "a Custom runner file must be an absolute path"
+            !request.runner.ends_with(".toml"),
+            "the API checks Custom runners by name; a .toml file path is CLI-only"
         );
         let mut args = vec![
             "evals".to_owned(),

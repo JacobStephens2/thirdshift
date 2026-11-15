@@ -848,7 +848,7 @@ JSON bodies use `Content-Type: application/json`. GET calls take no body.
 | GET `/evals` | `read` | none | `evals list` |
 | POST `/evals/touched` | `read` | JSON `paths` array of changed path names | `evals touched <paths>...` |
 | POST `/evals/verify` | `read` | JSON `repository` (a known Launch directory's owner/name), `base` commit | `evals verify <repository> <base>` |
-| POST `/evals/check-runner` | `run` | JSON `runner` (a name or absolute `.toml` path), optional `suite` and `task` together | `evals check-runner <runner> [--suite <suite> --task <task>] --json`; returns the report even when the check fails |
+| POST `/evals/check-runner` | `run` | JSON `runner` (a Custom runner name; `.toml` file paths are CLI-only), optional `suite` and `task` together | `evals check-runner <runner> [--suite <suite> --task <task>] --json`; returns the report even when the check fails |
 | GET `/other-accounts` | `read` | none | `console other-accounts --json` |
 | POST `/other-accounts` | `admin` | JSON `value` (`none`, `readable`, or account list) | `console other-accounts <value>` |
 | POST `/email-test` | `admin` | JSON with optional `address` | `email-test [<address>]` |
@@ -1381,8 +1381,8 @@ when every check passes and the dry run's Score passes; a failed check still
 prints the report and exits `1`. `--json` prints the version-1 report described
 in [Checking a Custom runner](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#checking-a-custom-runner).
 Console clients with the `run` scope get the same report from POST
-`/api/v1/evals/check-runner` with JSON `runner` (a name or absolute `.toml`
-path) and optional `suite` and `task`.
+`/api/v1/evals/check-runner` with JSON `runner` (a Custom runner name; a
+`.toml` file path is CLI-only) and optional `suite` and `task`.
 
 In Experiment JSON (format 13), a Custom-runner Arm's Setup has null `commit`
 and `harness`, and names `runner` and its frozen `runner_digest`, the `digest`
