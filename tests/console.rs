@@ -269,6 +269,50 @@ fn write_record(home: &Path, number: u64, record: &Value) {
     .unwrap();
 }
 
+struct ReleaseRecordFixture<'a> {
+    filename: &'a str,
+    name: &'a str,
+    outcome: &'a str,
+    cause: Option<&'a str>,
+    pull_request: &'a str,
+    release_url: Option<&'a str>,
+    started_at: &'a str,
+}
+
+fn write_release_record(home: &Path, fixture: ReleaseRecordFixture<'_>) {
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/release");
+    fs::create_dir_all(&dir).unwrap();
+    let mut record = json!({
+        "version": 1,
+        "kind": "Release run",
+        "name": fixture.name,
+        "repository": "acme/widgets",
+        "hostname": "factory",
+        "process_id": 0,
+        "process_start": "gone",
+        "harness": "codex",
+        "model": "gpt-6",
+        "effort": "high",
+        "started_at": fixture.started_at,
+        "ended_at": fixture.started_at,
+        "stages": [],
+        "session_log": null,
+        "outcome": fixture.outcome,
+        "cause": fixture.cause,
+        "issue_branch": null,
+        "pull_request": fixture.pull_request,
+        "tickets": []
+    });
+    if let Some(url) = fixture.release_url {
+        record["release_url"] = json!(url);
+    }
+    fs::write(
+        dir.join(format!("{}.command.json", fixture.filename)),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+}
+
 fn span_tree(console: &Console, command: &str) -> Value {
     console
         .get(&format!("/spans?command={command}"))

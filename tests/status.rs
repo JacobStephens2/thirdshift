@@ -3727,7 +3727,35 @@ fn status_and_status_json_and_show_include_release_url_for_published_release_run
     let release_dir = scenario.path("home/.thirdshift/logs/acme/widgets/commands/release");
     fs::create_dir_all(&release_dir).unwrap();
     let now = chrono::Local::now().to_rfc3339();
-    let write_release = |filename: &str, record: Value| {
+    let write_release = |filename: &str,
+                         name: &str,
+                         outcome: &str,
+                         cause: Option<&str>,
+                         pull_request: &str,
+                         release_url: Option<&str>| {
+        let mut record = serde_json::json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": name,
+            "repository": "acme/widgets",
+            "hostname": "factory",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "claude",
+            "model": null,
+            "effort": null,
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": outcome,
+            "cause": cause,
+            "issue_branch": null,
+            "pull_request": pull_request
+        });
+        if let Some(url) = release_url {
+            record["release_url"] = serde_json::json!(url);
+        }
         fs::write(
             release_dir.join(format!("{filename}.command.json")),
             serde_json::to_vec(&record).unwrap(),
@@ -3736,50 +3764,19 @@ fn status_and_status_json_and_show_include_release_url_for_published_release_run
     };
     write_release(
         "20261115T080000-0500",
-        serde_json::json!({
-            "version": 1,
-            "kind": "Release run",
-            "name": "release-20261115T080000",
-            "repository": "acme/widgets",
-            "hostname": "factory",
-            "process_id": 0,
-            "process_start": "gone",
-            "harness": "claude",
-            "model": null,
-            "effort": null,
-            "started_at": now,
-            "ended_at": now,
-            "stages": [],
-            "session_log": null,
-            "outcome": "merged",
-            "cause": null,
-            "issue_branch": null,
-            "pull_request": "https://github.com/acme/widgets/pull/18",
-            "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0"
-        }),
+        "release-20261115T080000",
+        "merged",
+        None,
+        "https://github.com/acme/widgets/pull/18",
+        Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
     );
     write_release(
         "20261115T070000-0500",
-        serde_json::json!({
-            "version": 1,
-            "kind": "Release run",
-            "name": "release-20261115T070000",
-            "repository": "acme/widgets",
-            "hostname": "factory",
-            "process_id": 0,
-            "process_start": "gone",
-            "harness": "claude",
-            "model": null,
-            "effort": null,
-            "started_at": now,
-            "ended_at": now,
-            "stages": [],
-            "session_log": null,
-            "outcome": "failed",
-            "cause": "bump PR review blocked",
-            "issue_branch": null,
-            "pull_request": "https://github.com/acme/widgets/pull/17"
-        }),
+        "release-20261115T070000",
+        "failed",
+        Some("bump PR review blocked"),
+        "https://github.com/acme/widgets/pull/17",
+        None,
     );
 
     let json = scenario.run(&["status", "--all", "--json"]);

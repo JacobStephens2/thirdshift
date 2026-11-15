@@ -34,7 +34,7 @@ pub(super) fn finish(
     links: &mut Links<'_>,
 ) -> Result<()> {
     let mut label = None;
-    if !cut.published {
+    if !cut.published() {
         let same_tag = cut.tagged.as_deref() == Some(&cut.head);
         if cut.tagged.is_none() || cut.recut || !same_tag {
             let merged = match &cut.pr {
@@ -130,7 +130,6 @@ pub(super) fn finish(
                 cut.tag()
             )
         })?;
-        cut.published = true;
         cut.release_url = Some(url);
     }
     if let Some(url) = &cut.release_url {

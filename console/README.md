@@ -258,8 +258,8 @@ the PR link stays usable with “(title unavailable)”. Without a PR, rows keep
 the issue subject and title, or the Command subject when neither exists.
 Clicking the subject link opens GitHub directly; clicking elsewhere opens Details.
 A Release run with a published GitHub Release links its bump PR as the row's
-main subject link and shows a second `Release v<version>` link beside it in
-Done and Needs you, while rows without `release_url` render as before.
+main subject link and shows a second `Release v<version>` link beside it across
+Inbox and History, while rows without `release_url` render as before.
 On a desktop, issue and pull request
 numbers stay visible as long repository or Process subjects shrink; hover
 the subject for its full text. The gist is where the

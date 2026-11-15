@@ -1647,7 +1647,6 @@ fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
 
 #[test]
 fn release_run_done_and_needs_you_rows_link_bump_pr_and_github_release() {
-    use serde_json::json;
     use std::time::{Duration, Instant};
 
     let owner = tempfile::tempdir().unwrap();
@@ -1655,92 +1654,38 @@ fn release_run_done_and_needs_you_rows_link_bump_pr_and_github_release() {
     configure(owner.path());
     configure(caller.path());
     record(owner.path(), 7, Some("merged"), 0);
-    let release_dir = owner
-        .path()
-        .join(".thirdshift/logs/acme/widgets/commands/release");
-    fs::create_dir_all(&release_dir).unwrap();
     let now = chrono::Local::now().to_rfc3339();
-    let write_release = |filename: &str, value: Value| {
-        fs::write(
-            release_dir.join(format!("{filename}.command.json")),
-            serde_json::to_vec(&value).unwrap(),
-        )
-        .unwrap();
-    };
-    write_release(
-        "release-done",
-        json!({
-            "version": 1,
-            "kind": "Release run",
-            "name": "release-20261115T080000",
-            "repository": "acme/widgets",
-            "hostname": "fixture",
-            "process_id": 0,
-            "process_start": "gone",
-            "harness": "codex",
-            "model": "gpt-6",
-            "effort": "high",
-            "started_at": now,
-            "ended_at": now,
-            "stages": [],
-            "session_log": null,
-            "outcome": "merged",
-            "cause": null,
-            "issue_branch": null,
-            "pull_request": "https://github.com/acme/widgets/pull/18",
-            "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0",
-            "tickets": []
-        }),
-    );
-    write_release(
-        "release-needs-you",
-        json!({
-            "version": 1,
-            "kind": "Release run",
-            "name": "release-20261115T070000",
-            "repository": "acme/widgets",
-            "hostname": "fixture",
-            "process_id": 0,
-            "process_start": "gone",
-            "harness": "codex",
-            "model": "gpt-6",
-            "effort": "high",
-            "started_at": now,
-            "ended_at": now,
-            "stages": [],
-            "session_log": null,
-            "outcome": "failed",
-            "cause": "bump PR review blocked",
-            "issue_branch": null,
-            "pull_request": "https://github.com/acme/widgets/pull/17",
-            "release_url": "https://github.com/acme/widgets/releases/tag/v0.1.9",
-            "tickets": []
-        }),
-    );
-    write_release(
-        "release-unlinked",
-        json!({
-            "version": 1,
-            "kind": "Release run",
-            "name": "release-20261115T060000",
-            "repository": "acme/widgets",
-            "hostname": "fixture",
-            "process_id": 0,
-            "process_start": "gone",
-            "harness": "codex",
-            "model": "gpt-6",
-            "effort": "high",
-            "started_at": now,
-            "ended_at": now,
-            "stages": [],
-            "session_log": null,
-            "outcome": "merged",
-            "cause": null,
-            "issue_branch": null,
-            "pull_request": "https://github.com/acme/widgets/pull/16",
-            "tickets": []
-        }),
-    );
+    for fixture in [
+        super::ReleaseRecordFixture {
+            filename: "release-done",
+            name: "release-20261115T080000",
+            outcome: "merged",
+            cause: None,
+            pull_request: "https://github.com/acme/widgets/pull/18",
+            release_url: Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+            started_at: &now,
+        },
+        super::ReleaseRecordFixture {
+            filename: "release-needs-you",
+            name: "release-20261115T070000",
+            outcome: "failed",
+            cause: Some("bump PR review blocked"),
+            pull_request: "https://github.com/acme/widgets/pull/17",
+            release_url: Some("https://github.com/acme/widgets/releases/tag/v0.1.9"),
+            started_at: &now,
+        },
+        super::ReleaseRecordFixture {
+            filename: "release-unlinked",
+            name: "release-20261115T060000",
+            outcome: "merged",
+            cause: None,
+            pull_request: "https://github.com/acme/widgets/pull/16",
+            release_url: None,
+            started_at: &now,
+        },
+    ] {
+        super::write_release_record(owner.path(), fixture);
+    }
 
     let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
     let local = Console::start(binary, owner.path());

@@ -1298,7 +1298,7 @@ mod tests {
     }
 
     #[test]
-    fn a_published_release_row_links_both_its_bump_pr_and_release_in_done_and_needs_you() {
+    fn a_published_release_row_links_both_its_bump_pr_and_release() {
         let now = chrono::Local::now();
         let make = |group: &str,
                     needs_you_kind: Option<&str>,
@@ -1316,13 +1316,13 @@ mod tests {
                 "state": if outcome_is_ended(group) { "ended" } else { "failed" },
                 "started_at": "2026-11-15T08:00:00Z",
                 "ended_at": "2026-11-15T08:05:00Z",
-                "outcome": if group == "done" { "merged" } else { "failed" },
+                "outcome": if group == "needs you" { "failed" } else { "merged" },
                 "pull_request": pr,
                 "release_url": release_url,
             })
         };
         fn outcome_is_ended(group: &str) -> bool {
-            group == "done"
+            matches!(group, "done" | "resolved" | "history")
         }
 
         let done = super::present(
@@ -1375,6 +1375,35 @@ mod tests {
                 version: "0.1.9-rc.1+build.4".into(),
             })
         );
+
+        for group in ["resolved", "history"] {
+            let preserved = super::present(
+                &make(
+                    group,
+                    None,
+                    "Release run",
+                    "release-20261115T063000",
+                    Some("https://github.com/acme/widgets/pull/18"),
+                    Some("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+                ),
+                now,
+            )
+            .unwrap();
+            assert_eq!(preserved.subject, "acme/widgets#18", "{group}");
+            assert_eq!(
+                preserved.subject_url.as_deref(),
+                Some("https://github.com/acme/widgets/pull/18"),
+                "{group}"
+            );
+            assert_eq!(
+                preserved.release_link,
+                Some(super::ReleaseLink {
+                    url: "https://github.com/acme/widgets/releases/tag/v0.2.0".into(),
+                    version: "0.2.0".into(),
+                }),
+                "{group}"
+            );
+        }
 
         let unlinked = super::present(
             &make(

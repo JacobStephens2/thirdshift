@@ -14,7 +14,6 @@ pub(super) struct Cut {
     pub head: String,
     pub pr: Option<crate::review::PullRequestUrl>,
     pub tagged: Option<String>,
-    pub published: bool,
     pub release_url: Option<String>,
     pub recut: bool,
     pub supersedes: Option<String>,
@@ -28,6 +27,9 @@ impl Cut {
     }
     pub fn tag(&self) -> String {
         format!("v{}", self.version)
+    }
+    pub fn published(&self) -> bool {
+        self.release_url.is_some()
     }
 
     pub fn commit(&mut self, git: &Git) -> Result<()> {
@@ -416,7 +418,6 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
             head,
             pr,
             tagged,
-            published: release_url.is_some(),
             release_url,
             recut: false,
             supersedes: None,
@@ -425,7 +426,7 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
         };
         cut.validate(git, github)?;
         if cut.tagged.is_none()
-            && !cut.published
+            && !cut.published()
             && let Some(previous) = &cut.previous
             && git_run(git, &["merge-base", previous, &cut.base])?
                 != git_run(git, &["rev-parse", &format!("{previous}^{{commit}}")])?
@@ -434,10 +435,10 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
         }
         if let Some(tagged) = cut.tagged.clone() {
             ensure!(
-                !cut.published || tagged == cut.head,
+                !cut.published() || tagged == cut.head,
                 "published tag differs from the release PR; never move a published tag"
             );
-            if !cut.published {
+            if !cut.published() {
                 let run = github.release_push_run("release.yml", "", &tagged)?;
                 if tagged != cut.head {
                     ensure!(
@@ -568,7 +569,6 @@ fn pinned_cut(
         head: String::new(),
         pr: None,
         tagged: None,
-        published: false,
         release_url: None,
         recut: false,
         supersedes: None,

@@ -247,7 +247,6 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                     head: String::new(),
                     pr: None,
                     tagged: None,
-                    published: false,
                     release_url: None,
                     recut: false,
                     supersedes: None,
@@ -257,7 +256,7 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
             }
         };
         let pin = format!("refs/thirdshift/release-candidates/{}", cut.version);
-        if request.with_experiment && !cut.published {
+        if request.with_experiment && !cut.published() {
             // Fetch from this run's own repository by path, so the Launch
             // directory's origin settings and remote helpers never run.
             let source = git
