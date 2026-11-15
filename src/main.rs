@@ -279,6 +279,20 @@ fn main() -> ExitCode {
         }) => {
             return printed(scoring::show(pull_request.as_deref(), mine, json));
         }
+        // A finished check prints its report even when the runner fails it.
+        Ok(Command::Evals(evals::Action::CheckRunner(request))) => {
+            return match evals::check_runner(&request) {
+                Ok((report, ok)) => {
+                    println!("{report}");
+                    if ok {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::FAILURE
+                    }
+                }
+                Err(error) => failure(&error),
+            };
+        }
         Ok(Command::Evals(action)) => return printed(evals::execute(action)),
         Ok(Command::Experiment(options)) => {
             return match evals::experiment::run(*options) {

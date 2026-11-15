@@ -16,7 +16,7 @@ use crate::process::{self, Control, Interruption};
 mod frozen;
 pub(crate) use frozen::Process;
 mod runner;
-pub(crate) use runner::Runner;
+pub(crate) use runner::{Check, Runner};
 
 pub(crate) struct Requested {
     commit: String,
@@ -120,6 +120,25 @@ pub(crate) struct Prepared {
     format: u32,
     pub baseline: Arm,
     pub candidate: Arm,
+}
+
+impl Prepared {
+    /// Both Arms run one already frozen Custom runner; nothing is built.
+    pub(crate) fn runners(runner: Runner) -> Self {
+        let arm = Arm {
+            commit: None,
+            binary: PathBuf::new(),
+            harness: None,
+            process: None,
+            runner: Some(runner),
+            families: None,
+        };
+        Self {
+            format: 1,
+            baseline: arm.clone(),
+            candidate: arm,
+        }
+    }
 }
 
 pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) -> Result<Prepared> {

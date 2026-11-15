@@ -6,6 +6,7 @@ mod coordination;
 mod cost;
 pub(crate) mod deciders;
 mod difficulty;
+pub(crate) mod dry_run;
 mod efficiency;
 mod evidence;
 mod execution;
