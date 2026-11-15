@@ -4731,9 +4731,9 @@ updates allow only Repository Admin; a separate rule with no bypass blocks
 deletion. The interactive wizard guides browser changes and verification;
 automated tests never modify live rulesets. See [GitHub's ruleset rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets).
 
-Review Passes (`review --author`) and Fix Passes skip `release-*` pull requests
-targeting `main`, leaving their version-only heads to the Release run. Explicit
-`thirdshift fix <pr-url> --no-merge --no-base-fix` still repairs those PRs.
+Explicit `thirdshift fix <pr-url> --no-merge --no-base-fix` still repairs
+release bump pull requests targeting `main` (see [Fix runs](#fix-runs) and
+[Review runs](#review-runs) for Pass selection).
 Session destructive-command signals flag `thirdshift release` and tag pushes
 using `git push --tags` or `refs/tags/` refspecs.
 
