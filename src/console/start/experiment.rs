@@ -82,6 +82,9 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
             _ => unreachable!(),
         };
         ensure!(valid, "invalid Experiment option: {key}");
+        if matches!(key.as_str(), "baseline_runner" | "candidate_runner") {
+            crate::console::evals::named_runner(value.as_str().unwrap())?;
+        }
         if key == "candidate" {
             let candidate = value.as_str().unwrap();
             ensure!(
@@ -181,6 +184,18 @@ mod tests {
                     .to_string()
                     .contains(expected)
             );
+        }
+    }
+
+    #[test]
+    fn custom_runner_file_paths_stay_cli_only() {
+        for options in [
+            json!({"candidate_runner":"/tmp/outside.toml", "suite":["process"]}),
+            json!({"baseline_runner":"/tmp/outside.toml", "candidate":"HEAD", "suite":["process"]}),
+        ] {
+            let options = serde_json::from_value(options).unwrap();
+            let error = arguments(Some(&options)).unwrap_err().to_string();
+            assert!(error.contains("CLI-only"), "{error}");
         }
     }
 

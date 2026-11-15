@@ -1463,8 +1463,9 @@ and <code>harness</code>, and names <code>runner</code> and its frozen <code>run
 <code>evals check-runner</code> reports.</p>
 <p>Console clients can start the same Experiment with <code>POST /api/v1/start</code> (also
 served at <code>/api/v1/runs</code>), putting <code>baseline_runner</code>, <code>candidate_runner</code> and
-<code>suite</code> in the request&#39;s <code>experiment</code> object. The CLI&#39;s per-Arm conflicts and
-process-suite requirements apply. Experiment pages and Trial Peek show each
+<code>suite</code> in the request&#39;s <code>experiment</code> object. Each names a Custom runner; a
+<code>.toml</code> file path is CLI-only. The CLI&#39;s per-Arm conflicts and process-suite
+requirements apply. Experiment pages and Trial Peek show each
 Custom runner&#39;s name, digest, recorded Git HEAD and dirty state, and declared
 roles. Blind pairwise pages keep that identity hidden until the preference is
 submitted; <code>revealed</code> then includes the Custom runner&#39;s details.</p>

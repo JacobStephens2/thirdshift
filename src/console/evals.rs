@@ -58,17 +58,23 @@ pub(super) struct CheckRunner {
     task: Option<String>,
 }
 
+/// A caller-selected local file stays CLI-only (ADR 0026): reading any
+/// `.toml` path would echo its text back in the manifest problem. The API
+/// names Custom runners under `~/.thirdshift/runners/` instead.
+pub(in crate::console) fn named_runner(runner: &str) -> anyhow::Result<()> {
+    ensure!(
+        !runner.ends_with(".toml"),
+        "the API names Custom runners; a .toml file path is CLI-only"
+    );
+    Ok(())
+}
+
 /// The CLI twin runs as its own process, as `process check` does, so a dry
 /// run's Trial, interruption handling and progress stay out of the Console.
 /// Its `--json` report is the response, whether or not the runner passed.
 pub(super) async fn check_runner(Json(request): Json<CheckRunner>) -> Response {
     api::action(api::Format::Json, "/", move || {
-        // A caller-selected local file stays CLI-only (ADR 0026): reading any
-        // `.toml` path would echo its text back in the manifest problem.
-        ensure!(
-            !request.runner.ends_with(".toml"),
-            "the API checks Custom runners by name; a .toml file path is CLI-only"
-        );
+        named_runner(&request.runner)?;
         let mut args = vec![
             "evals".to_owned(),
             "check-runner".to_owned(),

@@ -1390,8 +1390,9 @@ and `harness`, and names `runner` and its frozen `runner_digest`, the `digest`
 
 Console clients can start the same Experiment with `POST /api/v1/start` (also
 served at `/api/v1/runs`), putting `baseline_runner`, `candidate_runner` and
-`suite` in the request's `experiment` object. The CLI's per-Arm conflicts and
-process-suite requirements apply. Experiment pages and Trial Peek show each
+`suite` in the request's `experiment` object. Each names a Custom runner; a
+`.toml` file path is CLI-only. The CLI's per-Arm conflicts and process-suite
+requirements apply. Experiment pages and Trial Peek show each
 Custom runner's name, digest, recorded Git HEAD and dirty state, and declared
 roles. Blind pairwise pages keep that identity hidden until the preference is
 submitted; `revealed` then includes the Custom runner's details.
