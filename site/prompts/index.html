@@ -1117,7 +1117,7 @@ Also include in both prompts: "Prioritize changed hunks and supporting symbols, 
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
-Wait for every sub-agent you start to report before going on, and never end your turn while one is still running. In a headless session, such as a thirdshift session, ending your turn can end the session and stop a sub-agent partway, leaving the rest of the session's work undone.
+Start both sub-agents in the foreground, in one message so they still run in parallel, where your Harness lets you choose (on Claude Code, `run_in_background: false` on each Agent call), so your turn waits for their reports. Wait for every sub-agent you start to report before going on, and never end your turn while one is still running. In a headless session, such as a thirdshift session, ending your turn can end the session and stop a sub-agent partway, leaving the rest of the session's work undone.
 
 ### 5. Close unread changed files once
 

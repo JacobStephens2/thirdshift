@@ -413,7 +413,10 @@ fn a_resume_that_ends_the_same_way_gets_no_second_resume_and_a_later_failure_nam
     let ending = "ended with a background task still running (cargo test), which was killed";
     for line in [
         format!("thirdshift: implement: the Resume {ending}; carrying on"),
-        format!("thirdshift: implement session {ending}, and a later step failed: no PR found"),
+        format!(
+            "thirdshift: implement session {ending}, and a later step failed: \
+             the implement session made no commits and opened no pull request"
+        ),
     ] {
         assert!(
             result.stderr.lines().any(|said| said.starts_with(&line)),
@@ -424,7 +427,8 @@ fn a_resume_that_ends_the_same_way_gets_no_second_resume_and_a_later_failure_nam
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
         format!(
-            "thirdshift: failed ticket run (implement session {ending}, and a later step failed: no PR found)"
+            "thirdshift: failed ticket run (implement session {ending}, and a later step failed: \
+             the implement session made no commits and opened no pull request)"
         )
     );
 }

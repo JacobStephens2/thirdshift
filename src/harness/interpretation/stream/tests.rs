@@ -924,6 +924,22 @@ mod claude {
     }
 
     #[test]
+    fn a_task_stopped_in_the_last_turn_stays_cleared_past_its_notifications_empty_result() {
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                task_started("b1", "cargo watch"),
+                task_updated("b1", "killed"),
+                result(12, 0.4),
+                init("/work/widgets-issue-7"),
+                task_notification("b1", "stopped", "cargo watch"),
+                notification_result(0.4),
+            ],
+        );
+        assert!(progress.outcome.as_ref().unwrap().killed_work().is_empty());
+    }
+
+    #[test]
     fn an_init_without_a_session_id_gives_none() {
         let (progress, _) = lines(Harness::Claude, &[init("/a")]);
         assert_eq!(

@@ -875,8 +875,8 @@ impl Route<'_> {
 
     /// Write the line that says the pull request was built with the Harness
     /// in its body, in place of any thirdshift wrote there before, only
-    /// warning if that fails, as the work is done without it. Nothing if
-    /// there is no pull request: marking it ready says so.
+    /// warning if that fails, as the work is done without it. Opening a
+    /// missing pull request comes first, and fails when there is none to open.
     fn write_built_with(&self, outside: &mut impl Outside) {
         if let Err(error) = outside.write_built_with(self.harness) {
             outside.warn(
