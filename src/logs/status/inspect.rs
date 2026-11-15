@@ -18,7 +18,10 @@ pub(crate) fn log_path(
     selected_log(command, session)
 }
 
-fn selected_log(command: Observation<'_>, session: Option<&str>) -> Result<std::path::PathBuf> {
+pub(in crate::logs) fn selected_log(
+    command: Observation<'_>,
+    session: Option<&str>,
+) -> Result<std::path::PathBuf> {
     match session {
         Some(session) => command.session(session),
         None => command
@@ -249,7 +252,7 @@ fn collect_subject_urls<'a>(
     urls: &mut Vec<&'a str>,
     depth: usize,
 ) {
-    if depth > 8 {
+    if depth > super::target::MAX_DISPATCH_DEPTH {
         return;
     }
     if let Some(pr) = command.record.pull_request.as_deref() {

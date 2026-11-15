@@ -115,19 +115,7 @@ impl Snapshot {
                 }
                 continue;
             };
-            fn mark(command: &mut Command, account: &Option<String>) {
-                command.account = account.clone();
-                confine_other_account_sessions(command);
-                for child in command.children.iter_mut().chain(&mut command.dispatched) {
-                    mark(child, account);
-                }
-            }
-            for entry in &mut other.commands {
-                match entry {
-                    Entry::Record(command) => mark(command, &source.account),
-                    Entry::History(command) => command.account = source.account.clone(),
-                }
-            }
+            adopt_account(&mut other, &source.account);
             snapshot.commands.extend(other.commands);
         }
         if let Some(input) = input
@@ -146,7 +134,25 @@ impl Snapshot {
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
+}
 
+pub(super) fn adopt_account(snapshot: &mut Snapshot, account: &Option<String>) {
+    fn mark(command: &mut Command, account: &Option<String>) {
+        command.account = account.clone();
+        confine_other_account_sessions(command);
+        for child in command.children.iter_mut().chain(&mut command.dispatched) {
+            mark(child, account);
+        }
+    }
+    for entry in &mut snapshot.commands {
+        match entry {
+            Entry::Record(command) => mark(command, account),
+            Entry::History(command) => command.account = account.clone(),
+        }
+    }
+}
+
+impl Snapshot {
     pub(super) fn load(root: &Path, now: DateTime<Local>) -> Result<Self> {
         Self::load_with_silence(root, now, std::time::Duration::from_secs(10 * 60))
     }

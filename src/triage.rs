@@ -293,9 +293,15 @@ fn investigate(
     mut claim: Option<existing::Claim<'_>>,
 ) -> Result<Ended, FailedRun> {
     let target = input.issue();
-    let (issue_title, finding_notification) = match target {
+    let existing::IssueOverview {
+        title: issue_title,
+        finding_notification,
+    } = match target {
         Some(issue) => existing::issue_overview(issue, &GitHub::new())?,
-        None => (None, None),
+        None => existing::IssueOverview {
+            title: None,
+            finding_notification: None,
+        },
     };
     if issue_title.is_some() {
         logs::issue_title(issue_title);

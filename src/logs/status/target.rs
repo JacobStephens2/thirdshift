@@ -7,10 +7,10 @@ use serde_json::Value;
 use super::super::command_record::Issue;
 use super::super::github::Kept;
 use super::super::reading::{Command, Observation};
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::review::PullRequestUrl;
 
-const MAX_DISPATCH_DEPTH: usize = 8;
+pub(in crate::logs) const MAX_DISPATCH_DEPTH: usize = 8;
 
 /// One validated GitHub issue or pull request link and its optional title.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,10 +40,9 @@ impl GitHubTarget {
                 let primary = issue_target(command.record.issue.as_ref(), repository);
                 let mut pull_requests = Vec::new();
                 let mut seen = BTreeSet::new();
-                collect_command_prs(
-                    command,
+                collect_pr_links(
+                    CommandPrSource { command, kept },
                     repository,
-                    kept,
                     selector.as_deref(),
                     &mut pull_requests,
                     &mut seen,
@@ -65,10 +64,13 @@ impl GitHubTarget {
         let subjects = &command["github"]["subjects"];
         let mut pull_requests = Vec::new();
         let mut seen = BTreeSet::new();
-        collect_details_prs(
-            command,
+        collect_pr_links(
+            DetailsPrSource {
+                node: command,
+                subjects,
+            },
             repository,
-            subjects,
+            None,
             &mut pull_requests,
             &mut seen,
             0,
@@ -95,7 +97,7 @@ fn is_safe_github_url(raw: &str) -> bool {
 }
 
 fn valid_repo_slug(repo: &str) -> bool {
-    !repo.is_empty() && IssueUrl::parse(&format!("https://github.com/{repo}/issues/1")).is_ok()
+    Repo::parse_slug(repo).is_some()
 }
 
 fn validated_issue_url(
@@ -196,10 +198,100 @@ fn kept_pr_title(url: &str, rows: &[&str], kept: Option<&Kept>) -> Option<String
         .and_then(|state| non_empty(state.title.as_deref()))
 }
 
-fn collect_command_prs(
-    command: &Command,
-    fallback_repo: &str,
-    kept: Option<&Kept>,
+trait PrSource<'a>: Sized {
+    fn repository(&self) -> Option<&'a str>;
+    fn pull_request(&self) -> Option<&'a str>;
+    fn pr_title(&self, parsed_url: &str, raw_url: &str, outer_row: Option<&str>) -> Option<String>;
+    fn dispatched(&self) -> Vec<Self>;
+}
+
+struct CommandPrSource<'a> {
+    command: &'a Command,
+    kept: Option<&'a Kept>,
+}
+
+impl<'a> PrSource<'a> for CommandPrSource<'a> {
+    fn repository(&self) -> Option<&'a str> {
+        Some(self.command.record.repository.as_str())
+    }
+
+    fn pull_request(&self) -> Option<&'a str> {
+        self.command.record.pull_request.as_deref()
+    }
+
+    fn pr_title(
+        &self,
+        parsed_url: &str,
+        _raw_url: &str,
+        outer_row: Option<&str>,
+    ) -> Option<String> {
+        let own_selector = Observation::Record(self.command).selector();
+        let mut rows = Vec::new();
+        if let Some(sel) = own_selector.as_deref() {
+            rows.push(sel);
+        }
+        if let Some(sel) = outer_row
+            && !rows.contains(&sel)
+        {
+            rows.push(sel);
+        }
+        kept_pr_title(parsed_url, &rows, self.kept)
+            .or_else(|| non_empty(self.command.record.pull_request_title.as_deref()))
+    }
+
+    fn dispatched(&self) -> Vec<Self> {
+        self.command
+            .dispatched
+            .iter()
+            .map(|child| CommandPrSource {
+                command: child,
+                kept: self.kept,
+            })
+            .collect()
+    }
+}
+
+struct DetailsPrSource<'a> {
+    node: &'a Value,
+    subjects: &'a Value,
+}
+
+impl<'a> PrSource<'a> for DetailsPrSource<'a> {
+    fn repository(&self) -> Option<&'a str> {
+        self.node["repository"].as_str()
+    }
+
+    fn pull_request(&self) -> Option<&'a str> {
+        self.node["pull_request"].as_str()
+    }
+
+    fn pr_title(
+        &self,
+        parsed_url: &str,
+        raw_url: &str,
+        _outer_row: Option<&str>,
+    ) -> Option<String> {
+        non_empty(self.subjects[parsed_url]["facts"]["title"].as_str())
+            .or_else(|| non_empty(self.subjects[raw_url]["facts"]["title"].as_str()))
+            .or_else(|| non_empty(self.node["pull_request_title"].as_str()))
+    }
+
+    fn dispatched(&self) -> Vec<Self> {
+        self.node["dispatched"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|child| DetailsPrSource {
+                node: child,
+                subjects: self.subjects,
+            })
+            .collect()
+    }
+}
+
+fn collect_pr_links<'a, S: PrSource<'a>>(
+    source: S,
+    fallback_repo: &'a str,
     outer_row: Option<&str>,
     prs: &mut Vec<TargetLink>,
     seen: &mut BTreeSet<String>,
@@ -208,62 +300,14 @@ fn collect_command_prs(
     if depth > MAX_DISPATCH_DEPTH {
         return;
     }
-    let repo = if command.record.repository.is_empty() {
-        fallback_repo
-    } else {
-        command.record.repository.as_str()
-    };
-    let own_selector = Observation::Record(command).selector();
-    let mut rows = Vec::new();
-    if let Some(sel) = own_selector.as_deref() {
-        rows.push(sel);
-    }
-    if let Some(sel) = outer_row
-        && !rows.contains(&sel)
-    {
-        rows.push(sel);
-    }
-    if let Some(pr_url) = command.record.pull_request.as_deref()
-        && let Some(parsed) = validated_pr_url(pr_url, repo)
-    {
-        let title = kept_pr_title(&parsed.url, &rows, kept)
-            .or_else(|| non_empty(command.record.pull_request_title.as_deref()));
-        merge_pull_request(
-            prs,
-            seen,
-            TargetLink {
-                label: format!("{}#{}", parsed.issue.repo_slug(), parsed.issue.number),
-                url: Some(parsed.url),
-                title,
-            },
-        );
-    }
-    for child in &command.dispatched {
-        collect_command_prs(child, repo, kept, outer_row, prs, seen, depth + 1);
-    }
-}
-
-fn collect_details_prs(
-    node: &Value,
-    fallback_repo: &str,
-    subjects: &Value,
-    prs: &mut Vec<TargetLink>,
-    seen: &mut BTreeSet<String>,
-    depth: usize,
-) {
-    if depth > MAX_DISPATCH_DEPTH {
-        return;
-    }
-    let repo = node["repository"]
-        .as_str()
+    let repo = source
+        .repository()
         .filter(|repo| !repo.is_empty())
         .unwrap_or(fallback_repo);
-    if let Some(pr_url) = node["pull_request"].as_str()
+    if let Some(pr_url) = source.pull_request()
         && let Some(parsed) = validated_pr_url(pr_url, repo)
     {
-        let title = non_empty(subjects[&parsed.url]["facts"]["title"].as_str())
-            .or_else(|| non_empty(subjects[pr_url]["facts"]["title"].as_str()))
-            .or_else(|| non_empty(node["pull_request_title"].as_str()));
+        let title = source.pr_title(&parsed.url, pr_url, outer_row);
         merge_pull_request(
             prs,
             seen,
@@ -274,10 +318,8 @@ fn collect_details_prs(
             },
         );
     }
-    if let Some(dispatched) = node["dispatched"].as_array() {
-        for child in dispatched {
-            collect_details_prs(child, repo, subjects, prs, seen, depth + 1);
-        }
+    for child in source.dispatched() {
+        collect_pr_links(child, repo, outer_row, prs, seen, depth + 1);
     }
 }
 
