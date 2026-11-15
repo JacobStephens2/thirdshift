@@ -143,7 +143,7 @@ pub(super) fn write(
         harness: choice.harness,
         model: choice.model.as_deref(),
         repository: &workspace,
-        skills_dir: &crate::skills::written_out()?,
+        host: sandbox::Host::Sealed,
         harness_binary: &sandbox::resolve_binary(adapter.name())?,
         home: &crate::config::home()?,
         fresh_home: &root.path().join("home"),

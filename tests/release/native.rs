@@ -1552,3 +1552,86 @@ fn an_open_fork_pr_on_a_release_branch_name_does_not_block_releases() {
         Some(release.pr_head("release-0.2.0"))
     );
 }
+
+#[test]
+fn release_summary_sandbox_binds_no_host_toolchain_directories() {
+    let release = Release::new();
+    shipped(&release);
+    let nvm = release.root().join("home/.nvm");
+    fs::create_dir_all(&nvm).unwrap();
+    fs::write(nvm.join("host-only.txt"), "host file").unwrap();
+    let binary = release.bin().join("claude");
+    fs::remove_file(&binary).unwrap();
+    write_executable(
+        &binary,
+        &format!(
+            r#"#!/bin/sh
+if [ "$1 $2" = 'auth status' ]; then exit 0; fi
+cat >/dev/null
+if [ -r '{nvm}/host-only.txt' ]; then summary='Host file readable'; else summary='Sealed summary (#2).'; fi
+printf '%s\n' '{{"type":"system","subtype":"init","session_id":"release-summary-test"}}'
+printf '{{"type":"result","subtype":"success","is_error":false,"result":"%s"}}\n' "$summary"
+"#,
+            nvm = nvm.display()
+        ),
+    );
+    let output = with_input(
+        command(&release, "").arg("--patch").env_remove("NVM_DIR"),
+        "",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.1.1");
+    assert!(
+        body.contains("Sealed summary (#2)."),
+        "summary Session read a host toolchain file: {body}"
+    );
+}
+
+/// An npm-installed fake Harness: its `#!` line asks `env` for `node`, and a
+/// fake `node` under `~/.nvm` runs it as a shell script.
+fn npm_summary(release: &Release) -> std::path::PathBuf {
+    let nvm = release.root().join("home/.nvm");
+    let node_bin = nvm.join("versions/node/v22.0.0/bin");
+    fs::create_dir_all(&node_bin).unwrap();
+    fs::write(nvm.join("host-only.txt"), "host file").unwrap();
+    write_executable(&node_bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n");
+    let binary = release.bin().join("claude");
+    fs::remove_file(&binary).unwrap();
+    write_executable(
+        &binary,
+        &format!(
+            r#"#!/usr/bin/env node
+if [ "$1 $2" = 'auth status' ]; then exit 0; fi
+cat >/dev/null
+if [ -r '{nvm}/host-only.txt' ]; then summary='Host file readable'; else summary='Node-run summary (#2).'; fi
+printf '%s\n' '{{"type":"system","subtype":"init","session_id":"release-summary-test"}}'
+printf '{{"type":"result","subtype":"success","is_error":false,"result":"%s"}}\n' "$summary"
+"#,
+            nvm = nvm.display()
+        ),
+    );
+    node_bin
+}
+
+#[test]
+fn release_summary_sandbox_binds_only_node_for_an_npm_installed_harness() {
+    let release = Release::new();
+    shipped(&release);
+    let node_bin = npm_summary(&release);
+    let path = format!(
+        "{}:{}:{}",
+        release.bin().display(),
+        node_bin.display(),
+        std::env::var("PATH").unwrap()
+    );
+    let output = with_input(
+        command(&release, "")
+            .arg("--patch")
+            .env("PATH", path)
+            .env_remove("NVM_DIR"),
+        "",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = release.pr_body("release-0.1.1");
+    assert!(body.contains("Node-run summary (#2)."), "{body}");
+}
