@@ -4356,9 +4356,9 @@ or verify the <code>v*</code> tag rulesets on <code>JacobStephens2/thirdshift</c
 updates allow only Repository Admin; a separate rule with no bypass blocks
 deletion. The interactive wizard guides browser changes and verification;
 automated tests never modify live rulesets. See <a href="https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets">GitHub&#39;s ruleset rules</a>.</p>
-<p>Review Passes (<code>review --author</code>) and Fix Passes skip <code>release-*</code> pull requests
-targeting <code>main</code>, leaving their version-only heads to the Release run. Explicit
-<code>thirdshift fix &lt;pr-url&gt; --no-merge --no-base-fix</code> still repairs those PRs.
+<p>Explicit <code>thirdshift fix &lt;pr-url&gt; --no-merge --no-base-fix</code> still repairs
+release bump pull requests targeting <code>main</code> (see <a href="#fix-runs">Fix runs</a> and
+<a href="#review-runs">Review runs</a> for Pass selection).
 Session destructive-command signals flag <code>thirdshift release</code> and tag pushes
 using <code>git push --tags</code> or <code>refs/tags/</code> refspecs.</p>
 <p>On tag pushes, the release workflow checks <code>github.actor</code> is <code>JacobStephens2</code>

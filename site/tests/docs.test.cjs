@@ -67,6 +67,24 @@ test("the Linux-only manual does not direct native non-Linux Console execution",
   }
 });
 
+test("the manual states the release-* Pass skip only in Fix and Review candidate selection", async () => {
+  for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
+    const manual = await readFile(resolve(__dirname, file), "utf8");
+    assert.equal(manual.match(/release-\*/g)?.length ?? 0, 2,
+      `${file}: expected release-* skip only in Fix and Review Pass selection`);
+    const safeguards = (file.endsWith(".md")
+      ? manual.split("### Release safeguards")[1].split("### Release publication")[0]
+      : manual.split('id="release-safeguards"')[1].split('id="release-publication"')[0]
+        .replaceAll("&lt;", "<").replaceAll("&gt;", ">"));
+    assert.doesNotMatch(safeguards, /Review Passes .* skip/,
+      `${file}: Release safeguards duplicates Pass skip`);
+    assert.match(safeguards, /thirdshift fix <pr-url> --no-merge --no-base-fix/,
+      `${file}: Release safeguards omits targeted Fix guidance`);
+    assert.match(safeguards, /Session destructive-command signals/,
+      `${file}: Release safeguards omits session-signal guidance`);
+  }
+});
+
 test("the README and manual's repository links reach files and section anchors", async () => {
   const { marked } = await import("marked");
   const { default: GithubSlugger } = await import("github-slugger");
