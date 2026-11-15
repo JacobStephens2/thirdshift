@@ -87,7 +87,12 @@ pub(crate) struct ReleaseLink {
 
 impl ReleaseLink {
     fn parse(url: &str, repository: &str) -> Option<Self> {
-        if !crate::github::valid_repo_slug(repository) || !super::target::is_safe_github_url(url) {
+        if url
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+            || !crate::github::valid_repo_slug(repository)
+            || !super::target::is_safe_github_url(url)
+        {
             return None;
         }
         let parsed = reqwest::Url::parse(url).ok()?;
@@ -118,6 +123,18 @@ impl ReleaseLink {
             version: version.to_owned(),
         })
     }
+}
+
+/// Validate a Command's optional published release URL against its kind and repository.
+pub(super) fn command_release_link(
+    kind: &str,
+    release_url: Option<&str>,
+    repository: &str,
+) -> Option<ReleaseLink> {
+    (kind == "Release run")
+        .then_some(release_url)
+        .flatten()
+        .and_then(|url| ReleaseLink::parse(url, repository))
 }
 
 #[derive(Clone, Copy)]
@@ -484,10 +501,8 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             group.state_word(kind, value["stopping"] == true, &facts.state)
         })
         .to_owned();
-    let release_link = (facts.kind == "Release run")
-        .then_some(facts.release_url.as_deref())
-        .flatten()
-        .and_then(|url| ReleaseLink::parse(url, &facts.repository));
+    let release_link =
+        command_release_link(&facts.kind, facts.release_url.as_deref(), &facts.repository);
     let mut row = Row {
         order: group
             .unwrap_or(Group::History)
@@ -1543,6 +1558,8 @@ mod tests {
             "https://github.com/acme/widgets/releases/tag/latest",
             "https://github.com/acme/widgets/releases/tag/v0.2..0",
             "https://github.com/acme/widgets/releases/tag/v0.2.0.",
+            "https://github.com/acme/widgets/releases/tag/v0.2\n.0",
+            "https://github.com/acme/widgets/releases/tag/v0.2\u{1b}.0",
         ]
         .into_iter()
         .enumerate()
