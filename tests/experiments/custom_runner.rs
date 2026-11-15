@@ -1659,28 +1659,36 @@ fn custom_runner_experiment_command_record_names_no_fabricated_harness() {
     assert_eq!(record["harness"], "custom runner", "{record}");
 }
 
-/// The Custom runner sandbox binds its attempt directory read-write. Files the
-/// host writes there after the runner ends must not follow links the runner
-/// planted to host files outside the sandbox.
-#[test]
-fn host_attempt_writes_do_not_follow_links_planted_by_the_custom_runner() {
+/// A process fixture for a runner that declares no Harness and makes no
+/// network call, run inside real bwrap. Such a runner needs no relay traffic,
+/// so a socat stand-in that only answers the readiness probe is enough.
+fn quiet_runner_sandbox(label: &str) -> Option<Fixture> {
     let namespaces = std::process::Command::new("bwrap")
         .args(["--ro-bind", "/", "/", "--unshare-pid", "--unshare-net"])
         .args(["--proc", "/proc", "--", "/bin/true"])
         .output()
         .is_ok_and(|output| output.status.success());
     if !namespaces {
-        println!("SKIPPED (planted attempt links): bwrap namespaces unavailable");
-        return;
+        println!("SKIPPED ({label}): bwrap namespaces unavailable");
+        return None;
     }
     let fixture = process::fixture();
-    // This runner declares no Harness and makes no network call, so a relay
-    // stand-in that only answers the readiness probe suffices without socat.
     harness_script(
         &fixture,
         "socat",
         "case \"$*\" in *TCP-LISTEN*) exec sleep 600 ;; esac\nexit 0",
     );
+    Some(fixture)
+}
+
+/// The Custom runner sandbox binds its attempt directory read-write. Files the
+/// host writes there after the runner ends must not follow links the runner
+/// planted to host files outside the sandbox.
+#[test]
+fn host_attempt_writes_do_not_follow_links_planted_by_the_custom_runner() {
+    let Some(fixture) = quiet_runner_sandbox("planted attempt links") else {
+        return;
+    };
     let outside = fixture.scenario.path("host-owned");
     fs::create_dir_all(&outside).unwrap();
     let names = ["stdout", "stderr", "exit-status", "uncommitted.txt"];
@@ -1716,23 +1724,9 @@ fn host_attempt_writes_do_not_follow_links_planted_by_the_custom_runner() {
 /// that config names, outside the sandbox.
 #[test]
 fn host_git_in_the_runner_repository_ignores_runner_configured_commands() {
-    let namespaces = std::process::Command::new("bwrap")
-        .args(["--ro-bind", "/", "/", "--unshare-pid", "--unshare-net"])
-        .args(["--proc", "/proc", "--", "/bin/true"])
-        .output()
-        .is_ok_and(|output| output.status.success());
-    if !namespaces {
-        println!("SKIPPED (runner Git config): bwrap namespaces unavailable");
+    let Some(fixture) = quiet_runner_sandbox("runner Git config") else {
         return;
-    }
-    let fixture = process::fixture();
-    // This runner declares no Harness and makes no network call, so a relay
-    // stand-in that only answers the readiness probe suffices without socat.
-    harness_script(
-        &fixture,
-        "socat",
-        "case \"$*\" in *TCP-LISTEN*) exec sleep 600 ;; esac\nexit 0",
-    );
+    };
     let monitor = fixture.scenario.path("host-ran-fsmonitor");
     let filter = fixture.scenario.path("host-ran-filter");
     runner(
@@ -1761,5 +1755,92 @@ fn host_git_in_the_runner_repository_ignores_runner_configured_commands() {
         let diagnostic = result["attempts"][0]["cause"].as_str().unwrap_or("");
         assert!(diagnostic.contains(".scratch/private.txt"), "{result}");
         assert!(diagnostic.contains("feature.txt"), "{result}");
+    }
+}
+
+/// A runner can leave anything at `output/result.json`. The host reading it
+/// after the runner ends must not wait on a FIFO no process will ever write:
+/// that would hold the Experiment forever, outside the Trial's timeout.
+#[test]
+fn a_fifo_result_fails_its_trial_instead_of_holding_the_host() {
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let Some(fixture) = quiet_runner_sandbox("FIFO result") else {
+        return;
+    };
+    runner(
+        &fixture,
+        &deliver_with(
+            "json.dump({'version':1, 'outcome':'delivered'}, open(output / 'result.json', 'w'))",
+            "os.mkfifo(output / 'result.json')",
+        ),
+    );
+    let experiments = fixture.scenario.path("home/.thirdshift/evals/experiments");
+    let done = Arc::new(AtomicBool::new(false));
+    let blocked = Arc::new(AtomicBool::new(false));
+    // A FIFO the host holds open for reading accepts a nonblocking writer.
+    // Seen still held after a grace period, the watcher records the block
+    // and releases it with a result, so this test always ends.
+    let watcher = std::thread::spawn({
+        let (done, blocked) = (Arc::clone(&done), Arc::clone(&blocked));
+        move || {
+            let mut seen = std::collections::BTreeMap::new();
+            while !done.load(Ordering::Relaxed) {
+                for fifo in fifos(&experiments) {
+                    let first = *seen
+                        .entry(fifo.clone())
+                        .or_insert_with(std::time::Instant::now);
+                    if first.elapsed() < std::time::Duration::from_secs(10) {
+                        continue;
+                    }
+                    if let Ok(mut writer) = fs::OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo)
+                    {
+                        blocked.store(true, Ordering::Relaxed);
+                        let _ = std::io::Write::write_all(
+                            &mut writer,
+                            br#"{"version":1,"outcome":"failed"}"#,
+                        );
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
+    });
+    fn fifos(root: &std::path::Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    stack.push(entry.path());
+                } else if kind.is_fifo() && entry.file_name() == "result.json" {
+                    found.push(entry.path());
+                }
+            }
+        }
+        found
+    }
+    let result = fixture.scenario.run(&runner_args());
+    done.store(true, Ordering::Relaxed);
+    watcher.join().unwrap();
+    assert!(
+        !blocked.load(Ordering::Relaxed),
+        "the host waited on the runner's FIFO result.json: {}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "failed", "{result}");
     }
 }

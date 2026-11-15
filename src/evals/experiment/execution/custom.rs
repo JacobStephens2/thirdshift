@@ -235,6 +235,9 @@ pub(super) fn locale_token(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '+' | '-'))
 }
 
+/// Bytes of `result.json` the host reads: its outcome and a short cause.
+const RESULT_LIMIT: u64 = 1 << 20;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResultDocument {
@@ -251,11 +254,14 @@ struct ResultDocument {
 /// Also returns whether the outcome is the runner's own valid report.
 pub(super) fn result(process: &ProcessOutput, attempt: &Path, elapsed: u128) -> (Output, bool) {
     let result = (|| -> Result<Output> {
-        let document: ResultDocument = serde_json::from_slice(
-            &fs::read(attempt.join("output/result.json"))
-                .context("missing or unreadable Custom runner result.json")?,
-        )
-        .context("invalid Custom runner result.json")?;
+        // The runner owns its output directory: open no link, FIFO or
+        // device there, and read a bounded document.
+        let bytes = sessions::confined::Directory::open(&attempt.join("output"))
+            .and_then(|output| output.read_at_most("result.json", RESULT_LIMIT))
+            .and_then(|bytes| bytes.context("missing result.json"))
+            .context("missing or unreadable Custom runner result.json")?;
+        let document: ResultDocument =
+            serde_json::from_slice(&bytes).context("invalid Custom runner result.json")?;
         ensure!(
             document.version == 1,
             "unsupported Custom runner result version"

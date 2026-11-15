@@ -15,7 +15,7 @@ use crate::harness::{Choice, Harness};
 use crate::logs::trace::Context;
 use crate::session::trace::Trace;
 
-mod confined;
+pub(super) mod confined;
 mod transcript;
 
 #[derive(Default)]
