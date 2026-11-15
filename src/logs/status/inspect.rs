@@ -18,7 +18,10 @@ pub(crate) fn log_path(
     selected_log(command, session)
 }
 
-fn selected_log(command: Observation<'_>, session: Option<&str>) -> Result<std::path::PathBuf> {
+pub(in crate::logs) fn selected_log(
+    command: Observation<'_>,
+    session: Option<&str>,
+) -> Result<std::path::PathBuf> {
     match session {
         Some(session) => command.session(session),
         None => command
@@ -244,23 +247,37 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn collect_subject_urls<'a>(
+    command: &'a crate::logs::reading::Command,
+    urls: &mut Vec<&'a str>,
+    depth: usize,
+) {
+    if depth > super::target::MAX_DISPATCH_DEPTH {
+        return;
+    }
+    if let Some(pr) = command.record.pull_request.as_deref() {
+        urls.push(pr);
+    }
+    if let Some(issue) = command.record.issue.as_ref() {
+        urls.push(issue.url.as_str());
+    }
+    for child in &command.dispatched {
+        collect_subject_urls(child, urls, depth + 1);
+    }
+}
+
 pub(in crate::logs) fn details(
     config: &UserConfig,
     snapshot: &Snapshot,
     command: Observation<'_>,
 ) -> Result<serde_json::Value> {
     let kept = crate::logs::github::load(&config.logs_dir);
-    let github = if let Observation::Record(record) = command
+    let github = if let Observation::Record(command_record) = command
         && let Some(row) = command.selector()
     {
-        let record = &record.record;
-        let urls = record
-            .pull_request
-            .as_deref()
-            .into_iter()
-            .chain(record.issue.as_ref().map(|issue| issue.url.as_str()))
-            .collect();
-        kept.command_answer(&row, record.pull_request.as_deref(), urls)
+        let mut urls = Vec::new();
+        collect_subject_urls(command_record, &mut urls, 0);
+        kept.command_answer(&row, command_record.record.pull_request.as_deref(), urls)
     } else {
         Default::default()
     };

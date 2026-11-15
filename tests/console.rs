@@ -2268,3 +2268,353 @@ fn command_details_and_inbox_share_subject_and_title_fallbacks() {
         }
     }
 }
+
+#[test]
+fn command_log_and_session_trace_show_target_and_title_for_selected_command() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+
+    // 1. Pickup run with an issue + HTML-special title and a dispatched Run that opened a PR.
+    let mut pickup = record(home.path(), 1, Some("ready for review"), 0);
+    pickup["kind"] = json!("Pickup run");
+    pickup["name"] = json!("pickup-43");
+    pickup["issue"] = json!({
+        "number": 43,
+        "url": "https://github.com/acme/widgets/issues/43",
+        "title": "Fix <xss> & layout"
+    });
+    pickup["pull_request"] = Value::Null;
+    pickup["started_at"] = json!(chrono::Local::now().to_rfc3339());
+    let session = home.path().join(
+        ".thirdshift/logs/acme/widgets/commands/issue/1-20260101T120000+0000-implement.logs.jsonl",
+    );
+    support::session_trace::write(&session, "Session body");
+    let mut child = pickup.clone();
+    child["kind"] = json!("Run");
+    child["name"] = json!("acme/widgets#43");
+    child["pull_request"] = json!("https://github.com/acme/widgets/pull/101");
+    child["pull_request_title"] = json!("Add <target> heading");
+    child["session_log"] = json!(session);
+    child["dispatched"] = json!([]);
+    pickup["dispatched"] = json!([child]);
+    write_record(home.path(), 1, &pickup);
+
+    // 2. Review run (PR + pull_request_title, no issue).
+    let mut review = record(home.path(), 2, Some("reviewed"), 1);
+    review["kind"] = json!("Review run");
+    review["name"] = json!("review-102");
+    review["issue"] = Value::Null;
+    review["pull_request"] = json!("https://github.com/acme/widgets/pull/102");
+    review["pull_request_title"] = json!("Polish review title");
+    write_record(home.path(), 2, &review);
+
+    // 3. Legacy Fix run without pull_request_title, falling back to kept PR title.
+    let mut fix = record(home.path(), 3, Some("ready for review"), 2);
+    fix["kind"] = json!("Fix run");
+    fix["name"] = json!("fix-103");
+    fix["issue"] = Value::Null;
+    fix["pull_request"] = json!("https://github.com/acme/widgets/pull/103");
+    write_record(home.path(), 3, &fix);
+
+    // 4. Review run with stale pull_request_title overridden by live github-inbox.json title.
+    let mut renamed = record(home.path(), 7, Some("ready for review"), 1);
+    renamed["kind"] = json!("Review run");
+    renamed["name"] = json!("review-104");
+    renamed["issue"] = Value::Null;
+    renamed["pull_request"] = json!("https://github.com/acme/widgets/pull/104");
+    renamed["pull_request_title"] = json!("Stale recorded title");
+    write_record(home.path(), 7, &renamed);
+
+    // 5. Triage run with issue + issue title.
+    let mut triage = record(home.path(), 4, Some("triaged"), 3);
+    triage["kind"] = json!("Triage run");
+    triage["name"] = json!("triage-44");
+    triage["issue"] = json!({
+        "number": 44,
+        "url": "https://github.com/acme/widgets/issues/44",
+        "title": "Triaged bug title"
+    });
+    triage["pull_request"] = Value::Null;
+    write_record(home.path(), 4, &triage);
+
+    // 6. Idle Architect run with neither issue nor PR nor dispatched runs.
+    let mut idle = record(home.path(), 5, Some("no changes"), 4);
+    idle["kind"] = json!("Architect run");
+    idle["name"] = json!("architect-idle");
+    idle["issue"] = Value::Null;
+    idle["pull_request"] = Value::Null;
+    idle["dispatched"] = json!([]);
+    write_record(home.path(), 5, &idle);
+
+    let issue_folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    for n in [1, 2, 3, 4, 5, 7] {
+        fs::write(
+            issue_folder.join(format!("{n}-fixture.log")),
+            format!("Command log body {n}\n"),
+        )
+        .unwrap();
+    }
+
+    // 7. History activity entry without a Command record (issue link, no title).
+    let root = home.path().join(".thirdshift/logs/acme/widgets");
+    fs::write(
+        issue_folder.join("8-20260101T120000+0000.log"),
+        "Old Command output",
+    )
+    .unwrap();
+    fs::write(
+        root.join("activity.log"),
+        "2026-01-01 12:00:00 Run #8 started: commands/issue/8-20260101T120000+0000.log\n2026-01-01 12:01:00 Run #8 ended: merged\n",
+    )
+    .unwrap();
+
+    // Seed kept GitHub state with PR #103 legacy fallback title and PR #104 refreshed title.
+    fs::write(
+        home.path().join(".thirdshift/logs/github-inbox.json"),
+        serde_json::to_vec(&json!({
+            "version": 2,
+            "subjects": {
+                "https://github.com/acme/widgets/pull/103": {
+                    "state": "Open",
+                    "title": "Legacy fix title from kept",
+                    "merged_at": null,
+                    "closed_at": null,
+                    "ci": "unknown",
+                    "mergeable": "unknown"
+                },
+                "https://github.com/acme/widgets/pull/104": {
+                    "state": "Open",
+                    "title": "Refreshed PR title from kept",
+                    "merged_at": null,
+                    "closed_at": null,
+                    "ci": "unknown",
+                    "mergeable": "unknown"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let log_url = |command: &str, session: Option<&str>| -> String {
+        let mut url = reqwest::Url::parse(&format!("{}/log", console.address)).unwrap();
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("command", command);
+            if let Some(session) = session {
+                pairs.append_pair("session", session);
+            }
+        }
+        format!("{}?{}", url.path(), url.query().unwrap())
+    };
+    let path_for = |n: u64| {
+        home.path()
+            .join(format!(
+                ".thirdshift/logs/acme/widgets/commands/issue/{n}-fixture.command.json"
+            ))
+            .display()
+            .to_string()
+    };
+
+    // Pickup run page: issue + title + dispatched PR + PR title.
+    let p1 = path_for(1);
+    let pickup_selector = format!("{p1}::pickup-43");
+    let pickup_html = console
+        .get(&log_url(&pickup_selector, None))
+        .text()
+        .unwrap();
+    assert!(
+        pickup_html.contains("class=\"log-target\""),
+        "{pickup_html}"
+    );
+    assert!(
+        pickup_html.contains(&format!("data-command=\"{pickup_selector}\"")),
+        "{pickup_html}"
+    );
+    assert!(
+        pickup_html.contains("href=\"https://github.com/acme/widgets/issues/43\""),
+        "{pickup_html}"
+    );
+    assert!(pickup_html.contains("acme/widgets#43"), "{pickup_html}");
+    assert!(!pickup_html.contains("<xss>"), "{pickup_html}");
+    assert!(
+        pickup_html.contains("Fix ") && pickup_html.contains("layout"),
+        "{pickup_html}"
+    );
+    assert!(
+        pickup_html.contains("href=\"https://github.com/acme/widgets/pull/101\""),
+        "{pickup_html}"
+    );
+    assert!(pickup_html.contains("acme/widgets#101"), "{pickup_html}");
+    assert!(!pickup_html.contains("<target>"), "{pickup_html}");
+    assert!(
+        pickup_html.contains("Add ") && pickup_html.contains("heading"),
+        "{pickup_html}"
+    );
+
+    // Dispatched Run log + Session trace (?command=...&session=implement and direct /logs/{id}).
+    let child_selector = format!("{p1}::acme/widgets#43");
+    for path in [
+        log_url(&child_selector, None),
+        log_url(&child_selector, Some("implement")),
+    ] {
+        let resp = console.get(&path);
+        assert_eq!(resp.status(), 200, "{path}");
+        let html = resp.text().unwrap();
+        assert!(
+            html.contains(&format!("data-command=\"{child_selector}\"")),
+            "{path}: {html}"
+        );
+        assert!(html.contains("acme/widgets#43"), "{path}: {html}");
+        assert!(html.contains("acme/widgets#101"), "{path}: {html}");
+        assert!(html.contains("layout"), "{path}: {html}");
+        assert!(html.contains("heading"), "{path}: {html}");
+    }
+    let session_link = console.log_link("1-20260101T120000+0000-implement.logs.jsonl");
+    let session_html = console.get(&session_link).text().unwrap();
+    assert!(session_html.contains("acme/widgets#43"), "{session_html}");
+    assert!(session_html.contains("acme/widgets#101"), "{session_html}");
+    assert!(session_html.contains("heading"), "{session_html}");
+
+    // Review run: PR link + pull_request_title.
+    let review_html = console
+        .get(&log_url(&format!("{}::review-102", path_for(2)), None))
+        .text()
+        .unwrap();
+    assert!(
+        review_html.contains("href=\"https://github.com/acme/widgets/pull/102\""),
+        "{review_html}"
+    );
+    assert!(review_html.contains("acme/widgets#102"), "{review_html}");
+    assert!(review_html.contains("Polish review title"), "{review_html}");
+
+    // Legacy Fix run: PR link + kept fallback title.
+    let fix_html = console
+        .get(&log_url(&format!("{}::fix-103", path_for(3)), None))
+        .text()
+        .unwrap();
+    assert!(
+        fix_html.contains("href=\"https://github.com/acme/widgets/pull/103\""),
+        "{fix_html}"
+    );
+    assert!(fix_html.contains("acme/widgets#103"), "{fix_html}");
+    assert!(
+        fix_html.contains("Legacy fix title from kept"),
+        "{fix_html}"
+    );
+
+    // Review run: kept PR title overrides stale pull_request_title.
+    let renamed_html = console
+        .get(&log_url(&format!("{}::review-104", path_for(7)), None))
+        .text()
+        .unwrap();
+    assert!(
+        renamed_html.contains("Refreshed PR title from kept"),
+        "{renamed_html}"
+    );
+    assert!(
+        !renamed_html.contains("Stale recorded title"),
+        "{renamed_html}"
+    );
+
+    // Triage run: issue link + issue title.
+    let triage_html = console
+        .get(&log_url(&format!("{}::triage-44", path_for(4)), None))
+        .text()
+        .unwrap();
+    assert!(
+        triage_html.contains("href=\"https://github.com/acme/widgets/issues/44\""),
+        "{triage_html}"
+    );
+    assert!(triage_html.contains("Triaged bug title"), "{triage_html}");
+
+    // Idle Architect run: no target block at all.
+    let idle_html = console
+        .get(&log_url(&format!("{}::architect-idle", path_for(5)), None))
+        .text()
+        .unwrap();
+    assert!(!idle_html.contains("class=\"log-target\""), "{idle_html}");
+    assert!(!idle_html.contains("github.com/acme"), "{idle_html}");
+
+    // History activity entry without CommandRecord: issue link, no placeholder title.
+    for path in [
+        log_url("acme/widgets#8", None),
+        console.log_link("8-20260101T120000+0000.log"),
+    ] {
+        let html = console.get(&path).text().unwrap();
+        assert!(
+            html.contains("href=\"https://github.com/acme/widgets/issues/8\""),
+            "{path}: {html}"
+        );
+        assert!(html.contains("acme/widgets#8"), "{path}: {html}");
+        assert!(!html.contains("(title unavailable)"), "{path}: {html}");
+        assert!(!html.contains("log-target-title"), "{path}: {html}");
+    }
+
+    // Security scope confinement: `read` token must get 403 and zero title leakage on Security run log.
+    let sec_home = tempfile::tempdir().unwrap();
+    configure(sec_home.path());
+    let mut security = record(sec_home.path(), 6, Some("findings recorded"), 50);
+    security["kind"] = json!("Security run");
+    security["name"] = json!("secure-private");
+    security["issue"] = json!({
+        "number": 99,
+        "url": "https://github.com/acme/widgets/issues/99",
+        "title": "Secret advisory title"
+    });
+    write_record(sec_home.path(), 6, &security);
+    fs::write(
+        sec_home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/6-fixture.log"),
+        "Private security log output\n",
+    )
+    .unwrap();
+    fs::write(
+        sec_home.path().join(".thirdshift/config.toml"),
+        "[console]\nport = 0\nallowed_emails = [\"owner@example.test\"]\n",
+    )
+    .unwrap();
+    let reader = tokens::create(sec_home.path(), "reader", &["--scopes", "read"]);
+    let sec_token = tokens::create(sec_home.path(), "sec", &["--scopes", "read,security"]);
+    let sec_console = Console::start_mode(binary, sec_home.path(), false);
+    let sec_selector = format!(
+        "{}::secure-private",
+        sec_home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/6-fixture.command.json")
+            .display()
+    );
+    let mut sec_url = reqwest::Url::parse("http://localhost/api/v1/log").unwrap();
+    sec_url
+        .query_pairs_mut()
+        .append_pair("command", &sec_selector);
+    let sec_path = format!("{}?{}", sec_url.path(), sec_url.query().unwrap());
+    let denied = tokens::request(&sec_console, &reader, &sec_path)
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+    let denied_body = denied.text().unwrap();
+    assert!(
+        !denied_body.contains("Private security log output"),
+        "{denied_body}"
+    );
+    assert!(
+        !denied_body.contains("Secret advisory title"),
+        "{denied_body}"
+    );
+    assert!(!denied_body.contains("acme/widgets#99"), "{denied_body}");
+    let allowed = tokens::request(&sec_console, &sec_token, &sec_path)
+        .send()
+        .unwrap();
+    assert_eq!(allowed.status(), 200);
+    let allowed_body = allowed.text().unwrap();
+    assert!(
+        allowed_body.contains("Private security log output"),
+        "{allowed_body}"
+    );
+}

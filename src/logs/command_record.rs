@@ -138,6 +138,8 @@ pub(super) struct CommandRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
     pub pull_request: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_title: Option<String>,
     #[serde(default)]
     pub parent_record: Option<PathBuf>,
     #[serde(default)]
@@ -496,7 +498,9 @@ impl CommandRecord {
                 .or_else(|| self.stopped_stage().map(str::to_owned))
         });
         self.failure_category = failure.map(|cause| cause.category(account.interrupted));
-        self.pull_request = account.pr_url.map(String::from);
+        if let Some(pr_url) = account.pr_url {
+            self.pull_request = Some(pr_url.into());
+        }
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
         if matches!(
@@ -602,6 +606,7 @@ impl CommandRecord {
             issue_branch: None,
             base_branch: None,
             pull_request: None,
+            pull_request_title: None,
             parent_record: None,
             parent_dispatch: None,
             tickets: Vec::new(),

@@ -232,7 +232,7 @@ fn targeted_at(
         logs::started(Work::FixRun(&repo), harness);
         logs::issue_branch(Some(&snapshot.branch));
         logs::pull_request(&pr.url);
-        logs::issue_title(Some(snapshot.title.clone()));
+        logs::pull_request_title(Some(snapshot.title.clone()));
         let flags = Flags {
             security_review: Some(crate::security::review::Ask::Forbid),
             ..command.flags.clone()

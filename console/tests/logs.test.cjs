@@ -303,4 +303,75 @@ const { replaceRecord } = require("./records.cjs");
       assert.equal(visible.filter(text => text === 'Delivered by polling').length, 1,
         `SSE replayed a line already appended by polling: ${JSON.stringify(visible)}`);
     });
+
+    test('Command log and Session trace render GitHub target links and escaped titles cleanly on desktop and mobile', { skip: process.platform !== 'linux' }, async t => {
+      const folder = join(home, '.thirdshift/logs/acme/widgets/commands/review');
+      await mkdir(folder, { recursive: true });
+      const reviewStem = '18-20261003T120000-0400~fixture';
+      const reviewLog = join(folder, `${reviewStem}.log`);
+      const reviewRecordPath = join(folder, `${reviewStem}.command.json`);
+      await writeFile(reviewLog, 'Review run output\n');
+      await replaceRecord(reviewRecordPath, JSON.stringify({
+        version: 1,
+        kind: 'Review run',
+        repository: 'acme/widgets',
+        name: 'review-18',
+        hostname: 'fixture',
+        issue: null,
+        process_id: 0,
+        process_start: 'gone',
+        harness: 'codex',
+        model: 'gpt-6',
+        effort: 'high',
+        started_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+        stages: [],
+        session_log: null,
+        outcome: 'reviewed',
+        cause: null,
+        issue_branch: null,
+        pull_request: 'https://github.com/acme/widgets/pull/18',
+        pull_request_title: 'Escape <b>XSS</b> & wrap exceedingly_long_unbroken_identifier_for_mobile_layout_check_without_horizontal_overflow',
+      }));
+
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+        const context = await browser.newContext({ viewport });
+        t.after(() => context.close());
+        const page = await context.newPage();
+        const pageErrors = [];
+        page.on('pageerror', error => pageErrors.push(error));
+
+        const reviewUrl = `${origin}/log?command=${encodeURIComponent(`${reviewRecordPath}::review-18`)}`;
+        await page.goto(reviewUrl);
+        const target = page.locator('.log-target');
+        await target.waitFor();
+        const prLink = target.getByRole('link', { name: 'acme/widgets#18' });
+        await prLink.waitFor();
+        assert.equal(await prLink.getAttribute('href'), 'https://github.com/acme/widgets/pull/18');
+        const targetText = await target.textContent();
+        assert.match(targetText, /Escape <b>XSS<\/b>/);
+        assert.equal(await target.locator('b').count(), 0);
+
+        const targetBox = await target.boundingBox();
+        const contentBox = await page.locator('#log-content').boundingBox();
+        assert.ok(targetBox && contentBox);
+        assert.ok(targetBox.y + targetBox.height <= contentBox.y + 1);
+        const overflow = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth,
+        }));
+        assert.ok(overflow.scrollWidth <= overflow.innerWidth, JSON.stringify(overflow));
+        assert.deepEqual(pageErrors, []);
+
+        const sessionUrl = `${origin}/log?command=${encodeURIComponent(`${recordPath}::acme/widgets#7`)}&session=implement`;
+        await page.goto(sessionUrl);
+        await page.locator('.log-target').waitFor();
+        assert.equal(
+          await page.locator('.log-target').getByRole('link', { name: 'acme/widgets#7' }).getAttribute('href'),
+          'https://github.com/acme/widgets/issues/7',
+        );
+        assert.match(await page.locator('.log-target').textContent(), /Widgets/);
+        assert.deepEqual(pageErrors, []);
+      }
+    });
   });

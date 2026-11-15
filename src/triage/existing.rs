@@ -40,11 +40,16 @@ pub(super) fn check_trust(issue: &IssueUrl, github: &GitHub) -> Result<()> {
     Ok(())
 }
 
+pub(super) struct IssueOverview {
+    pub title: Option<String>,
+    pub finding_notification: Option<String>,
+}
+
 /// A private finding's notification carries only its recorded title and link,
 /// never the session's investigation, proposed issue text or questionnaire.
-pub(super) fn finding_notification(issue: &IssueUrl, github: &GitHub) -> Result<Option<String>> {
+pub(super) fn issue_overview(issue: &IssueUrl, github: &GitHub) -> Result<IssueOverview> {
     let current = github.issue(issue)?;
-    Ok(current
+    let finding_notification = current
         .labels
         .names()
         .any(crate::github::is_security_finding_label)
@@ -54,7 +59,11 @@ pub(super) fn finding_notification(issue: &IssueUrl, github: &GitHub) -> Result<
                 one_line(current.title.as_deref().unwrap_or("Security finding")),
                 issue.url
             )
-        }))
+        });
+    Ok(IssueOverview {
+        title: current.title,
+        finding_notification,
+    })
 }
 
 pub(super) fn trust_reason(issue: &IssueUrl, github: &GitHub) -> Result<Option<String>> {

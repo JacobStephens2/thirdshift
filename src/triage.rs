@@ -293,10 +293,19 @@ fn investigate(
     mut claim: Option<existing::Claim<'_>>,
 ) -> Result<Ended, FailedRun> {
     let target = input.issue();
-    let finding_notification = target
-        .map(|issue| existing::finding_notification(issue, &GitHub::new()))
-        .transpose()?
-        .flatten();
+    let existing::IssueOverview {
+        title: issue_title,
+        finding_notification,
+    } = match target {
+        Some(issue) => existing::issue_overview(issue, &GitHub::new())?,
+        None => existing::IssueOverview {
+            title: None,
+            finding_notification: None,
+        },
+    };
+    if issue_title.is_some() {
+        logs::issue_title(issue_title);
+    }
     if options.read_machine {
         // Its sandbox binds one Harness's files, so its sessions can't move
         // route mid-Step: they start on the route Plan usage allows.

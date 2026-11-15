@@ -267,6 +267,7 @@ impl ReviewProcess {
             notification.pull_request(pr, &snapshot.title);
             logs::issue_branch(Some(&snapshot.branch));
             logs::pull_request(&pr.url);
+            logs::pull_request_title(Some(snapshot.title.clone()));
             progress::step(format_args!("working on pull request {}", pr.url));
             launch.fetch(&[
                 &snapshot.branch,

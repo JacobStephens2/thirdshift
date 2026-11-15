@@ -1001,6 +1001,43 @@ fn a_reused_process_id_is_not_a_live_command() {
 }
 
 #[test]
+fn pull_request_title_persists_and_survives_finish_without_clearing_pull_request() {
+    let repo = Repo {
+        owner: "acme".into(),
+        name: "widgets".into(),
+    };
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::FixRun { pass: false });
+    record.configured(&config(false));
+    record.started(Work::FixRun(&repo), &harness());
+    let path = record.record_path().unwrap();
+    let initial: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
+    assert!(initial.get("pull_request_title").is_none());
+    record.pull_request("https://github.com/acme/widgets/pull/12");
+    record.pull_request_title(Some("Fix widget parser".into()));
+    let live: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
+    assert_eq!(
+        live["pull_request"],
+        "https://github.com/acme/widgets/pull/12"
+    );
+    assert_eq!(live["pull_request_title"], "Fix widget parser");
+    let failed = crate::failed_run::FailedRun::from(anyhow::anyhow!("session failed"));
+    let ended = crate::run::Ended {
+        outcome: Err(failed),
+        base_fix: None,
+        advice: Vec::new(),
+    };
+    record.finished(&crate::run_ending::Account::of_run(&ended));
+    let saved: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
+    assert_eq!(
+        saved["pull_request"],
+        "https://github.com/acme/widgets/pull/12"
+    );
+    assert_eq!(saved["pull_request_title"], "Fix widget parser");
+}
+
+#[test]
 fn commands_started_on_the_same_issue_in_one_second_keep_separate_output_and_records() {
     let memory = Scripted::default();
     let issue = issue();

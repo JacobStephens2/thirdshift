@@ -85,6 +85,7 @@ pub fn run(
             continue;
         };
         let current = github.issue(issue)?;
+        let title = current.title.or_else(|| Some(listed.title.clone()));
         let reason = if current.is_open {
             ineligible(
                 &ListedIssue {
@@ -109,6 +110,7 @@ pub fn run(
             },
             harness,
         );
+        logs::issue_title(title);
         base.pull();
         let mut origin = Some(origin);
         let claim = if options.recommend_only {

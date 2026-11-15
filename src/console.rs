@@ -1706,26 +1706,7 @@ async fn log(
         })
         .await;
     }
-    match tokio::task::spawn_blocking(move || {
-        let config = UserConfig::load()?;
-        let path = status::inspect::log_path(
-            &config,
-            &command,
-            (!session.is_empty()).then_some(session.as_str()),
-        )?;
-        crate::logs::catalog::load(&config, None)?
-            .into_iter()
-            .find(|log| log.path == path)
-            .map(|log| log.id)
-            .context("log is unavailable")
-    })
-    .await
-    {
-        Ok(Ok(id)) => {
-            logs::reader(Path(id), axum::Extension(viewer), axum::Extension(format)).await
-        }
-        _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
-    }
+    logs::reader_for_command(command, (!session.is_empty()).then_some(session), viewer).await
 }
 
 fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {

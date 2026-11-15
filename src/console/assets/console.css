@@ -203,6 +203,11 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @media (prefers-reduced-motion: reduce) { .stopping-bar { animation: none; } }
 .log-list li { margin: 10px 0; overflow-wrap: anywhere; }
 .log-name { overflow-wrap: anywhere; }
+.log-target { margin: 6px 0 12px; }
+.log-target-row { margin: 2px 0; overflow-wrap: anywhere; font-size: 1.05em; }
+.log-target-row a { font-weight: var(--head-weight); }
+.log-target-kind { color: var(--dim); font-size: 0.9em; margin-right: 4px; }
+.log-target-title { color: var(--text); }
 .log-list span { display: block; color: var(--dim); }
 .log-group > summary { padding: 8px 0; cursor: pointer; }
 .log-group > summary .live-count { margin-left: 8px; font-size: 13px; }

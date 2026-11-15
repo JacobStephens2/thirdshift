@@ -509,3 +509,266 @@ fn details_api_does_not_relay_a_read_token_through_broader_fleet_credentials() {
         assert!(error["error"].as_str().unwrap().contains("owning machine"));
     }
 }
+
+#[test]
+fn remote_command_log_shows_target_title_and_ignores_spoofed_urls() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    // Part A: real paired owner Console with Pickup + dispatched PR and Review run with kept title.
+    let owner_home = tempfile::tempdir().unwrap();
+    let caller_home = tempfile::tempdir().unwrap();
+    configure(owner_home.path());
+    configure(caller_home.path());
+
+    let mut pickup = record(owner_home.path(), 1, Some("ready for review"), 0);
+    pickup["kind"] = json!("Pickup run");
+    pickup["name"] = json!("pickup-55");
+    pickup["issue"] = json!({
+        "number": 55,
+        "url": "https://github.com/acme/widgets/issues/55",
+        "title": "Remote pickup issue"
+    });
+    pickup["pull_request"] = Value::Null;
+    pickup["started_at"] = json!(chrono::Local::now().to_rfc3339());
+    let mut child = pickup.clone();
+    child["kind"] = json!("Run");
+    child["name"] = json!("acme/widgets#55");
+    child["pull_request"] = json!("https://github.com/acme/widgets/pull/155");
+    child["pull_request_title"] = json!("Remote pickup PR");
+    child["dispatched"] = json!([]);
+    pickup["dispatched"] = json!([child]);
+    write_record(owner_home.path(), 1, &pickup);
+
+    let mut review = record(owner_home.path(), 2, Some("ready for review"), 0);
+    review["kind"] = json!("Review run");
+    review["name"] = json!("review-156");
+    review["issue"] = Value::Null;
+    review["pull_request"] = json!("https://github.com/acme/widgets/pull/156");
+    write_record(owner_home.path(), 2, &review);
+
+    let owner_issue_dir = owner_home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    for n in 1..=2 {
+        fs::write(
+            owner_issue_dir.join(format!("{n}-fixture.log")),
+            format!("Remote fixture log {n}\n"),
+        )
+        .unwrap();
+    }
+
+    fs::write(
+        owner_home.path().join(".thirdshift/logs/github-inbox.json"),
+        serde_json::to_vec(&json!({
+            "version": 2,
+            "subjects": {
+                "https://github.com/acme/widgets/pull/156": {
+                    "state": "Open",
+                    "title": "Kept title for remote review",
+                    "merged_at": null,
+                    "closed_at": null,
+                    "ci": "unknown",
+                    "mergeable": "unknown"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    fs::write(
+        owner_home.path().join(".thirdshift/config.toml"),
+        "[console]\nport = 0\nallowed_emails = [\"owner@example.test\"]\n",
+    )
+    .unwrap();
+    let owner = Console::start_mode(binary, owner_home.path(), false);
+    let caller = Console::start(binary, caller_home.path());
+    pair(caller_home.path(), &owner, owner_home.path(), "read");
+
+    let path_for = |n: u64| {
+        owner_home
+            .path()
+            .join(format!(
+                ".thirdshift/logs/acme/widgets/commands/issue/{n}-fixture.command.json"
+            ))
+            .display()
+            .to_string()
+    };
+    let remote_log_url = |command: &str| {
+        let mut url = reqwest::Url::parse(&format!("{}/log", caller.address)).unwrap();
+        url.query_pairs_mut()
+            .append_pair("machine", "remote")
+            .append_pair("command", command);
+        format!("{}?{}", url.path(), url.query().unwrap())
+    };
+
+    let pickup_html = caller
+        .get(&remote_log_url(&format!("{}::pickup-55", path_for(1))))
+        .text()
+        .unwrap();
+    assert!(
+        pickup_html.contains("href=\"https://github.com/acme/widgets/issues/55\""),
+        "{pickup_html}"
+    );
+    assert!(pickup_html.contains("Remote pickup issue"), "{pickup_html}");
+    assert!(
+        pickup_html.contains("href=\"https://github.com/acme/widgets/pull/155\""),
+        "{pickup_html}"
+    );
+    assert!(pickup_html.contains("Remote pickup PR"), "{pickup_html}");
+    assert!(
+        pickup_html.contains("<section id=\"log-content\""),
+        "{pickup_html}"
+    );
+    assert!(pickup_html.contains("data-offset=\"0\""), "{pickup_html}");
+
+    let review_html = caller
+        .get(&remote_log_url(&format!("{}::review-156", path_for(2))))
+        .text()
+        .unwrap();
+    assert!(
+        review_html.contains("href=\"https://github.com/acme/widgets/pull/156\""),
+        "{review_html}"
+    );
+    assert!(
+        review_html.contains("Kept title for remote review"),
+        "{review_html}"
+    );
+
+    // Part B: fake tampered peer returning malicious URLs on /peek and fallback 404 on /peek.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let peek_missing = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let peek_missing_flag = Arc::clone(&peek_missing);
+    let stop_flag = Arc::clone(&stop);
+
+    let fake_peer = std::thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                        continue;
+                    }
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                    }
+                    let (status, body) = if request_line.starts_with("GET /api/v1/whoami") {
+                        (
+                            "200 OK",
+                            serde_json::to_string(&json!({
+                                "version": 1,
+                                "hostname": "tampered",
+                                "thirdshift_version": "0.32.0",
+                                "api_version": "v1",
+                                "identity": {"kind": "token", "holder": "caller"},
+                                "scopes": ["read"]
+                            }))
+                            .unwrap(),
+                        )
+                    } else if request_line.starts_with("GET /api/v1/log") {
+                        (
+                            "200 OK",
+                            serde_json::to_string(&json!({
+                                "version": 1,
+                                "kind": "Review run",
+                                "cli": "thirdshift logs --file review.log",
+                                "contents": "Peer log line\n"
+                            }))
+                            .unwrap(),
+                        )
+                    } else if request_line.starts_with("GET /api/v1/peek") {
+                        if peek_missing_flag.load(Ordering::Relaxed) {
+                            ("404 Not Found", "{\"error\":\"missing\"}".to_owned())
+                        } else {
+                            (
+                                "200 OK",
+                                serde_json::to_string(&json!({
+                                    "version": 1,
+                                    "command": {
+                                        "kind": "Review run",
+                                        "name": "review-77",
+                                        "repository": "acme/widgets",
+                                        "issue": {
+                                            "number": 77,
+                                            "url": "javascript:alert(1)",
+                                            "title": "<b>XSS</b> issue"
+                                        },
+                                        "pull_request": "https://evil.example/acme/widgets/pull/78",
+                                        "pull_request_title": "<b>XSS</b> pr",
+                                        "dispatched": []
+                                    }
+                                }))
+                                .unwrap(),
+                            )
+                        }
+                    } else {
+                        ("404 Not Found", "{\"error\":\"unexpected\"}".to_owned())
+                    };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let peer_caller_home = tempfile::tempdir().unwrap();
+    configure(peer_caller_home.path());
+    let paired = super::fleet::add(peer_caller_home.path(), "tampered", &address, "fake-token");
+    assert!(
+        paired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&paired.stderr)
+    );
+    let peer_caller = Console::start(binary, peer_caller_home.path());
+
+    let tampered_resp = peer_caller
+        .get("/log?machine=tampered&command=acme/widgets%2377")
+        .text()
+        .unwrap();
+    assert!(tampered_resp.contains("Peer log line"), "{tampered_resp}");
+    assert!(
+        !tampered_resp.contains("javascript:alert(1)"),
+        "{tampered_resp}"
+    );
+    assert!(
+        !tampered_resp.contains("https://evil.example"),
+        "{tampered_resp}"
+    );
+    assert!(!tampered_resp.contains("<b>XSS</b>"), "{tampered_resp}");
+    assert!(tampered_resp.contains("acme/widgets#77"), "{tampered_resp}");
+
+    peek_missing.store(true, Ordering::Relaxed);
+    let fallback_resp = peer_caller.get("/log?machine=tampered&command=acme/widgets%2377");
+    assert_eq!(fallback_resp.status(), 200);
+    let fallback_html = fallback_resp.text().unwrap();
+    assert!(fallback_html.contains("Peer log line"), "{fallback_html}");
+    assert!(
+        !fallback_html.contains("class=\"log-target\""),
+        "{fallback_html}"
+    );
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = fake_peer.join();
+}
