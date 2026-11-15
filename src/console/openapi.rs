@@ -128,6 +128,13 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let text = json!({"type": "string"});
     let integer = json!({"type": "integer"});
     let record = json!({"type": "object"});
+    let command_record = json!({
+        "type": "object",
+        "properties": {
+            "pull_request": {"type": ["string", "null"]},
+            "release_url": {"type": ["string", "null"]}
+        }
+    });
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
         View::Help
@@ -250,7 +257,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                     "reachability": {"enum": ["ok", "unreachable", "refused", "needs update"]},
                     "active_runs": {"type": "integer"}, "error": {"type": ["string", "null"]}
                 }))),
-                "commands": array(record.clone()), "idle_passes": array(record.clone()),
+                "commands": array(command_record.clone()), "idle_passes": array(record.clone()),
                 "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
                 "github_last_answered_at": {"type": ["string", "null"]},
                 "github_failure": {"type": ["string", "null"]},
@@ -259,7 +266,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         }
         View::Inspect => {
             query("command", true, text.clone());
-            object(json!({"version": version, "hostname": text, "command": record}))
+            object(json!({"version": version, "hostname": text, "command": command_record}))
         }
         View::Spans => {
             query("command", false, text.clone());

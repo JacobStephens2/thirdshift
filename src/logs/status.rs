@@ -158,6 +158,9 @@ fn print_command_line(
     if let Some(pull_request) = &facts.pull_request {
         subject.push_str(&format!(" · {pull_request}"));
     }
+    if let Some(release_url) = &facts.release_url {
+        subject.push_str(&format!(" · {release_url}"));
+    }
     if let Some(account) = account {
         subject.push_str(&format!(" · [{account}]"));
     }

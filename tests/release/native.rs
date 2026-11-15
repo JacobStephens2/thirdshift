@@ -1203,7 +1203,9 @@ fn native_release_all_red_main_fails_without_publishing_a_branch_or_tag() {
         stderr(&output)
     );
     assert_eq!(release.origin_refs(), before);
-    assert_eq!(record(&release)["outcome"], "failed");
+    let saved = record(&release);
+    assert_eq!(saved["outcome"], "failed");
+    assert!(saved.get("release_url").is_none(), "{saved}");
 }
 
 #[test]
@@ -1245,6 +1247,26 @@ fn native_release_email_unless_merged_suppresses_success_and_emails_unmerged_pub
                 record(&release)["pull_request"],
                 release.pr("release-0.2.0")["url"]
             );
+        }
+        assert_eq!(
+            record(&release)["release_url"],
+            "https://github.com/JacobStephens2/thirdshift/releases/tag/v0.2.0"
+        );
+        let expected_urls = format!(
+            "Pull request: {}\nRelease:      https://github.com/JacobStephens2/thirdshift/releases/tag/v0.2.0\n",
+            release.pr("release-0.2.0")["url"].as_str().unwrap()
+        );
+        let saved_path =
+            std::path::Path::new(status["commands"][0]["command_log"].as_str().unwrap())
+                .with_extension("notification.txt");
+        let saved = std::fs::read_to_string(&saved_path).unwrap();
+        assert!(saved.contains(&expected_urls), "{saved}");
+        if !merge {
+            let mailed = resend.requests()[0].body["text"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(mailed.contains(&expected_urls), "{mailed}");
         }
     }
 }
@@ -1621,4 +1643,17 @@ fn release_summary_sandbox_binds_only_node_for_an_npm_installed_harness() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = release.pr_body("release-0.1.1");
     assert!(body.contains("Node-run summary (#2)."), "{body}");
+}
+
+#[test]
+fn a_published_release_run_links_its_github_release() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let output = command(&release, "0.2.0").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let record = record(&release);
+    assert!(
+        record.to_string().contains("/releases/tag/v0.2.0"),
+        "{record}"
+    );
 }

@@ -52,6 +52,7 @@ impl Bump {
 /// Success requires both publication and the bump pull request's merge.
 pub struct Ended {
     pub pr_url: String,
+    pub release_url: String,
     pub version: String,
 }
 
@@ -124,6 +125,7 @@ impl Request<'_> {
 /// `Ok(None)` is a skipped Pass.
 pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, FailedRun> {
     let mut pr_url = None;
+    let mut release_url = None;
     let mut trace = None;
     let result = (|| -> Result<Option<Ended>> {
         outside_session()?;
@@ -246,6 +248,7 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                     pr: None,
                     tagged: None,
                     published: false,
+                    release_url: None,
                     recut: false,
                     supersedes: None,
                     expected_branch: None,
@@ -287,7 +290,10 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
                 trace: &mut trace,
             },
             automatic_summary,
-            &mut pr_url,
+            &mut workflow::Links {
+                pr_url: &mut pr_url,
+                release_url: &mut release_url,
+            },
         );
         // Once its branch is on origin, the branch records the content
         // commit. A pin left behind would outlive an abandoned release and
@@ -300,11 +306,15 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
         finished?;
         Ok(Some(Ended {
             pr_url: cut.pr.context("release has no PR")?.url,
+            release_url: cut
+                .release_url
+                .context("published release has no Release URL")?,
             version: cut.version,
         }))
     })();
     result.map_err(|error| FailedRun {
         pr_url,
+        release_url,
         log: trace,
         ..error.into()
     })

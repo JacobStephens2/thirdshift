@@ -3011,3 +3011,143 @@ test('the active-run total follows live trees, stays visible and fits every Them
     await writeFile(config, '[console]\nport = 0\n');
   }
 });
+
+test('Release run Done and Needs you headers link the bump PR and published Release across Themes and viewports', async t => {
+  const releaseDir = join(home, '.thirdshift/logs/acme/widgets/commands/release');
+  const issueDir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  await mkdir(releaseDir, { recursive: true });
+  const base = JSON.parse(await readFile(join(issueDir, '1-fixture.command.json'), 'utf8'));
+  const now = new Date().toISOString();
+  const donePath = join(releaseDir, 'release-done.command.json');
+  const needsPath = join(releaseDir, 'release-needs-you.command.json');
+  const unlinkedPath = join(releaseDir, 'release-unlinked.command.json');
+  const releaseRecord = (name, changes) => JSON.stringify({
+    ...base,
+    kind: 'Release run',
+    name,
+    issue: null,
+    tickets: [],
+    started_at: now,
+    ended_at: now,
+    stages: [],
+    session_log: null,
+    ...changes,
+  });
+  try {
+    await replaceRecord(donePath, releaseRecord('release-20261115T080000', {
+      outcome: 'merged',
+      cause: null,
+      pull_request: 'https://github.com/acme/widgets/pull/18',
+      release_url: 'https://github.com/acme/widgets/releases/tag/v0.2.0',
+    }));
+    await replaceRecord(needsPath, releaseRecord('release-20261115T070000', {
+      outcome: 'failed',
+      cause: 'bump PR review blocked',
+      pull_request: 'https://github.com/acme/widgets/pull/17',
+      release_url: 'https://github.com/acme/widgets/releases/tag/v0.1.9',
+    }));
+    await replaceRecord(unlinkedPath, releaseRecord('release-20261115T060000', {
+      outcome: 'merged',
+      cause: null,
+      pull_request: 'https://github.com/acme/widgets/pull/16',
+    }));
+
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      for (const javaScriptEnabled of [true, false]) {
+        const page = await pageFor(t, { viewport, javaScriptEnabled });
+        if (javaScriptEnabled) {
+          await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+        }
+        await page.goto(`${origin}/?section=done`);
+        const doneHead = page.locator('#inbox .command[data-command*="release-done.command.json"] > .row-head');
+        const unlinkedHead = page.locator('#inbox .command[data-command*="release-unlinked.command.json"] > .row-head');
+        const ticketHead = page.locator('#inbox .command[data-command*="1-fixture.command.json"] > .row-head');
+
+        assert.equal(
+          await doneHead.locator('.subject > a').getAttribute('href'),
+          'https://github.com/acme/widgets/pull/18'
+        );
+        assert.equal(await doneHead.locator('.subject > a').textContent(), 'acme/widgets#18');
+        const doneRelease = doneHead.locator('.subject .release-target > a');
+        assert.equal(await doneRelease.textContent(), 'Release v0.2.0');
+        assert.equal(
+          await doneRelease.getAttribute('href'),
+          'https://github.com/acme/widgets/releases/tag/v0.2.0'
+        );
+        assert.equal(await unlinkedHead.locator('.release-target').count(), 0);
+        assert.equal(await ticketHead.locator('.release-target').count(), 0);
+
+        for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+          for (const mode of ['light', 'dark']) {
+            const theme = `${family}-${mode}`;
+            await page.evaluate(name => { document.documentElement.dataset.theme = name; }, theme);
+            await page.evaluate(() => document.fonts.ready);
+            for (const selector of ['.subject > a', '.release-target > a', '.command-kind', '.state', '.gist', '.age']) {
+              const layout = await doneHead.locator(selector).evaluate(node => {
+                const box = node.getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                const rects = [...range.getClientRects()];
+                return {
+                  box: box.toJSON(),
+                  rects: rects.map(rect => rect.toJSON()),
+                  visible: box.width > 0 && box.height > 0 && rects.length > 0 && rects.every(rect =>
+                    rect.left >= box.left - 1 && rect.right <= box.right + 1 &&
+                    rect.left >= 0 && rect.right <= innerWidth),
+                };
+              });
+              assert.ok(layout.visible, `${selector} visible in ${theme} ${viewport.width}px JS=${javaScriptEnabled}: ${JSON.stringify(layout)}`);
+            }
+            const prBox = await doneHead.locator('.subject > a').boundingBox();
+            const relBox = await doneHead.locator('.release-target > a').boundingBox();
+            const kindBox = await doneHead.locator('.command-kind').boundingBox();
+            assert.ok(relBox.y >= prBox.y + prBox.height - 1 || relBox.x >= prBox.x + prBox.width - 1, `${theme}: PR and Release links must not overlap`);
+            assert.ok(kindBox.y >= relBox.y + relBox.height - 1 || kindBox.x >= relBox.x + relBox.width - 1, `${theme}: Release link and command-kind must not overlap`);
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${theme}: page horizontal overflow`);
+          }
+        }
+
+        if (javaScriptEnabled) {
+          await doneHead.getByRole('button', { name: 'Copy', exact: true }).click();
+          await doneHead.locator('[data-copy-status]').filter({ hasText: 'Copied.' }).waitFor();
+          const copied = await page.evaluate(() => navigator.clipboard.readText());
+          assert.ok(copied.includes('https://github.com/acme/widgets/pull/18'), copied);
+          assert.ok(copied.includes('Release v0.2.0 (https://github.com/acme/widgets/releases/tag/v0.2.0)'), copied);
+
+          // Live SSE update adds Release v0.1.8 when release_url arrives on an existing row.
+          await replaceRecord(unlinkedPath, releaseRecord('release-20261115T060000', {
+            outcome: 'merged',
+            cause: null,
+            pull_request: 'https://github.com/acme/widgets/pull/16',
+            release_url: 'https://github.com/acme/widgets/releases/tag/v0.1.8',
+          }));
+          await unlinkedHead.locator('.release-target > a').getByText('Release v0.1.8', { exact: true }).waitFor();
+          await replaceRecord(unlinkedPath, releaseRecord('release-20261115T060000', {
+            outcome: 'merged',
+            cause: null,
+            pull_request: 'https://github.com/acme/widgets/pull/16',
+          }));
+        }
+
+        await page.goto(`${origin}/?section=needs-you`);
+        const needsHead = page.locator('#inbox .command[data-command*="release-needs-you.command.json"] > .row-head');
+        assert.equal(
+          await needsHead.locator('.subject > a').getAttribute('href'),
+          'https://github.com/acme/widgets/pull/17'
+        );
+        assert.equal(
+          await needsHead.locator('.subject .release-target > a').getAttribute('href'),
+          'https://github.com/acme/widgets/releases/tag/v0.1.9'
+        );
+        assert.equal(
+          await needsHead.locator('.subject .release-target > a').textContent(),
+          'Release v0.1.9'
+        );
+        assert.equal(await needsHead.getByText('Release run', { exact: true }).count(), 1);
+        await page.close();
+      }
+    }
+  } finally {
+    await Promise.all([donePath, needsPath, unlinkedPath].map(path => rm(path, { force: true })));
+  }
+});

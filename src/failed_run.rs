@@ -14,6 +14,8 @@ pub struct FailedRun {
     pub error: anyhow::Error,
     /// The Issue branch's open PR, if it has one.
     pub pr_url: Option<String>,
+    /// The published GitHub Release URL for a Release run, if published.
+    pub release_url: Option<String>,
     /// The Session trace of the session the failure came from, else the most
     /// recent one, if a session was started.
     pub log: Option<PathBuf>,
@@ -173,6 +175,7 @@ impl From<anyhow::Error> for FailedRun {
             recovery: None,
             error: interrupted_or(error, interrupted),
             pr_url: None,
+            release_url: None,
             log: None,
             interrupted,
             ticket_lines: Vec::new(),

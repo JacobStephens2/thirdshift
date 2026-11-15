@@ -1644,3 +1644,198 @@ fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
         "{inbox}"
     );
 }
+
+#[test]
+fn release_run_done_and_needs_you_rows_link_bump_pr_and_github_release() {
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    let owner = tempfile::tempdir().unwrap();
+    let caller = tempfile::tempdir().unwrap();
+    configure(owner.path());
+    configure(caller.path());
+    record(owner.path(), 7, Some("merged"), 0);
+    let release_dir = owner
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/release");
+    fs::create_dir_all(&release_dir).unwrap();
+    let now = chrono::Local::now().to_rfc3339();
+    let write_release = |filename: &str, value: Value| {
+        fs::write(
+            release_dir.join(format!("{filename}.command.json")),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+    };
+    write_release(
+        "release-done",
+        json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T080000",
+            "repository": "acme/widgets",
+            "hostname": "fixture",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "codex",
+            "model": "gpt-6",
+            "effort": "high",
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "merged",
+            "cause": null,
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/18",
+            "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0",
+            "tickets": []
+        }),
+    );
+    write_release(
+        "release-needs-you",
+        json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T070000",
+            "repository": "acme/widgets",
+            "hostname": "fixture",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "codex",
+            "model": "gpt-6",
+            "effort": "high",
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "failed",
+            "cause": "bump PR review blocked",
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/17",
+            "release_url": "https://github.com/acme/widgets/releases/tag/v0.1.9",
+            "tickets": []
+        }),
+    );
+    write_release(
+        "release-unlinked",
+        json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T060000",
+            "repository": "acme/widgets",
+            "hostname": "fixture",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "codex",
+            "model": "gpt-6",
+            "effort": "high",
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "merged",
+            "cause": null,
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/16",
+            "tickets": []
+        }),
+    );
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let local = Console::start(binary, owner.path());
+    let token = super::tokens::create(owner.path(), "caller", &["--scopes", "read"]);
+    assert!(
+        super::fleet::add(caller.path(), "owner", &local.address, &token)
+            .status
+            .success()
+    );
+    let fleet = Console::start(binary, caller.path());
+
+    for console in [&local, &fleet] {
+        let _events = console.get("/events");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let done_page = loop {
+            let html = console.get("/?section=done").text().unwrap();
+            if html.contains("release-done.command.json")
+                && html.contains("release-unlinked.command.json")
+            {
+                break html;
+            }
+            assert!(Instant::now() < deadline, "Release Done rows never arrived");
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let done = section(&done_page, "done");
+        fn row_for<'a>(body: &'a str, marker: &str) -> &'a str {
+            body.split("<li class=\"command")
+                .find(|item| item.contains(marker))
+                .unwrap_or_else(|| panic!("missing {marker}: {body}"))
+        }
+
+        let published_done = row_for(done, "release-done.command.json");
+        assert!(
+            published_done.contains("<a href=\"https://github.com/acme/widgets/pull/18\"><span class=\"subject-repository\">acme/widgets</span><span class=\"subject-issue\">#18</span></a>"),
+            "{published_done}"
+        );
+        assert!(
+            published_done.contains("<span class=\"release-target\"><a href=\"https://github.com/acme/widgets/releases/tag/v0.2.0\">Release v0.2.0</a></span>"),
+            "{published_done}"
+        );
+        assert!(
+            published_done.contains("<p class=\"release\"><a href=\"https://github.com/acme/widgets/releases/tag/v0.2.0\">Release v0.2.0</a></p>"),
+            "{published_done}"
+        );
+
+        let unlinked_done = row_for(done, "release-unlinked.command.json");
+        assert!(
+            !unlinked_done.contains("release-target")
+                && !unlinked_done.contains("class=\"release\""),
+            "{unlinked_done}"
+        );
+        assert!(
+            unlinked_done.contains("release-20261115T060000"),
+            "{unlinked_done}"
+        );
+
+        let ticket_done = row_for(done, "7-fixture.command.json");
+        assert!(
+            !ticket_done.contains("release-target") && !ticket_done.contains("class=\"release\""),
+            "{ticket_done}"
+        );
+
+        let needs_page = loop {
+            let html = console.get("/?section=needs-you").text().unwrap();
+            if html.contains("release-needs-you.command.json") {
+                break html;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Release Needs you row never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let needs = section(&needs_page, "needs you");
+        let published_needs = row_for(needs, "release-needs-you.command.json");
+        assert!(
+            published_needs.contains("<a href=\"https://github.com/acme/widgets/pull/17\"><span class=\"subject-repository\">acme/widgets</span><span class=\"subject-issue\">#17</span></a>"),
+            "{published_needs}"
+        );
+        assert!(
+            published_needs.contains("<span class=\"release-target\"><a href=\"https://github.com/acme/widgets/releases/tag/v0.1.9\">Release v0.1.9</a></span>"),
+            "{published_needs}"
+        );
+        assert!(
+            published_needs.contains("<p class=\"release\"><a href=\"https://github.com/acme/widgets/releases/tag/v0.1.9\">Release v0.1.9</a></p>"),
+            "{published_needs}"
+        );
+    }
+
+    let peek = local
+        .get("/peek?command=release-20261115T080000")
+        .text()
+        .unwrap();
+    assert!(
+        peek.contains("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+        "{peek}"
+    );
+}

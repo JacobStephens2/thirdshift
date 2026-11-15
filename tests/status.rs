@@ -3720,3 +3720,129 @@ fn repair_resume_and_security_review_keep_their_own_session_logs() {
         );
     }
 }
+
+#[test]
+fn status_and_status_json_and_show_include_release_url_for_published_release_runs() {
+    let scenario = Scenario::new();
+    let release_dir = scenario.path("home/.thirdshift/logs/acme/widgets/commands/release");
+    fs::create_dir_all(&release_dir).unwrap();
+    let now = chrono::Local::now().to_rfc3339();
+    let write_release = |filename: &str, record: Value| {
+        fs::write(
+            release_dir.join(format!("{filename}.command.json")),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+    };
+    write_release(
+        "20261115T080000-0500",
+        serde_json::json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T080000",
+            "repository": "acme/widgets",
+            "hostname": "factory",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "claude",
+            "model": null,
+            "effort": null,
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "merged",
+            "cause": null,
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/18",
+            "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0"
+        }),
+    );
+    write_release(
+        "20261115T070000-0500",
+        serde_json::json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T070000",
+            "repository": "acme/widgets",
+            "hostname": "factory",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "claude",
+            "model": null,
+            "effort": null,
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "failed",
+            "cause": "bump PR review blocked",
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/17"
+        }),
+    );
+
+    let json = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let status: Value = serde_json::from_str(&json.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    let published = commands
+        .iter()
+        .find(|row| row["name"] == "release-20261115T080000")
+        .unwrap_or_else(|| panic!("{status:#}"));
+    assert_eq!(
+        published["release_url"],
+        "https://github.com/acme/widgets/releases/tag/v0.2.0"
+    );
+    assert_eq!(
+        published["pull_request"],
+        "https://github.com/acme/widgets/pull/18"
+    );
+    let legacy = commands
+        .iter()
+        .find(|row| row["name"] == "release-20261115T070000")
+        .unwrap_or_else(|| panic!("{status:#}"));
+    assert!(
+        legacy.get("release_url").is_none(),
+        "release_url must be omitted when absent: {legacy}"
+    );
+
+    let text = scenario.run(&["status", "--all"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    let published_line = text
+        .stdout
+        .lines()
+        .find(|line| line.contains("release-20261115T080000"))
+        .unwrap_or_else(|| panic!("{}", text.stdout));
+    assert!(
+        published_line.contains("https://github.com/acme/widgets/pull/18")
+            && published_line.contains("https://github.com/acme/widgets/releases/tag/v0.2.0"),
+        "{published_line}"
+    );
+    let legacy_line = text
+        .stdout
+        .lines()
+        .find(|line| line.contains("release-20261115T070000"))
+        .unwrap_or_else(|| panic!("{}", text.stdout));
+    assert!(
+        legacy_line.contains("https://github.com/acme/widgets/pull/17")
+            && !legacy_line.contains("/releases/tag/"),
+        "{legacy_line}"
+    );
+
+    let shown_published = scenario.run(&["show", "release-20261115T080000", "--json"]);
+    assert_eq!(shown_published.code, Some(0), "{}", shown_published.stderr);
+    let shown_published: Value = serde_json::from_str(&shown_published.stdout).unwrap();
+    assert_eq!(
+        shown_published["command"]["release_url"],
+        "https://github.com/acme/widgets/releases/tag/v0.2.0"
+    );
+
+    let shown_legacy = scenario.run(&["show", "release-20261115T070000", "--json"]);
+    assert_eq!(shown_legacy.code, Some(0), "{}", shown_legacy.stderr);
+    let shown_legacy: Value = serde_json::from_str(&shown_legacy.stdout).unwrap();
+    assert!(
+        shown_legacy["command"].get("release_url").is_none(),
+        "{shown_legacy}"
+    );
+}

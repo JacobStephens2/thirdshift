@@ -720,6 +720,7 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
                 }),
                 error: failure,
                 pr_url: None,
+                release_url: None,
                 log: None,
                 interrupted: false,
                 ticket_lines: Vec::new(),
@@ -2104,4 +2105,20 @@ fn a_pickup_run_records_the_title_its_ready_issue_was_listed_with() {
     let issue = command_tree(&memory)["issue"].clone();
     assert_eq!(issue["number"], 7);
     assert_eq!(issue["title"], "Make widgets");
+}
+
+#[test]
+fn older_command_records_without_release_url_read_and_omit_when_absent() {
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    let issue = issue();
+    record.begin(Begin::Run(&issue));
+    record.configured(&config(true));
+    record.started(Work::Run(&issue), &harness());
+    let mut legacy = command_tree(&memory);
+    legacy.as_object_mut().unwrap().remove("release_url");
+    let parsed: CommandRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(parsed.release_url, None);
+    let serialized = serde_json::to_value(&parsed).unwrap();
+    assert!(serialized.get("release_url").is_none(), "{serialized}");
 }

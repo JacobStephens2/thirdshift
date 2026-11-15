@@ -600,6 +600,13 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn release_url(&mut self, url: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().release_url = Some(url.into());
+            self.write_record();
+        }
+    }
+
     pub(super) fn pull_request_title(&mut self, title: Option<String>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.active().pull_request_title = title.filter(|title| !title.trim().is_empty());

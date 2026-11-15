@@ -385,6 +385,43 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
         whoami["x-cli-twins"],
         json!(["thirdshift console whoami --json"])
     );
+    let check_command_schema = |schema: &Value, label: &str| {
+        let props = &schema["properties"];
+        assert_eq!(
+            props["pull_request"],
+            json!({"type": ["string", "null"]}),
+            "{label}: {schema}"
+        );
+        assert_eq!(
+            props["release_url"],
+            json!({"type": ["string", "null"]}),
+            "{label}: {schema}"
+        );
+        if let Some(required) = schema["required"].as_array() {
+            assert!(
+                !required
+                    .iter()
+                    .any(|item| item == "pull_request" || item == "release_url"),
+                "{label} must keep pull_request and release_url optional: {schema}"
+            );
+        }
+    };
+    for view in [
+        "/api/v1/status",
+        "/api/v1/history",
+        "/api/v1/security",
+        "/api/v1/lanes",
+        "/api/v1/stages",
+    ] {
+        let items = &paths[view]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+            ["properties"]["commands"]["items"];
+        check_command_schema(items, view);
+    }
+    check_command_schema(
+        &paths["/api/v1/peek"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+            ["properties"]["command"],
+        "/api/v1/peek",
+    );
     let properties =
         &whoami["responses"]["200"]["content"]["application/json"]["schema"]["properties"];
     for field in [
@@ -628,6 +665,161 @@ fn read_api_equals_cli_for_command_trees_stages_waterfall_and_logs() {
     );
     assert!(!directory.join("7-fixture.command.stop.json").exists());
     assert!(!directory.join("7-fixture.command.dismiss.json").exists());
+}
+
+#[test]
+fn release_url_keeps_api_openapi_and_cli_parity() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    freeze_clock(home.path());
+    let release_dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/release");
+    fs::create_dir_all(&release_dir).unwrap();
+    let now = (chrono::Local::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    let write_release = |filename: &str, value: Value| {
+        fs::write(
+            release_dir.join(format!("{filename}.command.json")),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+    };
+    write_release(
+        "release-published",
+        json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T080000",
+            "repository": "acme/widgets",
+            "hostname": "factory",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "codex",
+            "model": "gpt-6",
+            "effort": "high",
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "merged",
+            "cause": null,
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/18",
+            "release_url": "https://github.com/acme/widgets/releases/tag/v0.2.0"
+        }),
+    );
+    write_release(
+        "release-failed",
+        json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T070000",
+            "repository": "acme/widgets",
+            "hostname": "factory",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "codex",
+            "model": "gpt-6",
+            "effort": "high",
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "failed",
+            "cause": "bump PR review blocked",
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/17",
+            "release_url": "https://github.com/acme/widgets/releases/tag/v0.1.9"
+        }),
+    );
+    write_release(
+        "release-unlinked",
+        json!({
+            "version": 1,
+            "kind": "Release run",
+            "name": "release-20261115T060000",
+            "repository": "acme/widgets",
+            "hostname": "factory",
+            "process_id": 0,
+            "process_start": "gone",
+            "harness": "codex",
+            "model": "gpt-6",
+            "effort": "high",
+            "started_at": now,
+            "ended_at": now,
+            "stages": [],
+            "session_log": null,
+            "outcome": "merged",
+            "cause": null,
+            "issue_branch": null,
+            "pull_request": "https://github.com/acme/widgets/pull/16"
+        }),
+    );
+
+    let console = Console::start_command({
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["console", "--no-sign-in"])
+            .env("HOME", home.path())
+            .env("LD_PRELOAD", home.path().join("api-clock.so"));
+        command
+    });
+
+    for path in [
+        "/api/v1/status?all=true",
+        "/api/v1/history",
+        "/api/v1/lanes",
+        "/api/v1/stages",
+        "/api/v1/security",
+    ] {
+        parity(&console, home.path(), path, &["status", "--all", "--json"]);
+    }
+    let status = json(console.get("/api/v1/status?all=true"));
+    let commands = status["commands"].as_array().unwrap();
+    let published = commands
+        .iter()
+        .find(|row| row["name"] == "release-20261115T080000")
+        .unwrap();
+    assert_eq!(
+        published["release_url"],
+        "https://github.com/acme/widgets/releases/tag/v0.2.0"
+    );
+    let failed = commands
+        .iter()
+        .find(|row| row["name"] == "release-20261115T070000")
+        .unwrap();
+    assert_eq!(
+        failed["release_url"],
+        "https://github.com/acme/widgets/releases/tag/v0.1.9"
+    );
+    let unlinked = commands
+        .iter()
+        .find(|row| row["name"] == "release-20261115T060000")
+        .unwrap();
+    assert!(unlinked.get("release_url").is_none(), "{unlinked}");
+
+    parity(
+        &console,
+        home.path(),
+        "/api/v1/peek?command=release-20261115T080000",
+        &["show", "release-20261115T080000", "--json"],
+    );
+    parity(
+        &console,
+        home.path(),
+        "/api/v1/peek?command=release-20261115T060000",
+        &["show", "release-20261115T060000", "--json"],
+    );
+    let peek_published = json(console.get("/api/v1/peek?command=release-20261115T080000"));
+    assert_eq!(
+        peek_published["command"]["release_url"],
+        "https://github.com/acme/widgets/releases/tag/v0.2.0"
+    );
+    let peek_unlinked = json(console.get("/api/v1/peek?command=release-20261115T060000"));
+    assert!(
+        peek_unlinked["command"].get("release_url").is_none(),
+        "{peek_unlinked}"
+    );
 }
 
 #[test]

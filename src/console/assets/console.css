@@ -320,8 +320,8 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 /* A Command name must never push its repository out of view. */
 .row-head > .subject:has(> .subject-command) { min-width: 0; max-width: 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .subject-command { display: block; color: var(--dim); }
-.working-target { display: block; overflow-wrap: anywhere; }
-.row-head > .subject:has(.working-target) { white-space: normal; overflow: visible; }
+.working-target, .release-target { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.row-head > .subject:has(.working-target, .release-target) { white-space: normal; overflow: visible; }
 .machine-filter select { max-width: 100%; }
 .machine-filter, .fleet-machines { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
 .one-line .command > .machine-tag { display: block; padding: 4px 10px 0; font-size: .8em; color: var(--dim); overflow-wrap: anywhere; }
@@ -330,7 +330,10 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 
 @media (scripting: enabled) and (min-width: 761px) {
   .one-line .row-head > .subject:has(> a) { display: flex; align-items: baseline; gap: .6em; }
+  .one-line .row-head > .subject:has(> a):has(.working-target, .release-target) { flex-wrap: wrap; row-gap: 2px; }
+  .one-line .row-head > .subject:has(.working-target, .release-target) > a { flex: 1 1 0; min-width: 0; }
   .one-line .subject > .account-tag { flex: none; }
+  .one-line .subject > .working-target, .one-line .subject > .release-target { flex: 1 0 100%; }
 }
 @media (scripting: enabled) and (min-width: 761px) and (max-width: 1100px) {
   .one-line .row-head > .pr-checks { grid-column: 1 / -1; grid-row: 2; justify-self: start; }

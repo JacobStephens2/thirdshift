@@ -1002,6 +1002,7 @@ fn fail(
         recovery: Some(Box::new(recovery)),
         error,
         pr_url,
+        release_url: None,
         log,
         interrupted,
         ticket_lines: Vec::new(),
