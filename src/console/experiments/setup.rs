@@ -16,7 +16,7 @@ pub(super) fn fields(
             format!(
                 "{} · {}",
                 reference.unwrap_or("ref unknown"),
-                setup.reference().chars().take(10).collect::<String>()
+                super::render::short(setup.reference())
             ),
         ),
         ("Harness", setup.executor().into()),

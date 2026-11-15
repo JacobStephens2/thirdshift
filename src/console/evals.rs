@@ -88,13 +88,10 @@ pub(super) async fn check_runner(Json(request): Json<CheckRunner>) -> Response {
         args.push("--json".into());
         crate::evals::parse(&args[1..])?;
         let timeout = crate::evals::experiment::Bar::default().timeout_seconds;
-        // The Trial and its code checks each have the Bar's timeout.
-        let output = super::commands::cli_twin(
-            "Custom runner check",
-            &args,
-            None,
-            Duration::from_secs(3 * timeout),
-        )?;
+        // The Trial and its code checks each have the Bar's timeout; one more
+        // covers freezing the Custom runner and preparing the task repository.
+        let budget = Duration::from_secs(3 * timeout);
+        let output = super::commands::cli_twin("Custom runner check", &args, None, budget)?;
         match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
             Ok(report) if output.status.success() || output.status.code() == Some(1) => Ok(report),
             _ => bail!("{}", String::from_utf8_lossy(&output.stderr).trim()),

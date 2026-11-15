@@ -463,9 +463,7 @@ impl<'a> Execution<'a> {
             protocol.cause = Some("Trial repository changed during its session".into());
         }
         if protocol.outcome != Outcome::Void && custom::web_search(&attempt)? {
-            protocol.outcome = Outcome::Void;
-            protocol.void_cause = Some(VoidCause::WebSearch);
-            protocol.cause = Some("Session transcript contains a web-search tool call".into());
+            custom::void_web_search(&mut protocol);
         }
         let score = trace.grade(|| {
             if let Some(prices) = self.pricing {

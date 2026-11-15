@@ -9,8 +9,10 @@ const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompt
 
 test("architecture describes the shipped Custom runner sandbox", async () => {
   const page = await readFile(join(__dirname, "..", "architecture/index.html"), "utf8");
-  assert.ok(!page.includes("The Trial-wide provider sandbox and session recorder follow in #2189 and #2191."),
-    "Architecture still describes the #2189 Trial sandbox as future work");
+  for (const text of ["One Trial-wide bwrap sandbox and memory scope enclose the runner and its children.",
+    "<code>record_command --role</code>", "<code>evals check-runner</code>"]) {
+    assert.ok(page.includes(text), `Architecture no longer describes the Custom runner: ${text}`);
+  }
 });
 
 test("Experiment format documentation matches the emitted contract", async () => {

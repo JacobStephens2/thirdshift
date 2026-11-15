@@ -8,6 +8,25 @@ pub(super) fn declarations(fixture: &Fixture, text: &str) {
     fs::write(path, format!("{text}\n{manifest}")).unwrap();
 }
 
+/// The Custom runner sandbox needs bwrap namespaces and socat for its proxy
+/// relay. Hosts without either skip, rather than fail with
+/// `sandbox_unavailable`.
+pub(super) fn runner_sandbox_available(label: &str) -> bool {
+    let namespaces = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--unshare-pid", "--unshare-net"])
+        .args(["--proc", "/proc", "--", "/bin/true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let socat = std::process::Command::new("socat")
+        .arg("-V")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !(namespaces && socat) {
+        println!("SKIPPED ({label}): bwrap namespaces or socat unavailable");
+    }
+    namespaces && socat
+}
+
 pub(super) fn harness_script(fixture: &Fixture, name: &str, body: &str) {
     let path = fixture.scenario.path(&format!("bin/{name}"));
     let _ = fs::remove_file(&path);
@@ -110,12 +129,7 @@ fn custom_runner_preparation_refuses_unresolved_provider_declarations() {
 
 #[test]
 fn custom_runner_sandbox_confines_children_credentials_network_and_harness_io() {
-    if !std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        println!("SKIPPED (Custom runner sandbox): bwrap is not on PATH");
+    if !runner_sandbox_available("Custom runner sandbox") {
         return;
     }
     let fixture = process::fixture();
@@ -293,12 +307,7 @@ fn missing_declared_credentials_void_custom_trials_without_using_ambient_keys() 
 
 #[test]
 fn declared_harness_wrappers_apply_web_restrictions_and_preserve_process_io() {
-    if !std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        println!("SKIPPED (Custom runner wrappers): bwrap is not on PATH");
+    if !runner_sandbox_available("Custom runner wrappers") {
         return;
     }
     let fixture = process::fixture();
@@ -358,12 +367,7 @@ assert (pathlib.Path(os.environ['HOME']) / '.grok/auth.json').read_text() == 'fi
 
 #[test]
 fn custom_kimi_trials_keep_only_declared_alias_logins_and_provider_families() {
-    if !std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        println!("SKIPPED (Custom Kimi runner): bwrap is not on PATH");
+    if !runner_sandbox_available("Custom Kimi runner") {
         return;
     }
     let fixture = process::fixture();
@@ -446,12 +450,7 @@ assert (home / 'credentials/kimi-code.json').read_text() == 'managed-login'
 
 #[test]
 fn custom_kimi_accepts_declared_provider_env_login_without_managed_oauth() {
-    if !std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        println!("SKIPPED (Custom Kimi provider env login): bwrap is not on PATH");
+    if !runner_sandbox_available("Custom Kimi provider env login") {
         return;
     }
     let fixture = process::fixture();
@@ -592,12 +591,7 @@ fn a_kimi_panel_seat_with_the_custom_runners_fireworks_alias_withholds_its_vote(
 
 #[test]
 fn custom_kimi_accepts_declared_provider_env_endpoint_without_managed_oauth() {
-    if !std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        println!("SKIPPED (Custom Kimi provider env login): bwrap is not on PATH");
+    if !runner_sandbox_available("Custom Kimi provider env login") {
         return;
     }
     let fixture = process::fixture();
@@ -762,7 +756,7 @@ fn custom_runner_reports_ignored_uncommitted_scratch_in_trial_diagnostics() {
     let fixture = process::fixture();
     runner(
         &fixture,
-        &DELIVER.replace(
+        &deliver_with(
             "pathlib.Path('feature.txt').write_text('uncommitted regression\\n')",
             "",
         ),
@@ -832,10 +826,8 @@ else:
 #[test]
 fn a_self_reported_void_cannot_hide_committed_excluded_paths() {
     let fixture = process::fixture();
-    let body = DELIVER.replace(
-        "subprocess.run(['git', 'commit'",
-        "subprocess.run(['git', 'add', '-f', '.scratch/private.txt'], check=True)\nsubprocess.run(['git', 'commit'",
-    ) + "\njson.dump({'version':1,'outcome':'void','void_cause':'session_unavailable'}, open(output / 'result.json','w'))\n";
+    let body = deliver_committing_scratch()
+        + "\njson.dump({'version':1,'outcome':'void','void_cause':'session_unavailable'}, open(output / 'result.json','w'))\n";
     runner(&fixture, &body);
     let result = run(&fixture, &[]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -920,6 +912,23 @@ subprocess.run(['git', 'commit', '-qm', 'Custom runner change'], check=True)
 pathlib.Path('feature.txt').write_text('uncommitted regression\n')
 json.dump({'version':1, 'outcome':'delivered'}, open(output / 'result.json', 'w'))
 "#;
+
+/// `DELIVER` with one edit, failing loudly if the edit no longer applies.
+fn deliver_with(from: &str, to: &str) -> String {
+    assert!(
+        DELIVER.contains(from),
+        "DELIVER no longer contains {from:?}"
+    );
+    DELIVER.replace(from, to)
+}
+
+/// `DELIVER`, force-committing the `git_exclude`d scratch file with its change.
+fn deliver_committing_scratch() -> String {
+    deliver_with(
+        "subprocess.run(['git', 'commit'",
+        "subprocess.run(['git', 'add', '-f', '.scratch/private.txt'], check=True)\nsubprocess.run(['git', 'commit'",
+    )
+}
 
 #[test]
 fn custom_runner_preserves_empty_mapped_folders_in_bundle_and_home() {
@@ -1071,12 +1080,7 @@ sleep 300"#,
 
 #[test]
 fn custom_runner_live_traces_cannot_be_deleted_in_the_sandbox() {
-    if !std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        println!("SKIPPED (Custom runner sandbox): bwrap is not on PATH");
+    if !runner_sandbox_available("Custom runner sandbox") {
         return;
     }
     let fixture = process::fixture();
@@ -1296,7 +1300,7 @@ fn broken_custom_runner_protocols_fail_trials_without_aborting_the_experiment() 
 #[test]
 fn force_committed_excluded_paths_fail_even_when_the_runner_changes_its_index() {
     let fixture = process::fixture();
-    let body = DELIVER.replace("subprocess.run(['git', 'commit'", "subprocess.run(['git', 'add', '-f', '.scratch/private.txt'], check=True)\nsubprocess.run(['git', 'commit'")
+    let body = deliver_committing_scratch()
         + "\nsubprocess.run(['git', 'rm', '--cached', '.scratch/private.txt'], check=True)\n";
     runner(&fixture, &body);
     let run = run(&fixture, &[]);
@@ -1381,7 +1385,7 @@ fn mixed_arms_work_in_both_directions_and_candidate_runner_defaults_baseline_to_
 fn custom_runner_selection_refuses_conflicts_and_review_suites_before_dispatch() {
     let fixture = process::fixture();
     runner(&fixture, DELIVER);
-    for args in [
+    for (args, expected) in [
         vec!["experiment", "--candidate-runner", "fixture"],
         vec![
             "experiment",
@@ -1423,14 +1427,19 @@ fn custom_runner_selection_refuses_conflicts_and_review_suites_before_dispatch()
             "--suite",
             "process",
         ],
-    ] {
+    ]
+    .into_iter()
+    .zip([
+        "Custom runners require --suite",
+        "--candidate-runner conflicts",
+        "Custom runners cannot use --release",
+        "Custom runners require process suites: code-review",
+        "Custom runners require process suites: spec-review",
+        "--baseline-runner conflicts",
+    ]) {
         let run = fixture.scenario.run_with_env(&args, &NO_SANDBOX);
         assert_ne!(run.code, Some(0), "{args:?}: {}", run.stderr);
-        assert!(
-            run.stderr.contains("Custom runners") || run.stderr.contains("conflicts"),
-            "{}",
-            run.stderr
-        );
+        assert!(run.stderr.contains(expected), "{args:?}: {}", run.stderr);
     }
     for arm in ["baseline", "candidate"] {
         for field in ["process", "harness", "model", "effort"] {
@@ -1447,10 +1456,10 @@ fn custom_runner_selection_refuses_conflicts_and_review_suites_before_dispatch()
                 &conflict,
                 "claude",
             ];
-            assert!(args.contains(&runner_flag.as_str()));
             let run = fixture.scenario.run_with_env(&args, &NO_SANDBOX);
             assert_ne!(run.code, Some(0));
-            assert!(run.stderr.contains("conflicts"), "{}", run.stderr);
+            let expected = format!("{runner_flag} conflicts");
+            assert!(run.stderr.contains(&expected), "{}", run.stderr);
         }
     }
     assert!(
@@ -1556,8 +1565,11 @@ fn a_frozen_home_skill_is_verified_before_a_resumed_trial() {
 fn custom_runner_pairs_use_committed_new_tests_on_base_and_other_head() {
     let fixture = process::fixture();
     pairs::pair_fixture(&fixture, pairs::CANDIDATE_TEST);
-    let body = DELIVER.replace("subprocess.run(['git', 'add', '.']", r#"pathlib.Path('test_new_runner.py').write_text("import unittest\nfrom pathlib import Path\nclass Runner(unittest.TestCase):\n def test_feature(self):\n  self.assertEqual(Path('feature.txt').read_text(), 'implemented\\n')\n")
-subprocess.run(['git', 'add', '.']"#);
+    let body = deliver_with(
+        "subprocess.run(['git', 'add', '.']",
+        r#"pathlib.Path('test_new_runner.py').write_text("import unittest\nfrom pathlib import Path\nclass Runner(unittest.TestCase):\n def test_feature(self):\n  self.assertEqual(Path('feature.txt').read_text(), 'implemented\\n')\n")
+subprocess.run(['git', 'add', '.']"#,
+    );
     runner(&fixture, &body);
     let run = run(&fixture, &[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);

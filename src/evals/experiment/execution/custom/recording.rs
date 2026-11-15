@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn a_flood_of_record_frames_returns_control_to_supervision() {
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let (_root, mut recorder) = recorder();
         let mut socket = UnixStream::connect(recorder.socket()).unwrap();
         writeln!(
@@ -486,21 +486,31 @@ mod tests {
         )
         .unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let queued = Arc::new(AtomicUsize::new(0));
         let writer = std::thread::spawn({
-            let stop = Arc::clone(&stop);
+            let (stop, queued) = (Arc::clone(&stop), Arc::clone(&queued));
             move || {
                 let frame = format!("{}\n", json!({"raw": "x\n"}));
                 let chunk = frame.repeat((64 << 10) / frame.len());
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
-                while !stop.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+                // Write until told to stop; dropping the recorder ends a
+                // blocked write.
+                while !stop.load(Ordering::Relaxed) {
                     if socket.write_all(chunk.as_bytes()).is_err() {
                         return;
                     }
+                    queued.fetch_add(chunk.len(), Ordering::Relaxed);
                 }
             }
         });
-        // Let the frames queue before the poll starts.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Poll for queued frames, with a generous bound, before the poll starts.
+        let waiting = std::time::Instant::now();
+        while queued.load(Ordering::Relaxed) == 0 {
+            assert!(
+                waiting.elapsed() < std::time::Duration::from_secs(30),
+                "no record frames were queued"
+            );
+            std::thread::yield_now();
+        }
         let started = std::time::Instant::now();
         let polled = recorder.poll();
         let elapsed = started.elapsed();

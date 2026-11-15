@@ -377,14 +377,7 @@ fn a_dry_run_refuses_unusable_tasks_before_checking_the_runner() {
 
 #[test]
 fn a_dry_run_confines_the_runner_in_the_trial_sandbox() {
-    let available = |program: &str, flag: &str| {
-        std::process::Command::new(program)
-            .arg(flag)
-            .output()
-            .is_ok_and(|output| output.status.success())
-    };
-    if !available("bwrap", "--version") || !available("socat", "-V") {
-        println!("SKIPPED (dry-run sandbox): bwrap or socat is not on PATH");
+    if !super::custom_runner::runner_sandbox_available("dry-run sandbox") {
         return;
     }
     let fixture = process::fixture();

@@ -10,7 +10,7 @@ use crate::verdict::{Decision, PassRule};
 fn when(text: &str) -> String {
     esc(&crate::local_time::readable(text))
 }
-fn short(text: &str) -> String {
+pub(super) fn short(text: &str) -> String {
     text.chars().take(10).collect()
 }
 fn active(view: &View) -> bool {

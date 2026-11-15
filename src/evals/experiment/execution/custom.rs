@@ -40,9 +40,7 @@ pub(super) fn collect(
                 output.void_cause = Some(VoidCause::UsageLimit);
                 output.cause = Some(crate::session::limits::Reached(limit.clone()).to_string());
             } else if recorder.web_search || imported.web_search {
-                output.outcome = Outcome::Void;
-                output.void_cause = Some(VoidCause::WebSearch);
-                output.cause = Some("Session transcript contains a web-search tool call".into());
+                void_web_search(output);
             } else if reported && output.outcome != Outcome::Void {
                 let sessions = recorder.sessions + imported.sessions;
                 let harness_sessions = recorder.sessions + imported.harness_sessions;
@@ -87,6 +85,13 @@ pub(super) fn collect(
         Err(_) => {}
     }
     Ok(())
+}
+
+/// Void a Trial whose Session evidence shows a web-search tool call.
+pub(super) fn void_web_search(output: &mut Output) {
+    output.outcome = Outcome::Void;
+    output.void_cause = Some(VoidCause::WebSearch);
+    output.cause = Some("Session transcript contains a web-search tool call".into());
 }
 
 /// Inspect the normalized facts, shared by native and Custom-runner Trials.
