@@ -296,6 +296,11 @@ fn inspect(git: &Git, launch: &Git, github: &GitHub, request: &Request<'_>) -> R
         let branch_gone = live
             .get(&parsed)
             .is_none_or(|entry| entry.branch_head.is_none());
+        // Outsiders can open a fork PR named release-X.Y.Z but cannot push
+        // origin's branches or tags, so such a PR alone is no unfinished release.
+        if pr.from_fork && !live.contains_key(&parsed) {
+            continue;
+        }
         if pr.pr.state == PrState::Closed
             && branch_gone
             && live.get(&parsed).is_none_or(|entry| entry.pr.is_none())

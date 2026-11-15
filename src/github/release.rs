@@ -28,6 +28,8 @@ pub(crate) struct ReleasePr {
     pub pr: PullRequest,
     pub title: String,
     pub merge_commit: Option<String>,
+    /// Opened from another repository: anyone can name a fork branch release-*.
+    pub from_fork: bool,
 }
 
 impl ReleasePr {
@@ -38,10 +40,14 @@ impl ReleasePr {
             .context("release PR has no title")?
             .to_owned();
         let merge_commit = value["mergeCommit"]["oid"].as_str().map(str::to_owned);
+        let from_fork = value["isCrossRepository"]
+            .as_bool()
+            .context("release PR has no isCrossRepository")?;
         Ok(Self {
             pr,
             title,
             merge_commit,
+            from_fork,
         })
     }
 }

@@ -1530,3 +1530,25 @@ fn an_abandoned_experiment_cut_leaves_no_pin_that_blocks_later_passes() {
         "the Experiment pin outlived the branch push and blocks Passes: {activity}"
     );
 }
+
+#[test]
+fn an_open_fork_pr_on_a_release_branch_name_does_not_block_releases() {
+    // Anyone can open a pull request from a fork whose head branch is named
+    // release-X.Y.Z. Only branches on origin, which outsiders cannot push,
+    // are unfinished releases; a fork PR must not block every Release run.
+    let release = Release::new();
+    release.push_bump("9.0.0");
+    release.open_bump_pr("9.0.0");
+    release.gh(&["fake", "pr", "release-9.0.0", "isCrossRepository", "true"]);
+    release.origin(&["update-ref", "-d", "refs/heads/release-9.0.0"]);
+    release.ci_reports(GREEN);
+    sandbox_summary(&release);
+
+    let output = with_input(&mut command(&release, "0.2.0"), "");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
+}
