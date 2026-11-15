@@ -747,7 +747,7 @@ fn blind_runner_side(side: &mut pairs::Side, identities: &RunnerIdentities) {
     }
     let blind = |text: &mut String, values: &[String]| {
         for identity in values {
-            *text = text.replace(identity, "[withheld]");
+            *text = withhold(text, identity);
         }
     };
     for file in &mut side.diff {
@@ -767,12 +767,65 @@ fn blind_runner_side(side: &mut pairs::Side, identities: &RunnerIdentities) {
     }
 }
 
+/// Byte offsets where `identity` occurs in `text` as a whole word, so a
+/// runner named `review` never matches inside `reviewer`. Separators such as
+/// `_` still bound it, as in `review_test.py`.
+fn whole_matches<'a>(text: &'a str, identity: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let identifier = |c: char| c.is_alphanumeric();
+    text.match_indices(identity)
+        .map(|(index, _)| index)
+        .filter(move |&index| {
+            !text[..index].chars().next_back().is_some_and(identifier)
+                && !text[index + identity.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(identifier)
+        })
+}
+
+fn withhold(text: &str, identity: &str) -> String {
+    let mut withheld = String::with_capacity(text.len());
+    let mut copied = 0;
+    for index in whole_matches(text, identity).collect::<Vec<_>>() {
+        withheld.push_str(&text[copied..index]);
+        withheld.push_str("[withheld]");
+        copied = index + identity.len();
+    }
+    withheld.push_str(&text[copied..]);
+    withheld
+}
+
 fn blind_runner_diff(diff: &str, identities: &RunnerIdentities) -> String {
+    let names_runner = |value: &str| {
+        identities
+            .attribution
+            .iter()
+            .chain(&identities.role_metadata)
+            .any(|identity| {
+                whole_matches(value, &identity.to_ascii_lowercase())
+                    .next()
+                    .is_some()
+            })
+    };
+    // Added table rows wait until the table ends: a table with a role column
+    // that names the runner's identity is dropped whole, any other is kept.
+    let mut table: Vec<&str> = Vec::new();
     let mut role_table = false;
+    let mut identifying = false;
     let mut blinded = String::new();
+    let mut flush = |table: &mut Vec<&str>, drop: bool, blinded: &mut String| {
+        if !drop {
+            for line in table.iter() {
+                blinded.push_str(line);
+                blinded.push('\n');
+            }
+        }
+        table.clear();
+    };
     for line in diff.lines() {
         let Some(added) = line.strip_prefix('+').filter(|_| !line.starts_with("+++")) else {
-            role_table = false;
+            flush(&mut table, role_table && identifying, &mut blinded);
+            (role_table, identifying) = (false, false);
             blinded.push_str(line);
             blinded.push('\n');
             continue;
@@ -789,41 +842,26 @@ fn blind_runner_diff(diff: &str, identities: &RunnerIdentities) -> String {
                 .map(str::trim)
                 .collect();
             role_table |= cells.iter().any(|cell| matches!(*cell, "role" | "roles"));
-            if role_table {
-                continue;
-            }
-        } else {
-            role_table = false;
+            identifying |= cells.iter().any(|cell| names_runner(cell));
+            table.push(line);
+            continue;
         }
+        flush(&mut table, role_table && identifying, &mut blinded);
+        (role_table, identifying) = (false, false);
         let attribution = ["runner", "runner digest", "roles", "role"]
             .iter()
             .any(|key| {
                 normalized
                     .strip_prefix(key)
                     .and_then(|rest| rest.trim_start().strip_prefix([':', '=']))
-                    .is_some_and(|value| {
-                        identities
-                            .attribution
-                            .iter()
-                            .chain(&identities.role_metadata)
-                            .any(|identity| {
-                                let identity = identity.to_ascii_lowercase();
-                                value.match_indices(&identity).any(|(index, _)| {
-                                    let identifier = |c: char| c.is_alphanumeric() || c == '_';
-                                    !value[..index].chars().next_back().is_some_and(identifier)
-                                        && !value[index + identity.len()..]
-                                            .chars()
-                                            .next()
-                                            .is_some_and(identifier)
-                                })
-                            })
-                    })
+                    .is_some_and(names_runner)
             });
         if !attribution {
             blinded.push_str(line);
             blinded.push('\n');
         }
     }
+    flush(&mut table, role_table && identifying, &mut blinded);
     blinded
 }
 
@@ -912,6 +950,23 @@ fn checklist(ticket: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runner_blinding_keeps_ordinary_role_tables_and_words() {
+        let identities = RunnerIdentities {
+            attribution: vec!["review".into()],
+            role_metadata: vec!["implement".into()],
+        };
+        let patch = "+| Role | Permission |\n+|---|---|\n+| admin | write |\n+fn reviewer() {}\n";
+        let mut side = pairs::Side::default();
+        side.diff.push(pairs::FileDiff {
+            path: "docs/roles.md".into(),
+            test: false,
+            patch: patch.into(),
+        });
+        blind_runner_side(&mut side, &identities);
+        assert_eq!(side.diff[0].patch, patch);
+    }
 
     #[test]
     fn sides_are_drawn_per_pair_from_the_seed() {
