@@ -1694,13 +1694,7 @@ async fn log(
         })
         .await;
     }
-    logs::reader_for_command(
-        command,
-        (!session.is_empty()).then_some(session),
-        viewer,
-        format,
-    )
-    .await
+    logs::reader_for_command(command, (!session.is_empty()).then_some(session), viewer).await
 }
 
 fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {

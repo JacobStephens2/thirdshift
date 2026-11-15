@@ -223,28 +223,8 @@ pub(super) async fn reader(
     Extension(viewer): Extension<super::auth::Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
-    render_reader(OpenTarget::Id(id), viewer, format).await
-}
-
-pub(super) async fn reader_for_command(
-    command: String,
-    session: Option<String>,
-    viewer: super::auth::Viewer,
-    format: super::api::Format,
-) -> Response {
-    render_reader(OpenTarget::Command { command, session }, viewer, format).await
-}
-
-async fn render_reader(
-    target: OpenTarget,
-    viewer: super::auth::Viewer,
-    format: super::api::Format,
-) -> Response {
     let allow_security = viewer.scopes.contains(&super::Scope::Security);
     if format == super::api::Format::Json {
-        let OpenTarget::Id(id) = target else {
-            return (StatusCode::NOT_FOUND, "Log is unavailable.").into_response();
-        };
         return super::api::read(format, move || {
             let config = UserConfig::load()?;
             match catalog::open(
@@ -268,6 +248,19 @@ async fn render_reader(
         })
         .await;
     }
+    render_html_reader(OpenTarget::Id(id), viewer).await
+}
+
+pub(super) async fn reader_for_command(
+    command: String,
+    session: Option<String>,
+    viewer: super::auth::Viewer,
+) -> Response {
+    render_html_reader(OpenTarget::Command { command, session }, viewer).await
+}
+
+async fn render_html_reader(target: OpenTarget, viewer: super::auth::Viewer) -> Response {
+    let allow_security = viewer.scopes.contains(&super::Scope::Security);
     let result = tokio::task::spawn_blocking(move || -> Result<HtmlOutcome> {
         let config = UserConfig::load()?;
         let outcome = match &target {

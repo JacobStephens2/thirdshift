@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::super::command_record::Issue;
 use super::super::github::Kept;
 use super::super::reading::{Command, Observation};
-use crate::issue::{IssueUrl, Repo};
+use crate::issue::IssueUrl;
 use crate::review::PullRequestUrl;
 
 pub(in crate::logs) const MAX_DISPATCH_DEPTH: usize = 8;
@@ -96,40 +96,25 @@ fn is_safe_github_url(raw: &str) -> bool {
     })
 }
 
-fn valid_repo_slug(repo: &str) -> bool {
-    Repo::parse_slug(repo).is_some()
+fn valid_repo_issue(issue: &IssueUrl, repository: &str) -> bool {
+    issue.number > 0
+        && crate::github::valid_repo_slug(repository)
+        && crate::github::valid_repo_slug(&issue.repo_slug())
+        && issue.repo_slug().eq_ignore_ascii_case(repository)
 }
 
-fn validated_issue_url(
-    url: &str,
-    repository: &str,
-    expected_number: Option<u64>,
-) -> Option<IssueUrl> {
-    if !is_safe_github_url(url) {
-        return None;
-    }
-    let parsed = IssueUrl::parse(url).ok()?;
-    if parsed.number == 0 || expected_number.is_some_and(|number| parsed.number != number) {
-        return None;
-    }
-    if !repository.is_empty() && !parsed.repo_slug().eq_ignore_ascii_case(repository) {
-        return None;
-    }
-    Some(parsed)
+fn validated_issue_url(url: &str, repository: &str, expected_number: u64) -> Option<IssueUrl> {
+    is_safe_github_url(url)
+        .then(|| IssueUrl::parse(url).ok())
+        .flatten()
+        .filter(|parsed| parsed.number == expected_number && valid_repo_issue(parsed, repository))
 }
 
 fn validated_pr_url(url: &str, repository: &str) -> Option<PullRequestUrl> {
-    if !is_safe_github_url(url) {
-        return None;
-    }
-    let parsed = PullRequestUrl::parse(url).ok()?;
-    if parsed.issue.number == 0 {
-        return None;
-    }
-    if !repository.is_empty() && !parsed.issue.repo_slug().eq_ignore_ascii_case(repository) {
-        return None;
-    }
-    Some(parsed)
+    is_safe_github_url(url)
+        .then(|| PullRequestUrl::parse(url).ok())
+        .flatten()
+        .filter(|parsed| valid_repo_issue(&parsed.issue, repository))
 }
 
 fn issue_target(issue: Option<&Issue>, repository: &str) -> Option<TargetLink> {
@@ -138,14 +123,14 @@ fn issue_target(issue: Option<&Issue>, repository: &str) -> Option<TargetLink> {
         return None;
     }
     let title = non_empty(issue.title.as_deref());
-    if let Some(parsed) = validated_issue_url(&issue.url, repository, Some(issue.number)) {
+    if let Some(parsed) = validated_issue_url(&issue.url, repository, issue.number) {
         return Some(TargetLink {
             label: format!("{}#{}", parsed.repo_slug(), parsed.number),
             url: Some(parsed.url),
             title,
         });
     }
-    valid_repo_slug(repository).then(|| TargetLink {
+    crate::github::valid_repo_slug(repository).then(|| TargetLink {
         label: format!("{repository}#{}", issue.number),
         url: None,
         title,
@@ -201,7 +186,7 @@ fn kept_pr_title(url: &str, rows: &[&str], kept: Option<&Kept>) -> Option<String
 trait PrSource<'a>: Sized {
     fn repository(&self) -> Option<&'a str>;
     fn pull_request(&self) -> Option<&'a str>;
-    fn pr_title(&self, parsed_url: &str, raw_url: &str, outer_row: Option<&str>) -> Option<String>;
+    fn pr_title(&self, parsed_url: &str, outer_row: Option<&str>) -> Option<String>;
     fn dispatched(&self) -> Vec<Self>;
 }
 
@@ -219,12 +204,7 @@ impl<'a> PrSource<'a> for CommandPrSource<'a> {
         self.command.record.pull_request.as_deref()
     }
 
-    fn pr_title(
-        &self,
-        parsed_url: &str,
-        _raw_url: &str,
-        outer_row: Option<&str>,
-    ) -> Option<String> {
+    fn pr_title(&self, parsed_url: &str, outer_row: Option<&str>) -> Option<String> {
         let own_selector = Observation::Record(self.command).selector();
         let mut rows = Vec::new();
         if let Some(sel) = own_selector.as_deref() {
@@ -265,14 +245,8 @@ impl<'a> PrSource<'a> for DetailsPrSource<'a> {
         self.node["pull_request"].as_str()
     }
 
-    fn pr_title(
-        &self,
-        parsed_url: &str,
-        raw_url: &str,
-        _outer_row: Option<&str>,
-    ) -> Option<String> {
+    fn pr_title(&self, parsed_url: &str, _outer_row: Option<&str>) -> Option<String> {
         non_empty(self.subjects[parsed_url]["facts"]["title"].as_str())
-            .or_else(|| non_empty(self.subjects[raw_url]["facts"]["title"].as_str()))
             .or_else(|| non_empty(self.node["pull_request_title"].as_str()))
     }
 
@@ -307,7 +281,7 @@ fn collect_pr_links<'a, S: PrSource<'a>>(
     if let Some(pr_url) = source.pull_request()
         && let Some(parsed) = validated_pr_url(pr_url, repo)
     {
-        let title = source.pr_title(&parsed.url, pr_url, outer_row);
+        let title = source.pr_title(&parsed.url, outer_row);
         merge_pull_request(
             prs,
             seen,
@@ -459,5 +433,22 @@ mod tests {
             });
         }
         assert!(GitHubTarget::from_details(&nested).is_none());
+    }
+
+    #[test]
+    fn from_details_rejects_missing_or_dot_segment_repository_urls() {
+        let missing_repo = json!({
+            "issue": {"number": 7, "url": "https://github.com/../widgets/issues/7", "title": "x"},
+            "pull_request": "https://github.com/other/repo/pull/9",
+            "dispatched": []
+        });
+        assert_eq!(GitHubTarget::from_details(&missing_repo), None);
+
+        let dot_repo = json!({
+            "repository": "../widgets",
+            "pull_request": "https://github.com/../widgets/pull/9",
+            "dispatched": []
+        });
+        assert_eq!(GitHubTarget::from_details(&dot_repo), None);
     }
 }

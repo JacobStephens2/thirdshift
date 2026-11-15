@@ -151,26 +151,6 @@ impl Repo {
         }
     }
 
-    /// Parse an `owner/name` repository slug, rejecting whitespace, URLs, or extra segments.
-    pub fn parse_slug(slug: &str) -> Option<Self> {
-        fn valid_part(part: &str) -> bool {
-            !part.is_empty()
-                && !matches!(part, "." | "..")
-                && !part.contains(['?', '#', '@', ':', '\\'])
-                && !part.chars().any(char::is_whitespace)
-        }
-        let mut parts = slug.split('/');
-        let owner = parts.next().filter(|part| valid_part(part))?;
-        let name = parts.next().filter(|part| valid_part(part))?;
-        if parts.next().is_some() {
-            return None;
-        }
-        Some(Repo {
-            owner: owner.to_string(),
-            name: name.to_string(),
-        })
-    }
-
     /// `owner/name`, as its URL spells it.
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
@@ -207,32 +187,6 @@ mod tests {
             ("../origin.git", None),
         ] {
             assert_eq!(Repo::of_origin(origin), expected, "{origin}");
-        }
-    }
-
-    #[test]
-    fn repo_parse_slug_accepts_owner_and_name_and_rejects_urls_or_extra_parts() {
-        assert_eq!(
-            Repo::parse_slug("acme/widgets.rs"),
-            Some(Repo {
-                owner: "acme".to_string(),
-                name: "widgets.rs".to_string()
-            })
-        );
-        for bad in [
-            "",
-            "acme",
-            "acme/",
-            "/widgets",
-            "acme/widgets/extra",
-            "acme/widgets?x=1",
-            "acme/widgets#frag",
-            "acme/wid gets",
-            "user@acme/widgets",
-            "https://github.com/acme/widgets",
-            "../widgets",
-        ] {
-            assert_eq!(Repo::parse_slug(bad), None, "{bad}");
         }
     }
 }

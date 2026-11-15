@@ -326,18 +326,18 @@ pub(crate) fn find(config: &UserConfig, selected: &str) -> Result<Log> {
     }
 }
 
-fn open_listed_log(
+fn open_listed_log<'a>(
     source: &Source,
-    snapshot: &Snapshot,
+    snapshot: &'a Snapshot,
     mut log: Log,
-    selected_command: Option<&str>,
+    resolved_observation: Option<Observation<'a>>,
     allow_security: bool,
     include_target: bool,
 ) -> OpenOutcome {
     if !allow_security && log.security_details {
         return OpenOutcome::Forbidden;
     }
-    let observation = find_observation(snapshot, &log.path, selected_command);
+    let observation = resolved_observation.or_else(|| find_observation(snapshot, &log.path));
     if let Some(selector) = observation.and_then(Observation::selector) {
         log.selector = selector;
     }
@@ -400,7 +400,7 @@ fn open_command(
         source,
         snapshot,
         log,
-        Some(command),
+        Some(resolved.observation),
         allow_security,
         include_target,
     ))
@@ -448,13 +448,11 @@ fn find_nested_session<'a>(command: &'a Command, log_path: &Path) -> Option<Obse
             return Some(found);
         }
         let obs = Observation::Record(child);
-        let child_owns_different_log =
-            child.command_log == log_path && child.command_log != command.command_log;
-        let child_owns_session = log_path != child.command_log
+        if log_path != child.command_log
             && obs
                 .sessions()
-                .is_ok_and(|sessions| sessions.iter().any(|path| path == log_path));
-        if child_owns_different_log || child_owns_session {
+                .is_ok_and(|sessions| sessions.iter().any(|path| path == log_path))
+        {
             return Some(obs);
         }
     }
@@ -462,32 +460,13 @@ fn find_nested_session<'a>(command: &'a Command, log_path: &Path) -> Option<Obse
 }
 
 fn find_command_observation<'a>(command: &'a Command, log_path: &Path) -> Option<Observation<'a>> {
-    if let Some(found) = find_nested_session(command, log_path) {
-        return Some(found);
-    }
-    let obs = Observation::Record(command);
-    if observation_matches_log(obs, log_path) {
-        return Some(obs);
-    }
-    for child in command.children.iter().chain(&command.dispatched) {
-        if let Some(found) = find_command_observation(child, log_path) {
-            return Some(found);
-        }
-    }
-    None
+    find_nested_session(command, log_path).or_else(|| {
+        let obs = Observation::Record(command);
+        observation_matches_log(obs, log_path).then_some(obs)
+    })
 }
 
-fn find_observation<'a>(
-    snapshot: &'a Snapshot,
-    log_path: &Path,
-    selected_command: Option<&str>,
-) -> Option<Observation<'a>> {
-    if let Some(selector) = selected_command
-        && let Ok(resolved) = snapshot.resolve(selector)
-        && observation_matches_log(resolved.observation, log_path)
-    {
-        return Some(resolved.observation);
-    }
+fn find_observation<'a>(snapshot: &'a Snapshot, log_path: &Path) -> Option<Observation<'a>> {
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry
             && let Some(found) = find_command_observation(command, log_path)
