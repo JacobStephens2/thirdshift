@@ -219,9 +219,44 @@ struct Task {
 }
 
 pub fn run(options: Options) -> Result<()> {
+    execute(options, &std::env::current_dir()?, true).map(drop)
+}
+
+/// The Release run calls the same Experiment engine without spawning Cargo or
+/// executing anything from its Launch directory, and retains its own recording.
+pub(crate) fn for_release(
+    repository: &Path,
+    candidate: &str,
+    baseline: &str,
+) -> Result<Option<View>> {
+    let _recording = logs::nested();
+    let options = parse(&[
+        "--release".into(),
+        candidate.into(),
+        "--baseline".into(),
+        baseline.into(),
+        "--yes".into(),
+    ])?;
+    execute(options, repository, false)
+}
+
+/// Results contain private Grader evidence, unlike the public Command facts:
+/// print them without copying them into the factory's logs. The standalone
+/// command prints them on stdout; a Release run shows them on stderr, beside
+/// its progress, before it asks whether to release anyway.
+fn print_results(experiment: &store::Stored, json: bool, render: bool) -> Result<()> {
+    let results = experiment.render(json)?;
+    if render {
+        println!("{results}");
+    } else {
+        eprintln!("{results}");
+    }
+    Ok(())
+}
+
+fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<View>> {
     interrupt::install()?;
-    let repository = std::env::current_dir()?;
-    let git = Git::new(&repository);
+    let git = Git::new(repository);
     let candidate = resolve(&git, &options.candidate)?;
     let baseline_reference = if options.release && options.baseline.is_none() {
         Some(git.run(&[
@@ -260,11 +295,12 @@ pub fn run(options: Options) -> Result<()> {
         options.suites.clone()
     };
     if suites.is_empty() && options.release {
-        return release::skip(
+        release::skip(
             "no_suites",
             "no Eval suite touched; no release Experiment needed",
-            options.json,
-        );
+            render.then_some(options.json),
+        )?;
+        return Ok(None);
     }
     ensure!(
         !suites.is_empty(),
@@ -339,7 +375,7 @@ pub fn run(options: Options) -> Result<()> {
             let tasks = tasks(&suites_root, &description.suites)?;
             deciders::check(&description.bar, &tasks)?;
             if options.release
-                && !release::supports_trials(&repository, &root, &description.baseline.commit)?
+                && !release::supports_trials(repository, &root, &description.baseline.commit)?
             {
                 return Ok(None);
             }
@@ -347,11 +383,12 @@ pub fn run(options: Options) -> Result<()> {
         })?
     else {
         let tag = baseline_reference.as_deref().expect("release Baseline tag");
-        return release::skip(
+        release::skip(
             "baseline_without_trial",
             &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
-            options.json,
-        );
+            render.then_some(options.json),
+        )?;
+        return Ok(None);
     };
     drop(suite_locks);
     if let Some(path) = &options.prices {
@@ -369,12 +406,14 @@ pub fn run(options: Options) -> Result<()> {
     }
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
-        println!("{}", experiment.render(options.json)?);
-        logs::start_notice::skipped(format!(
-            "Experiment {} is already completed",
-            experiment.description.id
-        ));
-        return Ok(());
+        print_results(&experiment, options.json, render)?;
+        if render {
+            logs::start_notice::skipped(format!(
+                "Experiment {} is already completed",
+                experiment.description.id
+            ));
+        }
+        return experiment.view().map(Some);
     }
     if let Err(error) = cost::confirm(&experiment, options.yes) {
         // A declined new Experiment leaves no record to list as running.
@@ -395,10 +434,22 @@ pub fn run(options: Options) -> Result<()> {
         ])?);
     }
     experiment.details.release |= options.release;
+    let invocation = if render {
+        resume_args(std::env::args().skip(1))
+    } else {
+        vec![
+            "experiment".into(),
+            "--release".into(),
+            options.candidate.clone(),
+            "--baseline".into(),
+            experiment.description.baseline.commit.clone(),
+            "--yes".into(),
+        ]
+    };
     experiment.details.resume_command = Some(
         std::iter::once("thirdshift".to_owned())
             .chain(
-                resume_args(std::env::args().skip(1))
+                invocation
                     .into_iter()
                     .map(|arg| format!("'{}'", arg.replace('\'', "'\\''"))),
             )
@@ -437,7 +488,7 @@ pub fn run(options: Options) -> Result<()> {
                     Some(serde_json::from_slice(&std::fs::read(record)?)?);
             } else {
                 experiment.description.prepared =
-                    Some(arms::prepare(&repository, requested, &record)?);
+                    Some(arms::prepare(repository, requested, &record)?);
             }
             let prepared = experiment
                 .description
@@ -492,9 +543,7 @@ pub fn run(options: Options) -> Result<()> {
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
         retention::repositories(&experiment);
-        // Results contain private Grader evidence, unlike the public Command
-        // facts. Print them without copying them into the factory's logs.
-        println!("{}", experiment.render(options.json)?);
+        print_results(&experiment, options.json, render)?;
     }
     let outcome = if interrupt::requested() {
         "interrupted"
@@ -526,7 +575,8 @@ pub fn run(options: Options) -> Result<()> {
         "Experiment {} {outcome}",
         experiment.description.id
     ));
-    result.and(saved)
+    result.and(saved)?;
+    experiment.view().map(Some)
 }
 
 pub fn show(args: &[String]) -> Result<String> {

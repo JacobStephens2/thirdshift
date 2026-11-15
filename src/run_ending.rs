@@ -33,6 +33,32 @@ const BASE_FIX: &str = "Base fix: ";
 /// skipped pass, which reads no further, its skip.
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
+        Ending::Release(result) => Ok(match result {
+            Ok(ended) => Account {
+                outcome: "merged",
+                ended: Ok(format!(
+                    "Release {} published; PR {} is merged",
+                    ended.version, ended.pr_url
+                )),
+                interrupted: false,
+                pr_url: Some(&ended.pr_url),
+                advice: &[],
+                base_fix: None,
+                log: None,
+                ticket_lines: &[],
+                review: None,
+                triage: None,
+                security_findings: None,
+                security_findings_waiting: false,
+                security_fix: None,
+                security_close: None,
+                failed_reproduction: None,
+                pre_audit_failure: None,
+                recovery: None,
+                urls: vec![&ended.pr_url],
+            },
+            Err(failed) => Account::of_failure(failed, "failed"),
+        }),
         Ending::Scoring(result) => Ok(match result {
             Ok(count) => Account {
                 outcome: "sampled",

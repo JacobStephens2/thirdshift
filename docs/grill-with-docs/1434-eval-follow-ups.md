@@ -45,7 +45,7 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 *Answer:* agree
 
 **Q1.5 - Make a suite with too few discriminating tasks advisory?** This is #1434's step 4. A suite that can't tell Arms apart produces false passes more than false blocks (§1.5). At 10 discriminating tasks, a no-op passes 48% of the time and a real regression fails 34%; at 40, 73% and 94%. The options:
-- (a) Yes. A suite with fewer than 20 discriminating tasks is reported in the release summary, but can neither pass nor block a release on its own. If every selected suite is advisory, `release.sh` says so and asks, as it does on inconclusive today.
+- (a) Yes. A suite with fewer than 20 discriminating tasks is reported in the release summary, but can neither pass nor block a release on its own. If every selected suite is advisory, the retired release shell script says so and asks, as it does on inconclusive today.
 - (b) Yes, with a different threshold.
 - (c) No. Every suite with approved tasks gates.
 
@@ -130,14 +130,14 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 
 **Q2.5 - Save the advisory threshold in the Bar, and call such a suite an Advisory suite?** Q1.5 decided that a suite with fewer than 20 discriminating tasks can neither pass nor block a release. The options:
 - (a) `min_discriminating_tasks = 20` in the Bar, fixed before the first Trial, with a `--min-discriminating-tasks` flag. The suite still gets a Verdict, marked advisory. Add **Advisory suite** to the glossary: "An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict** to pass or block a release."
-- (b) A constant in `release.sh` only. Experiments don't know about it.
+- (b) A constant in the retired release shell script only. Experiments don't know about it.
 
-*Recommended:* (a). The Bar is where the rules a Verdict follows are fixed. If the rule lived only in `release.sh`, `experiments <id>` and the Console would show a pass that the release ignores.
+*Recommended:* (a). The Bar is where the rules a Verdict follows are fixed. If the rule lived only in the retired release shell script, `experiments <id>` and the Console would show a pass that the release ignores.
 
 *Answer:* agree
 
 **Q2.6 - Estimate the cost from this machine's past Trials, and ask only on a terminal?** Q1.6 decided to show the worst case and an estimate before the first Trial, and ask. The options:
-- (a) The estimate is the mean minutes of completed Trials on this machine, per suite and Harness. With no history, show only the worst case. Ask only when stdin is a terminal. `--yes` skips the question. `release.sh` asks once, through its existing prompt.
+- (a) The estimate is the mean minutes of completed Trials on this machine, per suite and Harness. With no history, show only the worst case. Ask only when stdin is a terminal. `--yes` skips the question. The retired release shell script asks once, through its existing prompt.
 - (b) Always ask, with no `--yes`.
 
 *Recommended:* (a). Scripts and the release flow need a way through. One question per release is enough.
@@ -145,7 +145,7 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 *Answer:* agree
 
 **Q2.7 - Package it as one Spec plus standalone Tickets?** The options:
-- (a) A new **Spec** covering Q2.1–Q2.5: Difficulty in the manifest and its command, judging only discriminating tasks, and Advisory suites in the Verdict and `release.sh`. It's blocked by #1279, since it changes the same Verdict code. #1434 is rewritten as the Spec's `ready-for-human` host Ticket: measure, record, park, and measure Spec review too (Q1.4). The cost prompt (Q1.6, Q2.6) and the output format (Q1.7) become standalone `ready-for-agent` Tickets. The implement suite gets its idea issue (Q1.9).
+- (a) A new **Spec** covering Q2.1–Q2.5: Difficulty in the manifest and its command, judging only discriminating tasks, and Advisory suites in the Verdict and the retired release shell script. It's blocked by #1279, since it changes the same Verdict code. #1434 is rewritten as the Spec's `ready-for-human` host Ticket: measure, record, park, and measure Spec review too (Q1.4). The cost prompt (Q1.6, Q2.6) and the output format (Q1.7) become standalone `ready-for-agent` Tickets. The implement suite gets its idea issue (Q1.9).
 - (b) Everything as standalone issues.
 - (c) Fold everything into #1252's open Spec.
 
@@ -183,7 +183,7 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 - Out-of-band tasks go to `parked/floor/` or `parked/ceiling/` on the host, keeping their Difficulty (Q2.3).
 - Difficulty measured on another setup still counts, and the Verdict says how many judged tasks it applies to (Q2.4).
 - The Bar holds `min_discriminating_tasks = 20`, with a flag. A suite below that is an Advisory suite: it gets a Verdict, marked advisory (Q2.5).
-- The cost estimate is this machine's mean completed-Trial minutes, per suite and Harness. The question is asked only on a terminal, `--yes` skips it, and `release.sh` asks once (Q2.6).
+- The cost estimate is this machine's mean completed-Trial minutes, per suite and Harness. The question is asked only on a terminal, `--yes` skips it, and the retired release shell script asks once (Q2.6).
 
 - No off-the-shelf tool replaces Experiments; the build-vs-buy note recommends keeping it as built, and this grill doesn't reopen that.
 - Code review stays at 3 Trials per task: within-task noise is already only 10% of its variance, and `pass_cubed` needs 3.
@@ -192,7 +192,7 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 - Code review's Difficulty comes from the A/A rerun already running on the host, Experiment `83721fbb…`: both Arms at `1df25aea`, code review only, 3 Trials per Arm. Pooled, that's 6 Trials per task, and it needs no extra run (Q1.2).
 - Spec review's Difficulty comes from one Spec-review A/A with `--trials-per-task 3`: 6 pooled Trials per task, about 180 Trials. The flag already exists (`src/evals/experiment/options.rs:129`), and the Bar accepts 1 or 3. Its Experiments stay at 1 Trial (Q1.2, Q1.4).
 - #1434's "the `spec-review` suite is out of scope" no longer holds (Q1.4).
-- Below 20 discriminating tasks a suite is advisory. If every selected suite is advisory, `release.sh` asks, as it does on inconclusive (Q1.5).
+- Below 20 discriminating tasks a suite is advisory. If every selected suite is advisory, the retired release shell script asks, as it does on inconclusive (Q1.5).
 - No cost ceiling goes in the Bar (Q1.6).
 - The output-format Ticket documents today's JSON as format 1, in `docs/experiment-results.md`, with a drift test. No Scout or Inspect export for now (Q1.7).
 - The Verdict cross-check is research, appended to `eval-suite-scaling.md` (Q1.8).

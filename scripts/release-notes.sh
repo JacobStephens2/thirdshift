@@ -22,7 +22,7 @@ main() {
 	fi
 	local commit summary branch=
 	commit=$(git rev-parse --verify "$1^{commit}")
-	# release.sh tags vX.Y.Z on release-X.Y.Z. Any other tag shape only
+	# The Release run tags vX.Y.Z on release-X.Y.Z. Any other tag shape only
 	# matches a pull request merged as the tagged commit.
 	if [[ ${1#v} =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
 		branch=release-${1#v}
@@ -65,7 +65,7 @@ bump_summary() {
 }
 
 # summary_section
-# The lines of the PR body on stdin between the markers release.sh's pr_body
+# The lines of the PR body on stdin between the markers the Release run
 # writes around the summary, or nothing if either marker is missing.
 summary_section() {
 	awk '

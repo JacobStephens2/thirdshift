@@ -7,6 +7,15 @@ const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
+test("release documentation describes scheduled Passes and on-demand Commands", async () => {
+  for (const file of ["index.html", "how-it-works/index.html", "architecture/index.html", "docs/index.html"]) {
+    const source = await readFile(join(__dirname, "..", file), "utf8");
+    assert.ok(!/scripts\/release[.]sh|--release[-]summary/.test(source), `${file}: retired release entry point`);
+    assert.match(source, /thirdshift release/, file);
+    assert.match(source, /Release Pass/, file);
+  }
+});
+
 test("Experiment format documentation matches the emitted contract", async () => {
   const root = join(__dirname, "..", "..");
   const reading = await readFile(join(root, "src/evals/experiment/reading.rs"), "utf8");

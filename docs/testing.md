@@ -78,6 +78,13 @@ target or doctests. For a focused iteration, use
 `cargo test --bin thirdshift <module>::tests` or `cargo test --test <file>`
 (the file name without `.rs`).
 
+Every Release run test in `cargo test --test release` starts its summary
+Session in a real sandbox. Install
+`bubblewrap` and `socat` before running the Rust suite. On Ubuntu 24.04,
+AppArmor must also permit `/usr/bin/bwrap` to create unprivileged user
+namespaces. The Rust CI workflow installs these dependencies, loads a profile
+granting that permission to `bwrap`, and probes sandbox startup before tests.
+
 Some tests give a Trial, grader or Harness a deadline of a second or less, and
 that deadline covers setup as well as the fake agent. On a busy many-core host,
 running every test at once can use up the deadline before the fake agent starts.
@@ -161,10 +168,14 @@ subtrees and cleans up its recorded children even on a failed assertion.
 
 ## Release fixture child lifetime
 
-Linux release-script and script-function tests use `FixtureChild` from the same
-child-lifetime helper. Each command has a 120-second wait bound, with stdout and
-stderr included in a timeout panic. File-backed input and output keep inherited
-descriptors and large input from blocking that wait.
+Linux Release commands started through `tests/release.rs`'s `Release` fixture,
+and the release-notes helper tests, use `FixtureChild` from the same
+child-lifetime helper. Each such command has a 120-second wait bound, with
+stdout and stderr included in a timeout panic; the cases in
+`tests/release/native.rs` run the binary through the same helper. Cases whose
+Release run carries a release Experiment's Trials and Graders use the
+Experiment's 300-second bound instead. File-backed input and output keep
+inherited descriptors and large input from blocking that wait.
 
 A dedicated guardian process acts as a Linux subreaper for each command. Normal
 completion, timeout and assertion unwinding kill and reap its owned descendants,
@@ -174,16 +185,17 @@ requests the same cleanup before the guardian exits. The immediate command also
 uses the setup helper's Linux parent-death signal. Cleanup names only unreaped
 children of that guardian; git maintenance remains disabled in these fixtures.
 
-`cargo test --test release lifetime::` runs the full release script with a focused
-fake `gh`. Missing and pending runs at both CI and release-workflow waits trigger
+`cargo test --test release lifetime::` runs the compiled `thirdshift release`
+with an isolated bare origin and fake `gh` and Harness executables. Missing and
+pending runs at both CI and release-workflow waits trigger
 a 500ms fixture deadline; an outer supervisor allows five seconds for the fixture
 to fail with captured diagnostics. Separate cases cover successful completion,
 assertion unwinding and SIGKILL of the fixture harness. The supervisor adopts and
-reaps recorded script, guardian and descendant PIDs. A hung summary Harness is
+reaps recorded Command, guardian and descendant PIDs. A hung sandboxed summary Harness is
 also covered on timeout and SIGKILL. Fixture setup and its
 supervisor handshake use the shared 120-second readiness bound.
 
-Release-script tests run on Linux. These deadlines belong to tests;
+Release tests run on Linux. These deadlines belong to tests;
 production release polling still has no overall timeout and resumes on rerun.
 
 ## Scenario Run lifetime

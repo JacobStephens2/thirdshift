@@ -352,6 +352,7 @@ stage_names! {
     Sampling => "sampling",
     Grading => "grading",
     Triage => "Triage",
+    ReleaseSummary => "Release summary",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -372,6 +373,7 @@ impl StageName {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
+            | Work::ReleaseRun(_)
             | Work::TriageRun { .. }
             | Work::Experiment(_)
             | Work::Process { .. } => Self::DispatchedRun,
@@ -398,6 +400,7 @@ impl StageName {
             Self::SecurityReview,
             Self::ArchitectureReview,
             Self::Triage,
+            Self::ReleaseSummary,
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
@@ -498,7 +501,13 @@ impl CommandRecord {
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
         if matches!(
             self.kind.as_str(),
-            "Run" | "Spec run" | "Base fix" | "Review run" | "Triage run" | "Fix run"
+            "Run"
+                | "Spec run"
+                | "Base fix"
+                | "Review run"
+                | "Triage run"
+                | "Fix run"
+                | "Release run"
         ) {
             self.run_metrics = Some(super::run_metrics::RunMetrics::of(
                 self,
@@ -531,6 +540,7 @@ impl CommandRecord {
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
+                | Work::ReleaseRun(_)
                 | Work::TriageRun { .. }
                 | Work::Experiment(_)
                 | Work::Process { .. } => None,
@@ -546,6 +556,7 @@ impl CommandRecord {
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::ReviewRun(_) => format!("review-{stamp}"),
             Work::FixRun(_) => format!("fix-{stamp}"),
+            Work::ReleaseRun(_) => format!("release-{stamp}"),
             Work::TriageRun { .. } => format!("triage-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
