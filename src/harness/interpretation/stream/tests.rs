@@ -888,6 +888,41 @@ mod claude {
         assert!(progress.outcome.as_ref().unwrap().killed_work().is_empty());
     }
 
+    /// The empty result Claude Code emits when it delivers a stopped task's
+    /// notification as it shuts down: it runs no model turn.
+    fn notification_result(cost: f64) -> Value {
+        json!({
+            "type": "result", "subtype": "success", "is_error": false, "result": "",
+            "num_turns": 0, "total_cost_usd": cost, "origin": { "kind": "task-notification" }
+        })
+    }
+
+    #[test]
+    fn a_review_stopped_at_the_wait_ceiling_stays_killed_past_its_notifications_empty_result() {
+        // #2231: the session ended its turn while its Spec review still ran;
+        // ten minutes later Claude Code stopped the review and delivered the
+        // stop as a zero-turn result, which must not hide the killed review.
+        let (progress, _) = lines(
+            Harness::Claude,
+            &[
+                json!({ "type": "system", "subtype": "init", "session_id": "s-1" }),
+                task_started("a1", "Spec review of issue-73"),
+                result(40, 2.74),
+                task_updated("a1", "killed"),
+                task_notification("a1", "stopped", "Spec review of issue-73"),
+                init("/work/widgets-issue-73"),
+                notification_result(2.74),
+            ],
+        );
+        let ended = progress.outcome.as_ref().unwrap();
+        assert_eq!(ended.killed_work(), ["Spec review of issue-73"]);
+        assert_eq!(
+            progress.report.as_ref().unwrap().summary.as_deref(),
+            Some("40 turns, $2.74"),
+            "an empty notification result is not the session's turn count"
+        );
+    }
+
     #[test]
     fn an_init_without_a_session_id_gives_none() {
         let (progress, _) = lines(Harness::Claude, &[init("/a")]);

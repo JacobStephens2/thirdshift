@@ -853,8 +853,9 @@ impl Route<'_> {
     fn publish(&self, outside: &mut impl Outside, checklist: Option<&str>) -> Result<Identified> {
         outside.stage(Stage::Push);
         outside.push()?;
-        self.write_built_with(outside);
         outside.stage(Stage::PullRequestReadiness);
+        outside.open_missing_pr()?;
+        self.write_built_with(outside);
         outside.mark_pr_ready(checklist)
     }
 
@@ -1080,6 +1081,10 @@ trait Outside {
     fn record_security_review(&mut self, entry: &str) -> Result<()>;
     /// Push the Issue branch.
     fn push(&mut self) -> Result<()>;
+    /// Open the pull request the implement session should have opened, when
+    /// the pushed Issue branch has commits ahead of the Base branch but no
+    /// pull request; fail, saying so, when it has neither.
+    fn open_missing_pr(&mut self) -> Result<()>;
     /// Write the annotation through the captured pull request module.
     fn write_built_with(&mut self, choice: &Choice) -> Result<()>;
     /// Validate and mark the captured pull request ready.
@@ -1205,6 +1210,16 @@ impl std::fmt::Display for UntrustedEdit {
 
 impl std::error::Error for UntrustedEdit {}
 
+/// The body of the pull request thirdshift opens for issue `number` when its
+/// implement session pushed commits but opened none.
+fn recovered_pr_body(number: u64) -> String {
+    format!(
+        "Closes #{number}\n\n\
+         thirdshift opened this pull request: the implement session pushed its \
+         commits but ended without opening one."
+    )
+}
+
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.
 struct InWorktree<'a> {
@@ -1277,6 +1292,24 @@ impl Outside for InWorktree<'_> {
         self.pull_request.ensure_actionable(false)?;
         self.worktree
             .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
+    }
+
+    fn open_missing_pr(&mut self) -> Result<()> {
+        if self.pull_request.actionable_head(false)?.is_some() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            self.worktree.ahead_merge_base(self.base)?.is_some(),
+            "the implement session made no commits and opened no pull request"
+        );
+        progress::step(format_args!(
+            "the implement session pushed {} without opening a pull request; \
+             opening it in the session's place",
+            self.worktree.branch()
+        ));
+        let title = GitHub::new().issue_title(self.issue)?;
+        self.pull_request
+            .open_if_absent(&title, &recovered_pr_body(self.issue.number))
     }
 
     fn write_built_with(&mut self, choice: &Choice) -> Result<()> {

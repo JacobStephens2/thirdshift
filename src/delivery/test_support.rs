@@ -103,6 +103,9 @@ impl Outside for Scripted {
         self.calls.push(Call::Push);
         self.check(Fails::Push)
     }
+    fn open_missing_pr(&mut self) -> Result<()> {
+        Ok(())
+    }
     fn write_built_with(&mut self, _: &Choice) -> Result<()> {
         self.calls.push(Call::Annotation);
         self.check(Fails::Annotation)

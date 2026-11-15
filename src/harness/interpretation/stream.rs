@@ -67,6 +67,14 @@ struct Grok {
     cost_known: bool,
 }
 
+/// Claude Code delivers a background task's notification as a result with
+/// no model turn, as when it stops the session's remaining background work
+/// at its wait ceiling. Such a result ends no turn: it neither replaces the
+/// last reply nor clears the work it reports killed.
+fn notification_only(event: &Value) -> bool {
+    event["origin"]["kind"] == "task-notification" && event["num_turns"].as_u64() == Some(0)
+}
+
 fn result_failed(event: &Value) -> bool {
     event["subtype"] != "success" || event["is_error"] == true
 }
@@ -361,7 +369,7 @@ impl Stream {
             }
             Some("result") => {
                 if matches!(self.dialect, Dialect::Claude(_))
-                    && !event["parent_tool_use_id"].is_null()
+                    && (!event["parent_tool_use_id"].is_null() || notification_only(event))
                 {
                     return Vec::new();
                 }

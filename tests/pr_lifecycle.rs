@@ -135,3 +135,52 @@ fn a_failed_repair_keeps_its_failure_when_the_pr_was_merged() {
     assert!(scenario.origin_log("issue-7").is_none());
     assert!(scenario.gh_calls_of("pr", "merge").is_empty());
 }
+
+/// #2231: an implement session that ended before opening its pull request,
+/// as when its review outlived it, still has its pushed work delivered.
+#[test]
+fn an_implement_session_that_pushed_commits_but_opened_no_pr_has_one_opened_and_merged() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        "echo feature > feature.txt\ngit add feature.txt\ngit commit -q -m 'Add feature'\n\
+         git push -q origin issue-7\n",
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result.stderr.contains(
+            "thirdshift: the implement session pushed issue-7 without opening a pull request; \
+             opening it in the session's place\n"
+        ),
+        "{}",
+        result.stderr
+    );
+    let pr = &scenario.gh_state()["prs"][0];
+    assert_eq!(pr["state"], "MERGED", "{pr}");
+    assert_eq!(pr["base"], "main", "{pr}");
+    let body = pr["body"].as_str().unwrap();
+    assert!(body.starts_with("Closes #7\n"), "{body}");
+    assert!(body.contains("Built with"), "{body}");
+}
+
+#[test]
+fn an_implement_session_that_made_no_commits_and_opened_no_pr_fails_saying_so() {
+    let scenario = Scenario::new();
+    scenario.agent_does("true\n");
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("the implement session made no commits and opened no pull request"),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("no PR found"), "{}", result.stderr);
+    assert!(scenario.gh_calls_of("pr", "create").is_empty());
+}
