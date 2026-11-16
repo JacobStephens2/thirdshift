@@ -584,6 +584,62 @@ fn failure_warning_wakes_open_inbox_and_recovers() {
 }
 
 #[test]
+fn quota_deadlines_use_local_minutes_and_seasonal_zone_names_only_in_html() {
+    let year = chrono::Datelike::year(&chrono::Utc::now()) + 1;
+    for (date, time) in [("01-15", "08:25 EST"), ("07-15", "09:25 EDT")] {
+        let reset = format!("{year}-{date}T13:25:06Z");
+        let local = format!("{year}-{date} {time}");
+        for (resource, description) in [("core", "REST requests"), ("graphql", "GraphQL points")] {
+            let scenario = Scenario::new();
+            let home = scenario.path("home");
+            configure(&home);
+            record(&home, 81, Some("ready for review"), 10);
+            pr_is(&scenario, "OPEN");
+            assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
+            age_answer(&home, 600);
+            let mut gh = scenario.gh_state();
+            gh["rate_limits"][resource] = json!({
+                "remaining": 493,
+                "reset": chrono::DateTime::parse_from_rfc3339(&reset).unwrap().timestamp(),
+            });
+            scenario.write_gh_state(&gh);
+            assert_eq!(scenario.run(&["pickup"]).code, Some(0));
+            let mut command = scenario.command(&["console", "--no-sign-in"]);
+            command.env("TZ", "America/New_York");
+            let console = Console::start_command(command);
+            let page = console.get("/?section=overview").text().unwrap();
+            assert!(
+                page.contains(&format!("493 {description} remaining")),
+                "{page}"
+            );
+            assert!(
+                page.contains(&format!("Inbox reads paused until {local}")),
+                "missing local Inbox deadline {local}"
+            );
+            assert!(
+                page.contains(&format!("GitHub Quota wait until {local}")),
+                "missing local Quota wait deadline {local}"
+            );
+            assert!(raw_instants(&page).is_empty(), "{:?}", raw_instants(&page));
+            let status = api::json(console.get("/api/v1/status"));
+            assert!(
+                status["github_quota_wait"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&reset),
+                "{status}"
+            );
+            chrono::DateTime::parse_from_rfc3339(
+                status["github_last_answered_at"].as_str().unwrap(),
+            )
+            .unwrap();
+            let text = scenario.run(&["status"]);
+            assert!(text.stdout.contains(&reset), "{}", text.stdout);
+        }
+    }
+}
+
+#[test]
 fn console_and_status_share_both_quota_reserves_and_resume_at_reset() {
     for (resource, description) in [("graphql", "GraphQL points"), ("core", "REST requests")] {
         let scenario = Scenario::new();

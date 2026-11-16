@@ -146,6 +146,68 @@ fn hostname(console: &Console) -> String {
 }
 
 #[test]
+fn inbox_plan_usage_deadlines_use_local_minutes_and_escape_window_names() {
+    let scenario = support::Scenario::new();
+    let home = scenario.path("home");
+    configure_with(&home, ROUTES);
+    let year = chrono::Datelike::year(&chrono::Utc::now()) + 1;
+    let winter = format!("{year}-01-15T13:25:06Z");
+    let summer = format!("{year}-07-15T13:25:06Z");
+    saved(
+        &home,
+        json!({
+            "grok": {"observed_at": rfc3339(0), "source": "session",
+                "cooldown": {"since": rfc3339(0), "until": winter,
+                    "window": "five_hour <limit> & reset", "backoff_minutes": 60}},
+            "agy": {"observed_at": rfc3339(0), "source": "session",
+                "windows": [{"name": "weekly", "used_percent": 90.0, "resets_at": summer}]}
+        }),
+    );
+    let mut command = scenario.command(&["console", "--no-sign-in"]);
+    command.env("TZ", "America/New_York");
+    let console = Console::start_command(command);
+    let page = console.get("/?section=overview").text().unwrap();
+    let banner = page
+        .split("<p class=\"plan-usage-exhausted\" role=\"status\">")
+        .nth(1)
+        .unwrap()
+        .split("</p>")
+        .next()
+        .unwrap();
+    assert_eq!(
+        banner.matches(&format!("{year}-01-15 08:25 EST")).count(),
+        2,
+        "{banner}"
+    );
+    assert!(
+        banner.contains(&format!("{year}-07-15 09:25 EDT")),
+        "{banner}"
+    );
+    assert!(
+        banner.contains("five_hour &#60;limit&#62; &#38; reset"),
+        "{banner}"
+    );
+    assert!(raw_instants(&page).is_empty(), "{:?}", raw_instants(&page));
+    let status = api::json(console.get("/api/v1/status"));
+    let raw_banner = status["plan_usage_banner"].as_str().unwrap();
+    assert!(
+        raw_banner.contains(&winter) && raw_banner.contains(&summer),
+        "{status}"
+    );
+    let usage = api::json(console.get("/api/v1/plan-usage?local=true"));
+    assert!(
+        usage["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|harness| {
+                harness["harness"] == "agy" && harness["windows"][0]["resets_at"] == summer
+            }),
+        "{usage}"
+    );
+}
+
+#[test]
 fn plan_usage_page_and_api_answer_as_the_cli_and_the_header_warns_of_limited_routes() {
     let home = tempfile::tempdir().unwrap();
     configure_with(home.path(), ROUTES);
