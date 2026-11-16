@@ -8,6 +8,7 @@ mod toolchains;
 
 use std::cell::RefCell;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -261,7 +262,7 @@ impl<'a> Execution<'a> {
             Err(error) => return Err(error),
         };
         // The unit name stays in the attempt for `journalctl --user -u` after.
-        fs::write(attempt.join("scope"), launched.unit())?;
+        publish_artifact(&attempt.join("scope"), launched.unit().as_bytes())?;
         trace.inherit(launched.command())?;
         let suspended_before = logs::suspended_seconds();
         let output = process::output_until(
@@ -315,10 +316,13 @@ impl<'a> Execution<'a> {
         } else {
             match output {
                 Ok(output) => {
-                    fs::write(attempt.join("stdout"), &output.stdout)?;
-                    fs::write(attempt.join("stderr"), &output.stderr)?;
+                    publish_artifact(&attempt.join("stdout"), &output.stdout)?;
+                    publish_artifact(&attempt.join("stderr"), &output.stderr)?;
                     if arm.runner.is_some() {
-                        fs::write(attempt.join("exit-status"), output.status.to_string())?;
+                        publish_artifact(
+                            &attempt.join("exit-status"),
+                            output.status.to_string().as_bytes(),
+                        )?;
                     }
                     // systemd-run reports its scope's signal death as an exit
                     // code, so a scoped SIGKILL arrives as 137, not as a signal.
@@ -698,6 +702,16 @@ fn void_memory_cap(total_ms: u128) -> Output {
     output.outcome = Outcome::Void;
     output.void_cause = Some(VoidCause::MemoryCap);
     output
+}
+
+/// Publish complete host-written bytes without opening the previous entry.
+/// The parent is host-owned and stays outside the Custom runner's writable binds.
+fn publish_artifact(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(path.parent().context("Trial artifact has no directory")?)?;
+    temporary.write_all(bytes)?;
+    temporary.persist(path)?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1681,9 +1681,65 @@ fn quiet_runner_sandbox(label: &str) -> Option<Fixture> {
     Some(fixture)
 }
 
-/// The Custom runner sandbox binds its attempt directory read-write. Files the
-/// host writes there after the runner ends must not follow links the runner
-/// planted to host files outside the sandbox.
+#[test]
+fn host_attempt_artifacts_are_published_by_replacement() {
+    let fixture = process::fixture();
+    runner(
+        &fixture,
+        &(String::from(
+            r#"
+attempt = output.parent
+for name in ['stdout', 'stderr', 'exit-status', 'uncommitted.txt']:
+    path = attempt / name
+    path.write_bytes(b'previous artifact\n')
+    os.link(path, attempt / ('previous-' + name))
+print('Trial stdout')
+print('Trial stderr', file=sys.stderr)
+"#,
+        ) + DELIVER),
+    );
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+    }
+    let trials = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}/trials",
+        view["id"].as_str().unwrap()
+    ));
+    let attempts: Vec<_> = fs::read_dir(trials)
+        .unwrap()
+        .flat_map(|trial| fs::read_dir(trial.unwrap().path()).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect();
+    assert_eq!(attempts.len(), 2, "{view}");
+    for attempt in attempts {
+        for name in ["stdout", "stderr", "exit-status", "uncommitted.txt"] {
+            assert_eq!(
+                fs::read(attempt.join(format!("previous-{name}"))).unwrap(),
+                b"previous artifact\n",
+                "publishing {name} modified the previous artifact"
+            );
+            assert!(fs::symlink_metadata(attempt.join(name)).unwrap().is_file());
+        }
+        assert_eq!(fs::read(attempt.join("stdout")).unwrap(), b"Trial stdout\n");
+        assert_eq!(fs::read(attempt.join("stderr")).unwrap(), b"Trial stderr\n");
+        assert_eq!(
+            fs::read(attempt.join("exit-status")).unwrap(),
+            b"exit status: 0"
+        );
+        assert!(
+            fs::read_to_string(attempt.join("uncommitted.txt"))
+                .unwrap()
+                .contains("feature.txt")
+        );
+    }
+}
+
+/// The Custom runner sandbox keeps host artifacts outside its writable binds.
+/// Host writes must also replace entries rather than follow planted links.
 #[test]
 fn host_attempt_writes_do_not_follow_links_planted_by_the_custom_runner() {
     let Some(fixture) = quiet_runner_sandbox("planted attempt links") else {

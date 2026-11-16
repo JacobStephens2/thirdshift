@@ -156,3 +156,67 @@ fn web_search_scan_skips_events_from_other_arm_builds() {
     .unwrap();
     assert!(web_search(attempt.path()).unwrap());
 }
+
+#[test]
+fn custom_runner_results_require_a_confined_bounded_regular_file() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::process::ExitStatusExt;
+
+    let process = std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    for case in [
+        "regular",
+        "at-limit",
+        "too-long",
+        "file-symlink",
+        "directory-symlink",
+        "directory",
+        "missing",
+    ] {
+        let root = attempt();
+        let directory = root.path().join("output");
+        let path = directory.join("result.json");
+        let mut bytes = br#"{"version":1,"outcome":"delivered"}"#.to_vec();
+        if matches!(case, "at-limit" | "too-long") {
+            let limit = usize::try_from(super::RESULT_LIMIT).unwrap();
+            bytes.resize(limit + usize::from(case == "too-long"), b' ');
+        }
+        fs::write(&path, bytes).unwrap();
+        match case {
+            "file-symlink" => {
+                fs::rename(&path, directory.join("original.json")).unwrap();
+                symlink("original.json", &path).unwrap();
+            }
+            "directory-symlink" => {
+                let moved = root.path().join("original-output");
+                fs::rename(&directory, &moved).unwrap();
+                symlink(moved, &directory).unwrap();
+            }
+            "directory" => {
+                fs::remove_file(&path).unwrap();
+                fs::create_dir(&path).unwrap();
+            }
+            "missing" => fs::remove_file(&path).unwrap(),
+            _ => {}
+        }
+        let (output, reported) = super::result(&process, root.path(), 1);
+        let accepted = matches!(case, "regular" | "at-limit");
+        assert_eq!(reported, accepted, "{case}: {:?}", output.cause);
+        assert!(
+            output.outcome
+                == if accepted {
+                    Outcome::Delivered
+                } else {
+                    Outcome::Failed
+                },
+            "{case}: {:?}",
+            output.cause
+        );
+        if case == "too-long" {
+            assert!(output.cause.as_deref().unwrap().contains("longer than"));
+        }
+    }
+}

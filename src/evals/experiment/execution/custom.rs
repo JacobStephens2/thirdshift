@@ -374,7 +374,7 @@ pub(super) fn inspect(
     if status.is_empty() {
         return Ok(None);
     }
-    fs::write(attempt.join("uncommitted.txt"), &status)?;
+    super::publish_artifact(&attempt.join("uncommitted.txt"), &status)?;
     Ok(Some(format!(
         "uncommitted working-tree files ignored by grading: {}",
         String::from_utf8_lossy(&status).trim()
