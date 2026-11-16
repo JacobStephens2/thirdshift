@@ -1635,12 +1635,13 @@ fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
     assert!(needs.contains("widgets#8"), "{needs}");
     assert!(!needs.contains("widgets#7"), "{needs}");
     assert!(section(&inbox, "done").contains("widgets#7"), "{inbox}");
+    let reset = super::support::local_minute("2096-10-02T07:06:40Z");
     assert!(
-        inbox.contains(
+        inbox.contains(&format!(
             "<p class=\"plan-usage-exhausted\" role=\"status\">Plan usage: every configured route \
              is unavailable, so scheduled Passes skip: claude in cooldown (five_hour) until \
-             2096-10-02T07:06:40Z; earliest reset 2096-10-02T07:06:40Z</p>"
-        ),
+             {reset}; earliest reset {reset}</p>"
+        )),
         "{inbox}"
     );
 }
