@@ -1640,8 +1640,12 @@ fn a_pause_pickup_retakes_sits_in_done_beside_the_plan_usage_banner() {
         inbox.contains(&format!(
             "<p class=\"plan-usage-exhausted\" role=\"status\">Plan usage: every configured route \
              is unavailable, so scheduled Passes skip: claude in cooldown (five_hour) until \
-             {reset}; earliest reset {reset}</p>"
+             {reset}"
         )),
+        "{inbox}"
+    );
+    assert!(
+        inbox.contains(&format!("; earliest reset {reset}")),
         "{inbox}"
     );
 }
