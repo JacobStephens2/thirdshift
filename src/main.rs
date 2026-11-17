@@ -130,6 +130,8 @@ mod skill;
 #[cfg(target_os = "linux")]
 mod skills;
 #[cfg(target_os = "linux")]
+mod skip_authors;
+#[cfg(target_os = "linux")]
 mod spec_run;
 #[cfg(target_os = "linux")]
 mod terminal;
@@ -183,7 +185,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
        thirdshift architect base <branch> [<focus>]   Use <branch> as the Base branch
        thirdshift pickup [lowest-first|highest-first] Take the Ready issue at that end of the issue numbers (default lowest-first)
-       thirdshift pickup base <branch>                Use <branch> as the Base branch
+       thirdshift pickup base <branch> [skip-author <login>]  Use <branch>; repeat skip-author to exclude authors (also on Triage Passes)
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login> [merge | no-merge]  Review and fix one PR; --recommend-only posts findings
@@ -671,6 +673,11 @@ fn triage(args: args::TriageArgs) -> ExitCode {
         Ok(input) => input,
         Err(error) => return failure(&error),
     };
+    if input.is_some() && !args.skip_authors.0.is_empty() {
+        return argument_error(format_args!(
+            "skip-author applies only to a Triage Pass, not an issue or Report"
+        ));
+    }
     let flags = asks::Flags {
         email: args.email,
         harness: args.harness,
@@ -703,7 +710,14 @@ fn triage(args: args::TriageArgs) -> ExitCode {
             &mut harness,
         )),
         None => {
-            match triage::run_pass(args.base.as_deref(), options, &flags, &config, &mut harness) {
+            match triage::run_pass(
+                args.base.as_deref(),
+                options,
+                &flags,
+                &config,
+                &mut harness,
+                &args.skip_authors,
+            ) {
                 Ok(triage::Outcome::Ran(ended)) => Ending::Triage(Ok(ended)),
                 Ok(triage::Outcome::Skipped(skip)) => Ending::Skipped(skip),
                 Err(failed) => Ending::Triage(Err(failed)),
@@ -744,6 +758,7 @@ fn pickup(args: PassArgs) -> ExitCode {
         &config,
         &mut harness,
         order,
+        &args.skip_authors,
     );
     started.built_with(&harness);
     match took {

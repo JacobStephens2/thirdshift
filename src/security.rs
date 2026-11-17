@@ -193,6 +193,7 @@ pub fn run(
     };
     run_through(
         &mut LaunchAndGitHub {
+            skip_authors: &Default::default(),
             launch: directory.git(),
             base: &base,
             repo: &repo,

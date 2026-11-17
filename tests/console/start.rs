@@ -1,6 +1,46 @@
 use super::*;
 use std::time::Instant;
 
+#[test]
+fn cron_run_now_preserves_pickup_skip_authors() {
+    let scenario = fixture();
+    for issue in [7, 8] {
+        scenario.issue_is(issue, "OPEN");
+        scenario.issue_labelled(issue, &["ready-for-agent"]);
+    }
+    let mut state = scenario.gh_state();
+    state["issue_authors"] = json!({"7": "Alice", "8": "bob"});
+    scenario.write_gh_state(&state);
+    scenario.agent_does("exit 45\n");
+    fs::write(
+        scenario.path("home/crontab"),
+        format!(
+            "@daily cd '{}' && thirdshift pickup skip-author alice --skip-author bob\n",
+            scenario.launch_dir().display()
+        ),
+    )
+    .unwrap();
+    let token = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = server(&scenario);
+    let options = api::json(console.get("/api/v1/start-options"));
+    assert_eq!(options["passes"].as_array().unwrap().len(), 1);
+    let request: Value =
+        serde_json::from_str(options["passes"][0]["request"].as_str().unwrap()).unwrap();
+
+    let response = api::json(post(&console, &token, &request));
+
+    // Clean up a wrongly dispatched detached Command before reporting failure.
+    if let Some(name) = response["name"].as_str() {
+        let _ = scenario.run(&["stop", name, "--json"]);
+    }
+    assert_eq!(response["outcome"], "skipped", "{response}");
+    assert!(scenario.claude_calls().is_empty());
+    for issue in [7, 8] {
+        assert_eq!(scenario.issue_labels(issue), ["ready-for-agent"]);
+        assert!(scenario.origin_log(&format!("issue-{issue}")).is_none());
+    }
+}
+
 const RECORDS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
@@ -1585,7 +1625,10 @@ fn api_options_reach_each_cli_parser_as_literal_words() {
             "pickup" => {
                 body["base"] = json!("main");
                 body["order"] = json!("highest-first");
+                body["skip_authors"] = json!(["Alice", "bob"]);
                 expected.extend(["--base", "main", "--highest-first"].map(String::from));
+                expected
+                    .extend(["--skip-author", "Alice", "--skip-author", "bob"].map(String::from));
             }
             "secure" => {
                 body["base"] = json!("main");

@@ -36,6 +36,7 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
     };
     let mut choice = run.choice.clone();
     let mut outside = LaunchAndGitHub {
+        skip_authors: &Default::default(),
         launch: &launch,
         base: &base,
         repo: &repo,
@@ -138,6 +139,7 @@ pub(super) fn close(run: &StepRun<'_>) -> Result<String> {
     let base = launch::checked_out_base()?;
     let mut choice = run.choice.clone();
     let mut outside = LaunchAndGitHub {
+        skip_authors: &Default::default(),
         launch: &launch,
         base: &base,
         repo: &repo,

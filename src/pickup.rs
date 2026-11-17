@@ -166,6 +166,7 @@ pub fn run(
     config: &UserConfig,
     harness: &mut Choice,
     order: PickupOrder,
+    skip_authors: &crate::skip_authors::SkipAuthors,
 ) -> Result<Outcome> {
     let Launch {
         directory,
@@ -184,6 +185,7 @@ pub fn run(
         crate::progress::warn(&error, format_args!("could not file CI-red Ticket"));
     }
     let mut outside = LaunchAndGitHub {
+        skip_authors,
         launch: directory.git(),
         base: &base,
         repo: &repo,

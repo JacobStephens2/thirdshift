@@ -15,6 +15,7 @@
 //!  "auth_token"?: "<token returned by gh auth token>",
 //!  "comments"?: {"<number>": ["<body>" | {"body", "by", "association"}, ...]},
 //!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
+//!  "issue_authors"?: {"<number>": "<login>"}, defaults to acme,
 //!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
 //!  "edits"?: {"<number>": [{"kind": "body" | "title", "by": "<login>" | null, "at"}, ...]},
 //!  "collaborators"?: ["<login>", ...],
@@ -774,6 +775,17 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
         None => string("2020-01-01T00:00:00Z"),
     };
     object([
+        (
+            "user",
+            object([(
+                "login",
+                state
+                    .get("issue_authors")
+                    .and_then(|authors| authors.get(n))
+                    .cloned()
+                    .unwrap_or_else(|| string("acme")),
+            )]),
+        ),
         (
             "author_association",
             state
