@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -388,22 +387,12 @@ pub(super) fn refresh(
     }
     // Serialize readers across status and Console processes. A busy reader
     // already owns the refresh; status can show the kept answer immediately.
-    // Another local user can take an exclusive flock on a lock they can open,
-    // even with a read-only descriptor, and stall every Inbox refresh. Creation
-    // mode is masked by umask, so an existing lock is tightened explicitly.
     std::fs::create_dir_all(&config.logs_dir)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(config.logs_dir.join(".github-inbox-lock"))?;
-    lock.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => return Ok(kept),
-        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
-    }
+    let Some(_lock) =
+        crate::github::quota::try_lock_exclusive(&config.logs_dir.join(".github-inbox-lock"))?
+    else {
+        return Ok(kept);
+    };
     kept = load(&config.logs_dir);
     // A pre-lock evaluation is advisory only. Plan from the answer reloaded
     // under the lock; freezes and subjects share these retained row decisions.
@@ -611,6 +600,7 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::SystemTime;
 
     use crate::harness::{Choice, ChosenBy, Harness};
@@ -681,6 +671,28 @@ mod tests {
 
         refresh(&snapshot, &config, FRESH_FOR).unwrap();
 
+        let mode = fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "unexpected .github-inbox-lock mode {mode:o}");
+    }
+
+    #[test]
+    fn refresh_returns_kept_and_tightens_lock_when_already_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path().join("logs");
+        let (snapshot, config) = refresh_fixture(&logs_dir);
+        let lock_path = logs_dir.join(".github-inbox-lock");
+        let holder = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+        holder.lock().unwrap();
+
+        let kept = refresh(&snapshot, &config, Duration::ZERO).unwrap();
+
+        assert!(kept.failure.is_none());
         let mode = fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "unexpected .github-inbox-lock mode {mode:o}");
     }

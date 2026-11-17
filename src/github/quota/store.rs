@@ -146,9 +146,9 @@ impl Store {
 }
 
 /// Another local user can take an exclusive flock on a lock they can open,
-/// even with a read-only descriptor, and stall every Quota update. Creation
+/// even with a read-only descriptor, and stall updates or refreshes. Creation
 /// mode is masked by umask, so an existing lock is tightened explicitly.
-pub(crate) fn lock_exclusive(path: &Path) -> Result<File> {
+fn open_owner_only_lock(path: &Path) -> std::io::Result<File> {
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -156,6 +156,20 @@ pub(crate) fn lock_exclusive(path: &Path) -> Result<File> {
         .mode(0o600)
         .open(path)?;
     lock.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(lock)
+}
+
+pub(crate) fn lock_exclusive(path: &Path) -> Result<File> {
+    let lock = open_owner_only_lock(path)?;
     lock.lock()?;
     Ok(lock)
+}
+
+pub(crate) fn try_lock_exclusive(path: &Path) -> Result<Option<File>> {
+    let lock = open_owner_only_lock(path)?;
+    match lock.try_lock() {
+        Ok(()) => Ok(Some(lock)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
 }
