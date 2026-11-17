@@ -256,14 +256,16 @@ fn pass_choices<'a>(
             continue;
         };
         let (mut request, flags, security) = match parsed {
-            args::Command::Pickup(pass) => (
-                json!({"command":"pickup", "base":pass.base, "skip_authors":pass.skip_authors.0, "order":pass.order.map(|o| match o {
+            args::Command::Pickup(pass) => {
+                let mut request = json!({"command":"pickup", "base":pass.base, "order":pass.order.map(|o| match o {
                     crate::ready::PickupOrder::LowestFirst => "lowest-first",
                     crate::ready::PickupOrder::HighestFirst => "highest-first",
-                })}),
-                pass.flags.clone(),
-                false,
-            ),
+                })});
+                if !pass.skip_authors.0.is_empty() {
+                    request["skip_authors"] = json!(pass.skip_authors.0);
+                }
+                (request, pass.flags.clone(), false)
+            }
             args::Command::Secure(pass) => (
                 json!({"command":"secure", "base":pass.base}),
                 pass.flags.clone(),
