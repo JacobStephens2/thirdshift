@@ -15,7 +15,7 @@ pub(crate) mod wait;
 
 pub(crate) use store::QuotaWait;
 use store::Store;
-pub(crate) use store::lock_exclusive;
+pub(crate) use store::{lock_exclusive, try_lock_exclusive};
 
 /// Passes and Commands leave this much of each resource for the Day shift.
 const RESERVE: u64 = 500;

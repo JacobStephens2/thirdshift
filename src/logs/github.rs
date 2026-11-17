@@ -388,12 +388,11 @@ pub(super) fn refresh(
     // Serialize readers across status and Console processes. A busy reader
     // already owns the refresh; status can show the kept answer immediately.
     std::fs::create_dir_all(&config.logs_dir)?;
-    let lock = std::fs::File::create(config.logs_dir.join(".github-inbox-lock"))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => return Ok(kept),
-        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
-    }
+    let Some(_lock) =
+        crate::github::quota::try_lock_exclusive(&config.logs_dir.join(".github-inbox-lock"))?
+    else {
+        return Ok(kept);
+    };
     kept = load(&config.logs_dir);
     // A pre-lock evaluation is advisory only. Plan from the answer reloaded
     // under the lock; freezes and subjects share these retained row decisions.
@@ -595,4 +594,106 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         std::fs::write(path.with_extension("changed"), [])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::SystemTime;
+
+    use crate::harness::{Choice, ChosenBy, Harness};
+    use crate::issue::IssueUrl;
+    use crate::logs::Work;
+    use crate::logs::command_record::{CommandRecord, CommandTree};
+
+    fn refresh_fixture(logs_dir: &Path) -> (Snapshot, UserConfig) {
+        let record_path = logs_dir.join("acme/widgets/commands/issue/7.command.json");
+        fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let started_at = DateTime::parse_from_rfc3339("2026-10-19T11:00:00-04:00").unwrap();
+        let mut command = CommandRecord::new(
+            Work::Run(&issue),
+            "stamp",
+            &Choice {
+                harness: Harness::Claude,
+                model: None,
+                effort: None,
+                chosen_by: ChosenBy::Default,
+            },
+            started_at,
+        );
+        command.ended_at = Some("2026-10-19T11:30:00-04:00".into());
+        command.outcome = Some("failed".into());
+        let tree = CommandTree {
+            command,
+            dispatched: Vec::new(),
+        };
+        fs::write(&record_path, serde_json::to_vec(&tree).unwrap()).unwrap();
+        fs::write(logs_dir.join("github-inbox.json"), br#"{"version":2}"#).unwrap();
+        let refreshed = fs::File::create(logs_dir.join("github-inbox.refreshed")).unwrap();
+        refreshed
+            .set_modified(SystemTime::now() - Duration::from_secs(1))
+            .unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-10-19T12:00:00-04:00")
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        let snapshot = Snapshot::load(logs_dir, now).unwrap();
+        let root = logs_dir.parent().unwrap();
+        let mut config = UserConfig::parse("", &root.join("config.toml"), root).unwrap();
+        config.logs_dir = logs_dir.to_path_buf();
+        (snapshot, config)
+    }
+
+    #[test]
+    fn refresh_creates_inbox_lock_with_owner_only_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path().join("logs");
+        let (snapshot, config) = refresh_fixture(&logs_dir);
+        let lock_path = logs_dir.join(".github-inbox-lock");
+        assert!(!lock_path.exists());
+
+        refresh(&snapshot, &config, FRESH_FOR).unwrap();
+
+        let mode = fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "unexpected .github-inbox-lock mode {mode:o}");
+    }
+
+    #[test]
+    fn refresh_tightens_existing_inbox_lock_to_owner_only_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path().join("logs");
+        let (snapshot, config) = refresh_fixture(&logs_dir);
+        let lock_path = logs_dir.join(".github-inbox-lock");
+        fs::write(&lock_path, []).unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        refresh(&snapshot, &config, FRESH_FOR).unwrap();
+
+        let mode = fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "unexpected .github-inbox-lock mode {mode:o}");
+    }
+
+    #[test]
+    fn refresh_returns_kept_and_tightens_lock_when_already_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path().join("logs");
+        let (snapshot, config) = refresh_fixture(&logs_dir);
+        let lock_path = logs_dir.join(".github-inbox-lock");
+        let holder = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+        holder.lock().unwrap();
+
+        let kept = refresh(&snapshot, &config, Duration::ZERO).unwrap();
+
+        assert!(kept.failure.is_none());
+        let mode = fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "unexpected .github-inbox-lock mode {mode:o}");
+    }
 }
