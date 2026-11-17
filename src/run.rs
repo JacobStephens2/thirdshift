@@ -254,7 +254,9 @@ fn run(
     let mut outside = LaunchAndGitHub {
         skip_authors: match started_by {
             StartedBy::Pickup { skip_authors, .. } => skip_authors,
-            _ => &Default::default(),
+            StartedBy::Command | StartedBy::Dispatch { .. } | StartedBy::Child(_) => {
+                &Default::default()
+            }
         },
         directory: &directory,
         issue,
