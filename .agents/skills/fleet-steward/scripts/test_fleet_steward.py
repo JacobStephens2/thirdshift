@@ -66,6 +66,26 @@ class FleetStewardSpecRegressions(unittest.TestCase):
         self.assertEqual(self.state.read_text(), self.original_checkpoint,
                          "The next tick will skip unread events on the unreachable host")
 
+    def test_unreadable_log_directories_keep_checkpoint(self):
+        self.config.write_text("OWNERS=(); HOSTS=(local); CONSOLE_URL=''; IGNORE=()\n")
+        logs = self.home / ".thirdshift/logs"
+        activity = logs / "acme/widgets/activity.log"
+        activity.parent.mkdir(parents=True)
+        activity.write_text("2001-01-01 00:00:01 Ticket run #1 failed: unread event\n")
+        for directory in (logs, activity.parent.parent, activity.parent):
+            with self.subTest(directory=directory.relative_to(logs)):
+                self.state.write_text(self.original_checkpoint)
+                directory.chmod(0)
+                try:
+                    if os.access(directory, os.R_OK | os.X_OK):
+                        self.skipTest("Directory permissions are not enforced for this account")
+                    result = self.run_check()
+                finally:
+                    directory.chmod(0o700)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("running: unknown (host read failed)", result.stdout)
+                self.assertEqual(self.state.read_text(), self.original_checkpoint)
+
     def test_every_failed_issue_is_listed(self):
         self.config.write_text("OWNERS=(acme); HOSTS=(); CONSOLE_URL=''; IGNORE=()\n")
         self.fake("gh", """import sys
