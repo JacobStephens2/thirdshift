@@ -95,6 +95,7 @@ pub(super) struct Request {
     focus: Option<String>,
     plan_only: Option<bool>,
     order: Option<Order>,
+    skip_authors: Option<Vec<String>>,
     pull_request: Option<String>,
     author: Option<String>,
     recommend_only: Option<bool>,
@@ -178,7 +179,7 @@ impl Kind {
         let own: &[&str] = match self {
             Self::Ticket => &["issue"],
             Self::Architect => &["base", "focus", "plan_only"],
-            Self::Pickup => &["base", "order"],
+            Self::Pickup => &["base", "order", "skip_authors"],
             Self::Secure => &["base"],
             Self::Review => &["pull_request", "author", "recommend_only"],
             Self::Fix => &["pull_request", "base", "author"],
@@ -316,6 +317,11 @@ impl Request {
                 .into(),
             );
         }
+        if let Some(authors) = &self.skip_authors {
+            for author in authors {
+                args.extend(["--skip-author".into(), author.clone()]);
+            }
+        }
         for (enabled, word) in [
             (self.plan_only, "--plan-only"),
             (self.recommend_only, "--recommend-only"),
@@ -373,6 +379,7 @@ impl Request {
             (self.focus.is_some(), "focus"),
             (self.plan_only.is_some(), "plan_only"),
             (self.order.is_some(), "order"),
+            (self.skip_authors.is_some(), "skip_authors"),
             (self.recommend_only.is_some(), "recommend_only"),
             (self.report.is_some(), "report"),
             (self.read_machine.is_some(), "read_machine"),

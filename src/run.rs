@@ -135,6 +135,11 @@ pub enum StartedBy<'a> {
     /// A Pass, dispatching an issue: the Base branch is that Pass's, whatever the
     /// Launch directory has checked out.
     Dispatch { base: &'a str },
+    /// A Pickup Pass carries its author exclusions into a dispatched Spec run.
+    Pickup {
+        base: &'a str,
+        skip_authors: &'a crate::skip_authors::SkipAuthors,
+    },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
     /// a Base fix: the Base branch is the one the child Run was given.
     Child(&'a Kind),
@@ -145,7 +150,7 @@ impl<'a> StartedBy<'a> {
     fn child(self) -> Option<&'a Kind> {
         match self {
             StartedBy::Child(kind) => Some(kind),
-            StartedBy::Command | StartedBy::Dispatch { .. } => None,
+            StartedBy::Command | StartedBy::Dispatch { .. } | StartedBy::Pickup { .. } => None,
         }
     }
 
@@ -160,7 +165,7 @@ impl<'a> StartedBy<'a> {
     fn given_base(self) -> Option<&'a str> {
         match self {
             StartedBy::Command => None,
-            StartedBy::Dispatch { base } => Some(base),
+            StartedBy::Dispatch { base } | StartedBy::Pickup { base, .. } => Some(base),
             StartedBy::Child(kind) => Some(kind.base()),
         }
     }
@@ -247,6 +252,12 @@ fn run(
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);
     let mut outside = LaunchAndGitHub {
+        skip_authors: match started_by {
+            StartedBy::Pickup { skip_authors, .. } => skip_authors,
+            StartedBy::Command | StartedBy::Dispatch { .. } | StartedBy::Child(_) => {
+                &Default::default()
+            }
+        },
         directory: &directory,
         issue,
         goal: asks.goal,
@@ -493,6 +504,7 @@ trait Outside {
 /// Session `logs`, its sessions on the Harness in `child_asks`, which it
 /// hands on to every child Run.
 struct LaunchAndGitHub<'a> {
+    skip_authors: &'a crate::skip_authors::SkipAuthors,
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
@@ -632,7 +644,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         base: &str,
         parallel: NonZeroUsize,
     ) -> Result<Reached, FailedRun> {
-        spec_run::run(tickets, worktree, self.delivery(base), parallel)
+        let skip_authors = self.skip_authors;
+        spec_run::run(
+            tickets,
+            worktree,
+            self.delivery(base),
+            parallel,
+            skip_authors,
+        )
     }
 
     fn deliver(

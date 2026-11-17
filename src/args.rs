@@ -299,6 +299,8 @@ pub struct ArchitectArgs {
 /// A Pickup run or Security run's shared Pass arguments.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PassArgs {
+    /// Authors excluded by this Pickup Pass only.
+    pub skip_authors: crate::skip_authors::SkipAuthors,
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
@@ -1591,7 +1593,9 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
                 }
                 plan_only = true;
             }
-            _ if arg.starts_with('-') => bail!("unexpected argument after architect: {arg}"),
+            _ if arg.starts_with('-') || arg == "skip-author" => {
+                bail!("unexpected argument after architect: {arg}")
+            }
             _ if focus.is_some() => bail!("unexpected argument after the focus: {arg}"),
             _ if arg.trim().is_empty() => bail!("the focus is empty"),
             _ => focus = Some(arg.clone()),
@@ -1675,6 +1679,7 @@ fn parse_release(args: &[String]) -> Result<ReleaseArgs> {
 
 /// A Report or issue to investigate, or an unattended Triage Pass.
 pub struct TriageArgs {
+    pub skip_authors: crate::skip_authors::SkipAuthors,
     pub issue: Option<IssueInput>,
     pub base: Option<String>,
     pub file: Option<String>,
@@ -1687,6 +1692,7 @@ pub struct TriageArgs {
 
 fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     let mut parsed = TriageArgs {
+        skip_authors: Default::default(),
         issue: None,
         base: None,
         file: None,
@@ -1706,6 +1712,7 @@ fn parse_triage(args: &[String]) -> Result<TriageArgs> {
             }
             "--file" => ask_word(&mut parsed.file, arg, rest.next(), "a Report path")?,
             "base" => ask_word(&mut parsed.base, arg, rest.next(), "a Base branch")?,
+            _ if take_skip_author(&mut parsed.skip_authors, arg, &mut rest)? => {}
             _ if take_email_flag(&mut parsed.email, arg, &mut rest)? => {}
             _ if take_harness_flag(&mut parsed.harness, arg, &mut rest)? => {}
             _ if parsed.issue.is_none() && !arg.starts_with('-') => {
@@ -1717,6 +1724,10 @@ fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     ensure!(
         parsed.issue.is_none() || parsed.file.is_none(),
         "cannot combine a triage Issue with --file <path>"
+    );
+    ensure!(
+        parsed.skip_authors.0.is_empty() || (parsed.issue.is_none() && parsed.file.is_none()),
+        "skip-author applies only to a Triage Pass, not an issue or Report"
     );
     Ok(parsed)
 }
@@ -1730,8 +1741,12 @@ fn parse_pass(args: &[String], command: &str) -> Result<PassArgs> {
     let mut base = None;
     let mut flags = Flags::default();
     let mut order = None;
+    let mut skip_authors = crate::skip_authors::SkipAuthors::default();
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
+        if command == "pickup" && take_skip_author(&mut skip_authors, arg, &mut args)? {
+            continue;
+        }
         if command == "pickup" && take_pickup_order(&mut order, arg)? {
             continue;
         }
@@ -1739,7 +1754,28 @@ fn parse_pass(args: &[String], command: &str) -> Result<PassArgs> {
             bail!("unexpected argument after {command}: {arg}");
         }
     }
-    Ok(PassArgs { base, flags, order })
+    Ok(PassArgs {
+        base,
+        flags,
+        order,
+        skip_authors,
+    })
+}
+
+fn take_skip_author<'a>(
+    skipped: &mut crate::skip_authors::SkipAuthors,
+    arg: &str,
+    rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+) -> Result<bool> {
+    if !matches!(arg, "skip-author" | "--skip-author") {
+        return Ok(false);
+    }
+    let login = rest
+        .next()
+        .filter(|login| !login.is_empty() && !login.starts_with('-'))
+        .with_context(|| format!("{arg} requires a login"))?;
+    skipped.0.push(login.clone());
+    Ok(true)
 }
 
 /// Record in `order` what the Pickup flag `arg` asks for, if it is one of
@@ -2732,12 +2768,14 @@ mod tests {
     #[test]
     fn pickup_takes_each_of_its_flags_with_or_without_dashes_in_any_order() {
         let none = PassArgs {
+            skip_authors: Default::default(),
             base: None,
             flags: Flags::default(),
             order: None,
         };
         assert_eq!(pickup_args(&["pickup"]), none);
         let all = PassArgs {
+            skip_authors: Default::default(),
             base: Some("develop".to_string()),
             flags: Flags {
                 security_fix: None,
@@ -2796,6 +2834,7 @@ mod tests {
             assert_eq!(pickup_args(&args), all, "{args:?}");
         }
         let cautious = PassArgs {
+            skip_authors: Default::default(),
             base: None,
             flags: Flags {
                 security_fix: None,

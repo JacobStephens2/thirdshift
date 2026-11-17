@@ -192,6 +192,7 @@ pub trait Outside {
 /// the logs, the pass's Harness choice `harness`, and the command's `flags`
 /// and the User config `config`, which ask the run it dispatches.
 pub struct LaunchAndGitHub<'a> {
+    pub skip_authors: &'a crate::skip_authors::SkipAuthors,
     pub launch: &'a Git,
     pub base: &'a BaseBranch,
     pub repo: &'a Repo,
@@ -234,7 +235,24 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn ready_issue(&mut self, order: PickupOrder, past: Option<u64>) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch, self.repo, self.config.pickup_wait, order, past)
+        let mut past = past;
+        while let Some(ready) =
+            ready::first(self.launch, self.repo, self.config.pickup_wait, order, past)?
+        {
+            if let Some(reason) = self
+                .skip_authors
+                .reason(&GitHub::new(), &ready.listed.issue)?
+            {
+                progress::step(format!(
+                    "#{} passed over: {reason}",
+                    ready.listed.issue.number
+                ));
+                past = Some(ready.listed.issue.number);
+            } else {
+                return Ok(Some(ready));
+            }
+        }
+        Ok(None)
     }
 
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {
@@ -353,6 +371,7 @@ impl Outside for LaunchAndGitHub<'_> {
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
+        let from_pickup = matches!(dispatch, Dispatch::ReadyIssue { .. });
         let security_fix_findings = match &dispatch {
             Dispatch::SecurityFix { finding, .. } => std::slice::from_ref(*finding),
             Dispatch::ArchitectPlan { .. } | Dispatch::ReadyIssue { .. } => &[],
@@ -395,7 +414,15 @@ impl Outside for LaunchAndGitHub<'_> {
             self.harness,
             security_fix_findings,
         );
-        let ended = run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base });
+        let started_by = if from_pickup {
+            StartedBy::Pickup {
+                base,
+                skip_authors: self.skip_authors,
+            }
+        } else {
+            StartedBy::Dispatch { base }
+        };
+        let ended = run::run_to_end(issue, &mut asks, started_by);
         logs::dispatch_ended(&ended);
         ended
     }

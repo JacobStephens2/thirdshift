@@ -322,6 +322,7 @@ pub fn run(
         Err(error) => return failed(error.into()),
     };
     let mut outside = LaunchAndGitHub {
+        skip_authors: &Default::default(),
         launch: directory.git(),
         base: &base,
         repo: &repo,

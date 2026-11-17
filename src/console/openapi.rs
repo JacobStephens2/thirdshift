@@ -639,6 +639,7 @@ fn start_schema() -> Value {
         "with_experiment": boolean,
         "base": text, "focus": text, "report": {"type":"string","minLength":1},
         "order": {"enum":["lowest-first","highest-first"]},
+        "skip_authors": {"type":"array","items":{"type":"string","minLength":1}},
         "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
         "allow_ready_for_agent": boolean, "merge": boolean, "base_fix": boolean,
         "security_review": boolean, "security_fix": boolean, "security_close": boolean,

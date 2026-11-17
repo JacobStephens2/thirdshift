@@ -88,6 +88,7 @@ pub fn run(
     worktree: Worktree,
     delivery: Delivery,
     parallel: NonZeroUsize,
+    skip_authors: &crate::skip_authors::SkipAuthors,
 ) -> Result<Reached, FailedRun> {
     let sequence = crate::processes::spec::sequence()?;
     let (spec, base) = (delivery.issue, delivery.base);
@@ -95,7 +96,13 @@ pub fn run(
     let mut spec_pr = PullRequest::new(spec, &branch, base, GitHub::new());
     spec_pr.resume_spec()?;
     let mut held = Some(worktree);
-    let mut outside = ChildRunsAndGitHub::new(&mut held, delivery, &mut spec_pr, &sequence.process);
+    let mut outside = ChildRunsAndGitHub::new(
+        &mut held,
+        delivery,
+        &mut spec_pr,
+        &sequence.process,
+        skip_authors,
+    );
     crate::processes::spec::run_through(
         &mut outside,
         spec,
@@ -121,6 +128,7 @@ pub(crate) fn land(
     let tickets = GitHub::new().tickets(spec)?;
     spec_pr.resume_spec()?;
     let mut outside = ChildRunsAndGitHub {
+        skip_authors: &Default::default(),
         spec,
         children: Runs::default(),
         active: std::collections::BTreeMap::new(),
@@ -251,8 +259,8 @@ pub(crate) trait Outside {
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
     fn step(&mut self, line: String);
-    /// The first Trusted-account check for Tickets `ticket` fails, if any.
-    fn ticket_trust(&mut self, ticket: &IssueUrl) -> Result<Option<trust::UntrustedIssue>>;
+    /// Why `ticket` fails the trust rule or this Pass's author exclusions.
+    fn ticket_refusal(&mut self, ticket: &IssueUrl) -> Result<Option<String>>;
 }
 
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
@@ -262,6 +270,7 @@ pub(crate) trait Outside {
 /// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
+    skip_authors: &'a crate::skip_authors::SkipAuthors,
     spec: &'a IssueUrl,
     /// Fields drop in declaration order: stop and drain child salvage before
     /// Worktree cleanup, including when the Spec run owner unwinds.
@@ -286,8 +295,10 @@ impl<'a> ChildRunsAndGitHub<'a> {
         delivery: Delivery<'a>,
         spec_pr: &'a mut PullRequest,
         process: &'a str,
+        skip_authors: &'a crate::skip_authors::SkipAuthors,
     ) -> Self {
         Self {
+            skip_authors,
             spec: delivery.issue,
             children: Runs::default(),
             active: std::collections::BTreeMap::new(),
@@ -324,7 +335,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
             spec_branch: self.worktree().branch().to_string(),
             spec_pr: self.spec_pr.captured_spec_pr(),
         };
-        if let Some(check) = self.ticket_trust(ticket)? {
+        if let Some(check) = self.ticket_refusal(ticket)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
         self.children.start(
@@ -403,8 +414,12 @@ impl Outside for ChildRunsAndGitHub<'_> {
         progress::step(line);
     }
 
-    fn ticket_trust(&mut self, ticket: &IssueUrl) -> Result<Option<trust::UntrustedIssue>> {
-        trust::ticket_trust(&GitHub::new(), ticket, self.spec)
+    fn ticket_refusal(&mut self, ticket: &IssueUrl) -> Result<Option<String>> {
+        let github = GitHub::new();
+        if let Some(reason) = trust::ticket_trust(&github, ticket, self.spec)? {
+            return Ok(Some(reason.to_string()));
+        }
+        self.skip_authors.reason(&github, ticket)
     }
 }
 
@@ -587,7 +602,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
 fn untrusted_ticket(outside: &mut impl Outside, board: &TicketBoard) -> Option<String> {
     board
         .open_here()
-        .find_map(|ticket| match outside.ticket_trust(ticket) {
+        .find_map(|ticket| match outside.ticket_refusal(ticket) {
             Ok(None) => None,
             Ok(Some(check)) => {
                 let reason = format!("Ticket #{}: {check}", ticket.number);
@@ -1004,7 +1019,7 @@ mod tests {
             }
         }
 
-        fn ticket_trust(&mut self, _: &IssueUrl) -> Result<Option<trust::UntrustedIssue>> {
+        fn ticket_refusal(&mut self, _: &IssueUrl) -> Result<Option<String>> {
             Ok(None)
         }
 
