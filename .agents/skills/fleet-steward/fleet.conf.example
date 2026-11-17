@@ -1,0 +1,23 @@
+# Fleet config for the fleet-steward steward, sourced by scripts/fleet-check.sh.
+# Copy to ~/.thirdshift/fleet/fleet.conf
+# (or point $THIRDSHIFT_FLEET_CONFIG at it) and fill it in.
+
+# GitHub owners whose open agent-failed issues the steward reads.
+OWNERS=(your-user your-org)
+
+# Hosts that run thirdshift, each one of:
+#   local              this machine
+#   lima:<instance>    a Lima VM, reached with `limactl shell`
+#   user@host          an ssh destination (key auth; BatchMode is on)
+HOSTS=(local user@build-server)
+
+# The Console whose Needs you rows the steward reads; leave empty to skip.
+CONSOLE_URL=http://localhost:8711
+
+# Extended regexes for lines this fleet already knows about, on top of the built-in noise
+# filters. Each is matched against Activity log lines, running Commands and agent-failed issues.
+IGNORE=(
+  # 'Failure limit'                         # a repo you already know is stuck
+  # '^your-org/sandbox'                     # a repo whose churn you don't watch
+  # 'Pickup run #[0-9]+ started'            # keep only Pickup endings
+)
