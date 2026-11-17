@@ -208,6 +208,23 @@ pub(crate) fn rows(config: &UserConfig) -> Vec<Value> {
     values(config).into_iter().map(|(value, _)| value).collect()
 }
 
+/// An unchanged origin still needs a Console update when a previously blocked
+/// reservation becomes old enough to ask for the Day shift.
+pub(crate) fn next_change(config: &UserConfig) -> Option<chrono::DateTime<chrono::Local>> {
+    let now = Utc::now();
+    let host = crate::host::name();
+    files(config)
+        .into_iter()
+        .filter_map(|path| read(&path).ok())
+        .flat_map(|file| file.observations)
+        .filter(|row| !row.owner.testable(host.as_deref()))
+        .filter_map(|row| row.owner.started())
+        .map(|started| started + chrono::Duration::hours(24) + chrono::Duration::milliseconds(1))
+        .filter(|at| *at > now)
+        .min()
+        .map(|at| at.with_timezone(&chrono::Local))
+}
+
 pub(crate) fn dismissal_target(config: &UserConfig, input: &str) -> Option<(Value, PathBuf)> {
     values(config)
         .into_iter()

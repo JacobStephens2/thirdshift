@@ -159,7 +159,12 @@ pub(super) fn inventory(git: &Git) -> Result<Vec<(String, String)>> {
 pub(crate) fn recover(git: &Git, repo: &Repo) {
     let result = (|| -> Result<()> {
         let observed = inventory(git)?;
-        super::inbox::reconcile(git, repo, &observed)?;
+        if let Err(error) = super::inbox::reconcile(git, repo, &observed) {
+            event(
+                repo,
+                format!("warning: could not reconcile reservation observations: {error:#}"),
+            );
+        }
         let native = Native;
         for (reference, sha) in observed {
             let reservation = match Observation::read(git, &reference, &sha) {

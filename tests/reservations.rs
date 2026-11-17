@@ -75,6 +75,33 @@ fn a_pass_releases_dead_local_owners_of_every_reservation_kind_and_logs_the_bloc
     assert!(activity.contains("Release run"), "{activity}");
 }
 
+#[test]
+fn an_unreadable_inbox_observation_does_not_prevent_orphan_recovery() {
+    let scenario = Scenario::new();
+    reserve(
+        &scenario,
+        REFERENCES[0],
+        &format!("Host: {}\n", hostname()),
+        dead_pid(),
+        &chrono::Utc::now().to_rfc3339(),
+    );
+    let root = scenario.path("home/.thirdshift/logs/acme/widgets");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("reservations.json"), "invalid JSON").unwrap();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        scenario
+            .launch_git(&["ls-remote", "origin", REFERENCES[0]])
+            .is_empty(),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("warning:"), "{}", result.stderr);
+}
+
 fn reservation_rows(scenario: &Scenario) -> Vec<serde_json::Value> {
     let result = scenario.run(&["status", "--json"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);

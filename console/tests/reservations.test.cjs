@@ -2,11 +2,12 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
+const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 
 let home, server, exited, browser, origin;
 const reference = 'refs/heads/thirdshift/pickup/ci-red';
@@ -81,4 +82,20 @@ test('Dismiss and Undo keep the exact reservation observation without releasing 
   await resolved.waitFor({ state: 'detached' });
   await page.goto(`${origin}/?section=needs-you`);
   await waiting.waitFor({ state: 'visible' });
+});
+
+test('a blocked reservation crossing 24 hours appears on an idle open Console without reload', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/reservations.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  // The deadline begins after browser/server startup. Nothing writes a record
+  // or changes origin while the page waits across it.
+  fixture.observations[0].owner.started = new Date(Date.now() - 24 * 3600 * 1000 + 10000).toISOString();
+  await replaceRecord(path, JSON.stringify(fixture));
+  const page = await browser.newPage();
+  t.after(async () => { await page.close(); await replaceRecord(path, original); });
+  await page.goto(`${origin}/?section=needs-you`);
+  const row = page.locator('#inbox .command[data-state="Reservation"]');
+  assert.equal(await row.count(), 0);
+  await row.waitFor({ state: 'visible', timeout: 20000 });
 });
