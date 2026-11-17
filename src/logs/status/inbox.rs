@@ -64,6 +64,7 @@ pub(crate) struct Row {
     pub cause: String,
     pub resume_command: Option<String>,
     pub fix_command: Option<String>,
+    pub release_command: Option<String>,
     /// Why and when the row left Needs you or Ready for review, empty
     /// while it still waits or never waited.
     pub left: String,
@@ -250,6 +251,9 @@ impl Row {
         }
     }
     pub fn peek_url(&self) -> String {
+        if self.release_command.is_some() {
+            return String::new();
+        }
         self.details_url("/peek", None)
     }
     pub fn log_url(&self) -> String {
@@ -283,6 +287,25 @@ impl Row {
 }
 
 impl Inbox {
+    pub(super) fn add_reservations(
+        &mut self,
+        values: &[serde_json::Value],
+        now: DateTime<Local>,
+    ) -> Result<()> {
+        for value in values {
+            let row = present(value, now)?;
+            if let Some(section) = self
+                .sections
+                .iter_mut()
+                .find(|section| value["group"] == section.group)
+            {
+                section.rows.push(row);
+                section.rows.sort_by_key(|row| row.order);
+            }
+        }
+        Ok(())
+    }
+
     pub fn remote_actions(&mut self, machine: &str, allowed: bool) {
         fn apply(row: &mut Row, allowed: bool) {
             row.can_dismiss &= allowed;
@@ -449,14 +472,17 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     let live = facts.state == "live";
     // A child Ticket shares its outer Command log, but owns a different
     // record. Use the owning observation's path rather than the log stem.
-    let selector = value["record_path"]
+    let selector = value["selector"]
         .as_str()
-        .map(|path| {
-            if facts.name.is_empty() {
-                path.to_owned()
-            } else {
-                format!("{path}::{}", facts.name)
-            }
+        .map(String::from)
+        .or_else(|| {
+            value["record_path"].as_str().map(|path| {
+                if facts.name.is_empty() {
+                    path.to_owned()
+                } else {
+                    format!("{path}::{}", facts.name)
+                }
+            })
         })
         .or_else(|| {
             facts.command_log.as_ref().map(|path| {
@@ -520,7 +546,10 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         log_growth: String::new(),
         selector,
         can_dismiss: facts.account.is_none()
-            && value["source"] == "command_record"
+            && matches!(
+                value["source"].as_str(),
+                Some("command_record" | "reservation")
+            )
             && matches!(
                 value["group"].as_str(),
                 Some("needs you" | "ready for review")
@@ -571,6 +600,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .resume_command
             .filter(|_| facts.outcome.as_deref() == Some("paused")),
         fix_command: None,
+        release_command: value["release_command"].as_str().map(String::from),
         left: facts
             .dismissal
             .as_ref()
@@ -615,6 +645,22 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         findings: facts.security_findings,
         sessions: Vec::new(),
     };
+    if value["source"] == "reservation" {
+        row.state = "Reservation".into();
+        row.title = value["reservation"]["reference"]
+            .as_str()
+            .unwrap_or_default()
+            .into();
+        row.subject = facts.repository.clone();
+        row.subject_url = None;
+        row.now_line = format!(
+            "{} · {}",
+            value["blocking"].as_str().unwrap_or_default(),
+            value["owner_description"].as_str().unwrap_or_default()
+        );
+        row.timing.age = format!("Held for {}", elapsed(&facts.started_at, now));
+        row.harness.clear();
+    }
     // Compact Inbox rows hide nested runs. Keep each Slow descendant's
     // stage and health visible on the row that represents its work.
     for child in row.children.iter().filter(|child| child.slow) {
@@ -829,6 +875,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 cause: String::new(),
                 resume_command: None,
                 fix_command: None,
+                release_command: None,
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),

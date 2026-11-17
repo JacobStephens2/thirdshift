@@ -374,6 +374,7 @@ pub fn start(
     if let Some(running) = command_limit::hold_pass(&repo, limit, sharing)? {
         return Ok(Start::NotAdmitted(running));
     }
+    crate::reservation::recover(directory.git(), &repo);
     Ok(Start::Clear(Launch {
         directory,
         repo,

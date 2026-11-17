@@ -1,5 +1,48 @@
 //! The installed binary's Release run against a real bare origin and fake `gh` and Harnesses.
 #[test]
+fn a_release_pass_recovers_a_dead_local_reservation_before_selecting_work() {
+    let release = Release::new();
+    // Pending main CI makes the Pass stop after recovery, without a Session.
+    release.main_ci("in_progress", "");
+    let host = Command::new("hostname").output().unwrap();
+    let mut child = Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    let contributor = release.contributor();
+    let tree = git(&contributor, &["mktree"]);
+    let message = format!(
+        "orphan\n\nHost: {}\nProcess: {pid}\nStarted: {}",
+        String::from_utf8(host.stdout).unwrap().trim(),
+        chrono::Utc::now()
+    );
+    let sha = git(&contributor, &["commit-tree", &tree, "-m", &message]);
+    git(
+        &contributor,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{sha}:refs/thirdshift/reservations/release"),
+        ],
+    );
+
+    let output = with_input(&mut command(&release, ""), "");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output)
+            .contains("released orphaned reservation refs/thirdshift/reservations/release"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        release
+            .origin(&["for-each-ref", "refs/thirdshift/reservations/release"])
+            .is_empty()
+    );
+}
+
+#[test]
 fn native_pass_quietly_skips_human_blocked_superseded_cuts() {
     for blocker in ["draft", "foreign"] {
         let release = Release::new();

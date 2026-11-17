@@ -32,6 +32,17 @@ struct Metadata {
 enum Command {
     Record(Box<Record>),
     History(History),
+    Reservation(Box<Reservation>),
+}
+
+#[derive(Deserialize)]
+struct Reservation {
+    repository: String,
+    started_at: String,
+    reservation: serde_json::Value,
+    blocking: String,
+    owner_description: String,
+    release_command: String,
 }
 
 struct Record {
@@ -63,7 +74,11 @@ struct History {
 
 impl Command {
     fn read(value: &Value) -> Result<Self> {
-        if value["source"] == "command_record" {
+        if value["source"] == "reservation" {
+            Ok(Self::Reservation(Box::new(serde_json::from_value(
+                value.clone(),
+            )?)))
+        } else if value["source"] == "command_record" {
             let view: View = serde_json::from_value(value.clone())?;
             let children = view
                 .dispatched
@@ -85,6 +100,7 @@ impl Command {
         match self {
             Self::Record(record) => &record.view.state,
             Self::History(_) => "unknown",
+            Self::Reservation(_) => "held",
         }
     }
 
@@ -96,11 +112,36 @@ impl Command {
                 .as_deref()
                 .or(Some(&record.facts.started_at)),
             Self::History(history) => history.ended_at.as_deref().or(Some(&history.started_at)),
+            Self::Reservation(row) => Some(&row.started_at),
         }
     }
 
     fn print(&self, state: &str, indent: &str, machine: Option<&str>) {
         match self {
+            Self::Reservation(row) => {
+                println!(
+                    "{indent}{}{} · {state} · {}",
+                    machine
+                        .map(|machine| format!("[{machine}] "))
+                        .unwrap_or_default(),
+                    row.repository,
+                    row.reservation["reference"].as_str().unwrap_or_default()
+                );
+                let held = chrono::DateTime::parse_from_rfc3339(&row.started_at)
+                    .map(|time| {
+                        (chrono::Utc::now() - time.with_timezone(&chrono::Utc)).num_seconds()
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "{indent}  {} · Held for {}",
+                    row.owner_description,
+                    super::age(held)
+                );
+                println!(
+                    "{indent}  {}\n{indent}  {}",
+                    row.blocking, row.release_command
+                );
+            }
             Self::Record(record) => {
                 let stage = super::stage_details(
                     record.facts.outcome.as_deref(),

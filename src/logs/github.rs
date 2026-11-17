@@ -364,6 +364,7 @@ pub(super) fn kept_pull_requests(logs_dir: &Path) -> BTreeMap<String, PullReques
 /// including the blocking GitHub adapter, belongs off the Console's async thread.
 pub fn poll() -> Result<()> {
     let config = UserConfig::load()?;
+    crate::reservation::inbox::refresh(&config);
     let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     refresh(&snapshot, &config, Duration::ZERO)?;
     Ok(())

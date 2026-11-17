@@ -91,6 +91,7 @@ pub(in crate::logs) enum NeedsYouKind {
     Paused,
     Triage,
     Finding,
+    Reservation,
 }
 
 impl NeedsYouKind {
@@ -103,6 +104,7 @@ impl NeedsYouKind {
             Self::Paused => "Paused",
             Self::Triage => "Triage",
             Self::Finding => "Finding",
+            Self::Reservation => "Reservation",
         }
     }
 
@@ -110,7 +112,12 @@ impl NeedsYouKind {
         match self {
             Self::Silent => 0,
             Self::Slow => 1,
-            Self::Died | Self::Failed | Self::Paused | Self::Triage | Self::Finding => 2,
+            Self::Died
+            | Self::Failed
+            | Self::Paused
+            | Self::Triage
+            | Self::Finding
+            | Self::Reservation => 2,
         }
     }
 }

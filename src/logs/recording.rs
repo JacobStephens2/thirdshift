@@ -557,6 +557,10 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn activity_for(&mut self, repo: &Repo, message: impl Display) {
+        self.activity_write(&self.root(repo), &message.to_string(), None);
+    }
+
     pub(super) fn ended(&mut self, outcome: impl Display) {
         self.show_held();
         if let Some(started) = &self.activity_started {

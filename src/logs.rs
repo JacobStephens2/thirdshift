@@ -484,6 +484,11 @@ pub(crate) fn activity(message: impl Display) {
     record().activity(message);
 }
 
+/// A Pass observation before it has selected work or started a Command record.
+pub(crate) fn activity_for(repo: &Repo, message: impl Display) {
+    record().activity_for(repo, message);
+}
+
 /// Record how the command ended, `outcome` in short: show any lines held
 /// from the terminal, then write the Activity log's end line, if it started
 /// work. A skipped pass never calls it, so that under

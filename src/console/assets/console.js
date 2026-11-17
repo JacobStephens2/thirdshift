@@ -275,7 +275,7 @@ function closePeek() {
 }
 
 async function togglePeek(row) {
-  if (!row.dataset.command) return;
+  if (!row.dataset.command || !row.dataset.peek) return;
   if (peekUrl === row.dataset.peek) { closePeek(); return; }
   peekUrl = row.dataset.peek;
   content.textContent = 'Loading details…';
