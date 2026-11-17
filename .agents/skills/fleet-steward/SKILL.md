@@ -15,7 +15,7 @@ Think on two tracks every tick, as a chief of staff does:
 
 `~/.thirdshift/fleet/` holds everything about this user's fleet. A tick may start in a fresh session, so read `fleet.conf` and `fleet.md` before acting:
 
-- `fleet.conf`: owners, hosts, Console URL and `IGNORE` patterns, read by the check script. Start one from [fleet.conf.example](fleet.conf.example).
+- `fleet.conf`: owners, hosts, Console URL, its session-cookie file when sign-in is enabled, and `IGNORE` patterns, read by the check script. Start one from [fleet.conf.example](fleet.conf.example).
 - `fleet.md`: the fleet's **shape**. It lists which repos run where, each host's harness routing and cron placement, host gotchas, and the user's standing decisions. This file's general advice yields to it.
 - `notes/<YYYY-MM-DD>.md`: one tick log per day, read in step 5.
 
@@ -31,7 +31,7 @@ Failure classes, recovery commands and general gotchas are in [REFERENCE.md](REF
    - each host's Activity log since the last tick, plus its running Commands;
    - the Console's Needs you rows.
 
-   Done when you have read every line in every section. A line that keeps appearing and never needs action belongs in `fleet.conf`'s `IGNORE`.
+   Done when the script succeeds and you have read every line in every section. Failed host, GitHub or Console reads leave `last-tick` unchanged and exit nonzero; resolve the reported access problem and run the check again. For Console sign-in, configure the cookie file described in `fleet.conf.example`. A line that keeps appearing and never needs action belongs in `fleet.conf`'s `IGNORE`.
 
 2. **Triage each new failure.** For every failed run and every new Needs you row, read the cause on the host that ran it: the Command log tail, or the Session trace's last message for a Security review. Classify it with REFERENCE.md's failure catalogue and act on that class. Done when every new failure has one of these outcomes:
    - **retried**: labels restored or Recovery started;

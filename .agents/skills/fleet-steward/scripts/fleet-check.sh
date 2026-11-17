@@ -16,7 +16,7 @@ if [ ! -f "$CONFIG" ]; then
   echo "copy $(dirname "$S")/fleet.conf.example there and fill it in" >&2
   exit 2
 fi
-OWNERS=(); HOSTS=(local); CONSOLE_URL=""; IGNORE=()
+OWNERS=(); HOSTS=(local); CONSOLE_URL=""; CONSOLE_COOKIE_FILE=""; IGNORE=()
 # shellcheck source=../fleet.conf.example
 . "$CONFIG"
 
@@ -43,14 +43,21 @@ since="$(cat "$STATE" 2>/dev/null || hour_ago)"
 now="$(date '+%Y-%m-%d %H:%M:%S')"
 since_tz="$since $(date +%z)"
 echo "## since $since (now $now)"
+status=0
 
-gh api rate_limit --jq '.resources|"quota core \(.core.remaining)/\(.core.limit) reset \(.core.reset|strflocaltime("%H:%M")); search \(.search.remaining)"'
+gh api rate_limit --jq '.resources|"quota core \(.core.remaining)/\(.core.limit) reset \(.core.reset|strflocaltime("%H:%M")); search \(.search.remaining)"' || status=1
 
 echo "## open agent-failed"
-for o in "${OWNERS[@]}"; do
-  gh api -X GET search/issues -f q="label:agent-failed state:open user:$o" -f per_page=50 \
-    --jq '.items[]|"\(.repository_url|sub(".*/repos/";""))#\(.number) \(.title[0:70]) [\(.labels|map(.name)|join(","))]"'
-done | sort | quiet
+failed_issues() {
+  local failed=0 o
+  for o in "${OWNERS[@]}"; do
+    gh api --paginate -X GET search/issues -f q="label:agent-failed state:open user:$o" -f per_page=100 \
+      --jq 'if .incomplete_results or .total_count > 1000 then error("agent-failed search incomplete or exceeds GitHub search limit; narrow OWNERS") else .items[]|"\(.repository_url|sub(".*/repos/";""))#\(.number) \(.title[0:70]) [\(.labels|map(.name)|join(","))]" end' || failed=1
+  done
+  return "$failed"
+}
+issues="$(failed_issues)" || status=1
+printf '%s\n' "$issues" | sort | quiet
 
 # Run the collector on one host. A host is `local`, `lima:<instance>`, or an ssh destination.
 collect() {
@@ -60,22 +67,46 @@ collect() {
       if limactl list "${1#lima:}" 2>/dev/null | grep -q Running; then
         limactl shell "${1#lima:}" -- bash -s -- "$since_tz"
       else
-        echo "not running"
+        echo "not running; Activity log unread"
+        return 1
       fi ;;
     *) ssh -o ConnectTimeout=8 -o BatchMode=yes "$1" "bash -s -- '$since_tz'" ;;
   esac < "$S/fleet-host.sh" 2>&1
 }
 for h in "${HOSTS[@]}"; do
   echo "## $h"
-  out="$(collect "$h" | quiet)"
-  sed '/^running: /d; /^$/d' <<<"$out" | tail -40
-  running="$(grep '^running: ' <<<"$out" | sed 's/^running: //' | paste -sd';' - | cut -c1-600)"
+  if out="$(collect "$h")"; then
+    collected=1
+  else
+    collected=0
+    status=1
+  fi
+  out="$(quiet <<<"$out")"
+  sed '/^running: /d; /^$/d' <<<"$out"
+  if [ "$collected" -eq 0 ]; then
+    echo "running: unknown (host read failed)"
+    continue
+  fi
+  running="$(grep '^running: ' <<<"$out" | sed 's/^running: //' | paste -sd';' -)"
   echo "running: ${running:-idle}"
 done
 
 if [ -n "$CONSOLE_URL" ]; then
   echo "## Console Needs you"
-  curl -s -m 20 "$CONSOLE_URL/?section=overview" | python3 "$S/needs-you.py" "$CONSOLE_URL"
+  cookies=()
+  if [ -n "$CONSOLE_COOKIE_FILE" ]; then
+    if [ ! -r "$CONSOLE_COOKIE_FILE" ]; then
+      echo "fleet-check: cannot read Console cookies at $CONSOLE_COOKIE_FILE" >&2
+      status=1
+    fi
+    cookies=(--cookie "$CONSOLE_COOKIE_FILE")
+  fi
+  curl --fail --silent --show-error -m 20 "${cookies[@]}" "${CONSOLE_URL%/}/?section=overview" |
+    python3 "$S/needs-you.py" "$CONSOLE_URL" || status=1
 fi
 
+if [ "$status" -ne 0 ]; then
+  echo "fleet-check: incomplete collection; last-tick kept for the next tick" >&2
+  exit "$status"
+fi
 echo "$now" > "$STATE"
