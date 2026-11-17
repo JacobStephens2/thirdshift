@@ -985,7 +985,7 @@ which also starts a Spec run when the issue has Tickets. Every request names
 | --- | --- |
 | `ticket` | Required `issue`; shared run options above, plus positive `parallel` and boolean `security_close` |
 | `architect` | Optional `base`, `focus`, `plan_only`; shared run options, `parallel`, `security_close` |
-| `pickup` | Optional `base`, `order` (`lowest-first` or `highest-first`); shared run options, `parallel`, `security_close` |
+| `pickup` | Optional `base`, `order` (`lowest-first` or `highest-first`), `skip_authors` (login array); shared run options, `parallel`, `security_close` |
 | `secure` | Optional `base`; shared run options, `parallel`, `security_close` |
 | `review` | Required `pull_request` URL or `author` login; optional `recommend_only`, `email`, `harness`, `model`, `effort`, `security_review` |
 | `fix` | Optional `pull_request` URL for a targeted Fix run, or `base` and `author` for a Fix Pass; optional `merge`, `base_fix`, `email`, `harness`, `model`, `effort` |

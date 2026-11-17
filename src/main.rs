@@ -185,8 +185,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
        thirdshift architect base <branch> [<focus>]   Use <branch> as the Base branch
        thirdshift pickup [lowest-first|highest-first] Take the Ready issue at that end of the issue numbers (default lowest-first)
-       thirdshift pickup base <branch>                Use <branch> as the Base branch
-       thirdshift pickup skip-author <login>          Skip this author's issues (repeatable; also on Triage Passes)
+       thirdshift pickup base <branch> [skip-author <login>]  Use <branch>; repeat skip-author to exclude authors (also on Triage Passes)
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login> [merge | no-merge]  Review and fix one PR; --recommend-only posts findings

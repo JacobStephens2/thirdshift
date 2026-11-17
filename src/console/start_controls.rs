@@ -257,7 +257,7 @@ fn pass_choices<'a>(
         };
         let (mut request, flags, security) = match parsed {
             args::Command::Pickup(pass) => (
-                json!({"command":"pickup", "base":pass.base, "order":pass.order.map(|o| match o {
+                json!({"command":"pickup", "base":pass.base, "skip_authors":pass.skip_authors.0, "order":pass.order.map(|o| match o {
                     crate::ready::PickupOrder::LowestFirst => "lowest-first",
                     crate::ready::PickupOrder::HighestFirst => "highest-first",
                 })}),
