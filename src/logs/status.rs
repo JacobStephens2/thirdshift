@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use super::command_record::CommandRecord;
 use super::pass_starts::PassStart;
-use super::reading::{Command, Group, IdlePass, InboxItem, Snapshot};
+use super::reading::{Command, Group, IdlePass, Snapshot};
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
 
@@ -28,7 +28,7 @@ struct Status<'a> {
     version: u32,
     hostname: String,
     active_runs: usize,
-    commands: Vec<InboxItem<'a>>,
+    commands: Vec<serde_json::Value>,
     idle_passes: &'a [IdlePass],
     pass_starts: &'a [PassStart],
     github_quota_wait: Option<String>,
@@ -48,10 +48,14 @@ pub(crate) struct Read {
     snapshot: Snapshot,
     kept: super::github::Kept,
     now: chrono::DateTime<Local>,
+    reservations: Vec<serde_json::Value>,
 }
 
 impl Read {
     pub fn capture(config: &UserConfig, refresh: bool) -> Result<Self> {
+        if refresh {
+            crate::reservation::inbox::refresh(config);
+        }
         let now = Local::now();
         let snapshot = Snapshot::for_user(config, now)?;
         let kept = if refresh {
@@ -63,18 +67,24 @@ impl Read {
             snapshot,
             kept,
             now,
+            reservations: crate::reservation::inbox::rows(config),
         })
     }
 
-    fn status(&self, config: &UserConfig, all: bool) -> Status<'_> {
-        Status {
+    fn status(&self, config: &UserConfig, all: bool) -> Result<Status<'_>> {
+        let mut commands = self
+            .snapshot
+            .evaluate_inbox(config.inbox_days, &self.kept)
+            .into_rows(all)
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        commands.extend(self.reservations.iter().cloned());
+        Ok(Status {
             version: fleet::VERSION,
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             active_runs: self.snapshot.active_runs(),
-            commands: self
-                .snapshot
-                .evaluate_inbox(config.inbox_days, &self.kept)
-                .into_rows(all),
+            commands,
             idle_passes: &self.snapshot.idle_passes,
             pass_starts: &self.snapshot.pass_starts,
             github_quota_wait: self.kept.quota_wait(),
@@ -82,7 +92,7 @@ impl Read {
             github_answer_age_seconds: self.kept.age.map(|age| age.as_secs()),
             github_last_answered_at: self.kept.last_answered_at(),
             github_failure: self.kept.failure.as_deref(),
-        }
+        })
     }
 
     pub fn json(&self, config: &UserConfig, all: bool) -> Result<serde_json::Value> {
@@ -91,13 +101,15 @@ impl Read {
 
     pub fn document(&self, config: &UserConfig, all: bool) -> Result<fleet::Document> {
         fleet::local(
-            serde_json::to_value(self.status(config, all))?,
+            serde_json::to_value(self.status(config, all)?)?,
             self.now.into(),
         )
     }
 
     pub fn inbox(&self, config: &UserConfig) -> Result<Inbox> {
-        inbox::from_read(config, &self.snapshot, &self.kept, self.now)
+        let mut inbox = inbox::from_read(config, &self.snapshot, &self.kept, self.now)?;
+        inbox.add_reservations(&self.reservations, self.now)?;
+        Ok(inbox)
     }
 
     pub fn archive(
@@ -222,7 +234,7 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
     for account in &read.snapshot.unavailable_accounts {
         eprintln!("thirdshift: account {account}: logs unavailable or unreadable");
     }
-    let status = read.status(&config, all);
+    let status = read.status(&config, all)?;
     let local = fleet::local(serde_json::to_value(&status)?, read.now.into())?;
     let document = if local_only {
         local

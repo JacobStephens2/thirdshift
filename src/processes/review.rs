@@ -45,6 +45,7 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
             )? {
                 return Ok(skip(&running));
             }
+            crate::reservation::recover(&launch, &repo);
             let github = GitHub::new();
             let mut selected = None;
             for pr in github.waiting_review_pull_requests(&repo, &author, None)? {

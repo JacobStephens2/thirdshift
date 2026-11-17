@@ -181,6 +181,45 @@ fn failed_base(scenario: &Scenario, attempt: u64) -> String {
 }
 
 #[test]
+fn a_fix_pass_that_frees_orphaned_ci_red_reruns_base_ci_in_the_same_pass() {
+    let scenario = Scenario::new();
+    failed_base(&scenario, 1);
+    let host = std::process::Command::new("hostname").output().unwrap();
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    let tree = scenario.launch_git(&["mktree"]);
+    let message = format!(
+        "orphan\n\nHost: {}\nProcess: {pid}\nStarted: {}",
+        String::from_utf8(host.stdout).unwrap().trim(),
+        chrono::Utc::now()
+    );
+    let sha = scenario.launch_git(&["commit-tree", tree.trim(), "-m", &message]);
+    scenario.launch_git(&[
+        "push",
+        "-q",
+        "origin",
+        &format!("{}:{CI_RESERVATION}", sha.trim()),
+    ]);
+
+    let result = scenario.run(PASS);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("released orphaned reservation"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_calls_of("run", "rerun").len(),
+        1,
+        "{}",
+        result.stderr
+    );
+    assert_ci_reservation_released(&scenario);
+}
+
+#[test]
 fn first_failed_base_attempt_is_rerun_and_the_pass_repairs_a_conflicting_pr() {
     let scenario = Scenario::new();
     let url = conflicting_pr(&scenario);

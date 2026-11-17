@@ -367,10 +367,14 @@ _Avoid_: audit log, access log
 
 **Inbox**:
 The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting, until GitHub shows it merged or closed, or a later Command on the same issue or pull request starts on the machine, a **Fix run** included. Like Needs you, it keeps a row until it is dealt with, not until it is old: age clears only a row GitHub can't speak for. Landing holds live Ticket runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting, until the period the **User config** sets has passed since they ended or were dealt with. Commands older still are only in the history. A **Dismissal** takes a row out of Needs you or Ready for review, and a row that leaves either one says why. Above the groups, it counts the machine's active runs: each Command with live work anywhere in it counts once, whatever its group, so a **Spec run**'s Tickets and the Spec run or Ticket run a **Pass** dispatched are part of that one. A Command with no live work counts none, even while its row waits in Needs you or Ready for review.
+Reservations that blocked a **Pass** and need manual release also wait in the
+Inbox, without adding to its count of active Commands.
 _Avoid_: dashboard, feed, queue
 
 **Needs you**:
 The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** Ticket runs, then **Slow** ones that have run twice their **Usual range**, and then the ended ones: a Command that died, one that failed, a **Paused Command** no **Pickup run** will retake, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves once GitHub shows it settled: its issue closed or its pull request merged, or those of the Spec run or Ticket run it dispatched, or, for a Stop, `needs-triage` taken off, or, for findings, none still waiting. It also leaves when a later Command on the same issue or pull request starts on the machine, a **Fix run** included, even without a linked issue. Age clears only one GitHub can't speak for, such as a Command with no issue or pull request, once it is older than the period the **User config** sets. Any of them, live or ended, leaves on a **Dismissal**.
+It also holds reservations no host can test that blocked a **Pass** and have
+been held over a day; these leave when released, replaced or dismissed.
 _Avoid_: alerts, attention, triage queue
 
 **Silent**:

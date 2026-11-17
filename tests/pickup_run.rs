@@ -966,34 +966,35 @@ fn a_reservation_push_rejection_fails_before_any_claim_or_session() {
 }
 
 #[test]
-fn an_uncertain_successful_push_retains_the_reservation_without_dispatching() {
+fn an_uncertain_successful_push_is_retained_until_the_next_pass_proves_its_owner_died() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
     install_git_wrapper(&scenario, |git| {
         format!(
             r#"#!/bin/sh
-if [ "$1" = push ]; then
+if [ "$1" = push ] && [ ! -e '{once}' ]; then
+  case "$*" in *--force-with-lease=refs/heads/thirdshift/pickup/7:*)
+    touch '{once}'
     "{git}" "$@" || exit $?
     echo 'lost push acknowledgement' >&2
     exit 1
+  ;; esac
 fi
 exec "{git}" "$@"
 "#,
+            once = scenario.path("lost-acknowledgement").display(),
         )
     });
 
     let failed = scenario.run(&["pickup"]);
     let reservation = scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]);
-    let retried = scenario.run(&["pickup"]);
-
     assert_eq!(failed.code, Some(1), "{}", failed.stderr);
     assert!(
         failed.stderr.contains("check origin by hand"),
         "{}",
         failed.stderr
     );
-    assert_eq!(retried.code, Some(0), "{}", retried.stderr);
-    assert!(retried.stderr.contains("reserved by another run"));
     assert!(scenario.claude_calls().is_empty());
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert_eq!(
@@ -1001,6 +1002,22 @@ exec "{git}" "$@"
         reservation
     );
     assert!(scenario.origin_log("issue-7").is_none());
+
+    let retried = scenario.run(&["pickup"]);
+    assert_eq!(retried.code, Some(0), "{}", retried.stderr);
+    assert!(
+        retried
+            .stderr
+            .contains("released orphaned reservation refs/heads/thirdshift/pickup/7"),
+        "{}",
+        retried.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(
+        scenario
+            .launch_git(&["ls-remote", "origin", "refs/heads/thirdshift/pickup/7"])
+            .is_empty()
+    );
 }
 
 #[test]

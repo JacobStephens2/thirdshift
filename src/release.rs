@@ -151,6 +151,7 @@ pub fn run(request: Request<'_>, choice: &mut Choice) -> Result<Option<Ended>, F
             {
                 return skipped(&repo, reason);
             }
+            crate::reservation::recover(&launch, &repo);
         } else {
             logs::started(logs::Work::ReleaseRun(&repo), choice);
         }

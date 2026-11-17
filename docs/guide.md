@@ -3739,9 +3739,10 @@ The Pass also skips a pull request while any linked closing issue has an
 `in-progress` Claim or an issue reservation on that issue's origin, including
 Ticket and Spec Delivery on another machine. It logs the PR, holding issue and
 observed Claim or reservation, then tries the next candidate. After the hold
-ends, the next Pass can take the PR. Retained reservations still hold it until
-the Day shift confirms the owner stopped and releases them; no timer expires
-another Command's reservation. Failed hold observations stop admission.
+ends, the next Pass can take the PR. The owning host automatically releases a
+reservation on proof that its process died. Reservations no host can test still
+need the Day shift; no timer expires another Command's reservation.
+Failed hold observations stop admission.
 This guard is checked again after reserving the PR, before inspecting its
 worktree. It does not lock out a Delivery started afterwards; captured-head
 checks still protect Review publication. Explicit `review <PR URL>` keeps its
@@ -3758,8 +3759,10 @@ thirdshift leaves that update to the author, without merging or rebasing the sta
 
 A Review run reserves its pull request on `origin`, labels it `in-progress`
 while it runs, and removes that label when it ends, including failure or
-interruption. After a crash, the Day shift must confirm the owner stopped before
-releasing its origin reservation and label. The Sweep removes `in-progress`
+interruption. After a crash, a Pass on the owning host can automatically release
+its origin reservation on proof of death (see [reservation recovery](#pickup-runs)).
+The Day shift still confirms the owner stopped before removing its label or
+manually releasing an untestable reservation. The Sweep removes `in-progress`
 from closed pull requests.
 
 A **Review run** refuses forks, drafts, closed or merged pull requests and
@@ -4176,7 +4179,13 @@ A Pickup run:
 6. Atomically reserves the selected issue on `origin`, then rechecks that it is still Ready and no Claim has been made since selection. If another Pickup run, or an Architect run or Security run dispatching its own plan or fix, holds the reservation, the issue ceased to be Ready, or an intervening Ticket run has already taken it and returned it to Ready, it says `#<n> is reserved by another run or is no longer Ready`, with the reservation ref to inspect if it stays reserved, releases any reservation of its own, and searches again for the next Ready issue past that one in its order, reserving and rechecking it the same way. Only when none it can reserve is left is the pass skipped, with exit `0`, no Claim, no session and no notification. So two Pickup runs that select the same issue both find work when the repository has two Ready issues. This also protects two hosts using the same GitHub identity, with settling disabled or clocks out of sync.
 7. Dispatches it exactly as `thirdshift <Issue URL>` would from the same clone on the Pickup run's Base branch: a [Spec run](#spec-runs) when the issue has sub-issues, a Ticket run otherwise. That run makes the Claim, so the issue's `ready-for-agent` is swapped for `in-progress` and no later pass takes it again. The reservation lasts through the dispatched run's ending, including failed-work preservation and Claim ending, then is released with an exact ownership check, even after interruption.
 
-Every Pickup host must run a version that honors reservations. The reservation branch is `thirdshift/pickup/<issue-number>`. An [Architect run](#architect-runs) takes the same reservation for the plan it dispatches, and a [Security run](#security-runs) for its fix, before marking it ready; direct Issue URL commands keep their existing behavior. A crash or an uncertain remote failure can leave a reservation behind. Before releasing one, confirm its host's Command has stopped. Inspect `git ls-remote origin refs/heads/thirdshift/pickup/7`, fetch that ref, and read its commit message for the host, launch path, process and start time. `Host:` records the OS hostname (`unknown` if unavailable); older reservations have no host field and remain valid. Then delete it with the observed SHA as an exact lease: `git push --force-with-lease=refs/heads/thirdshift/pickup/7:<observed-sha> origin :refs/heads/thirdshift/pickup/7`. Never delete a live owner's reservation or remove one on a timer. Repository permissions must allow creating and deleting these branches. See [ADR 0017](adr/0017-pickup-reserves-issues-on-origin.md).
+Every Pickup host must run a version that honors reservations. The reservation branch is `thirdshift/pickup/<issue-number>`. An [Architect run](#architect-runs) takes the same reservation for the plan it dispatches, and a [Security run](#security-runs) for its fix, before marking it ready; direct Issue URL commands keep their existing behavior. A crash or an uncertain remote failure can leave a reservation behind.
+
+Before choosing work, scheduled Pickup, Fix, Review, Triage, Architect, Security and Release Passes inspect origin's issue, `ci-red`, PR and Release reservations. On Linux and macOS, a Pass releases one naming this OS hostname only when it proves that the PID does not exist, its process started after `Started:`, or the host booted after `Started:`. Failed probes count as alive. Release uses the observed SHA as an exact lease, so a new owner survives a concurrent retake. Stderr and the Activity log name each release or failed lease and its blocked work. A Fix Pass that frees `ci-red` can check Base branch CI immediately. This changes no Claim or `in-progress` label.
+
+A reservation from another host, with `Host: unknown`, or with incomplete owner fields cannot be automatically released here. Once it skips work and its `Started:` is over 24 hours old, Console Needs you and `thirdshift status` show its ref, owner fields, held age, blocked work and a filled-in exact-lease release command. The row remains until origin shows the ref gone or its SHA changed; an unavailable origin retains the warning. Dismiss and Undo work as usual and never release the ref. The 24 hours controls reporting only.
+
+For manual recovery, first confirm the owning Command stopped. Inspect `git ls-remote origin refs/heads/thirdshift/pickup/7`, fetch that ref, and read its commit message for the host, launch path, process and start time. `Host:` records the OS hostname (`unknown` if unavailable); older reservations have no host field and remain valid. Delete it with the observed SHA as an exact lease: `git push --force-with-lease=refs/heads/thirdshift/pickup/7:<observed-sha> origin :refs/heads/thirdshift/pickup/7`. Never delete a live owner's reservation or remove one on age alone. Repository permissions must allow creating and deleting these refs. See [ADR 0017](adr/0017-pickup-reserves-issues-on-origin.md) and its [proof-of-death exception](adr/0033-owning-hosts-release-reservations-on-proof-of-death.md).
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email` or `email-unless-merged`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `email.unless_merged`, `launch.pull` and `logs.dir`. A User config a Ticket run would refuse stops the pass the same way, before any check. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it. With `base <branch>`, a Pickup run started [on a schedule](#a-pickup-run-on-a-schedule) runs from the clone you work in, whatever branch you left it on.
 

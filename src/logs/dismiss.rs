@@ -343,7 +343,27 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     let config = UserConfig::load()?;
     let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     let github = super::github::load(&config.logs_dir);
-    let target = row_for(&snapshot, &github, input, config.inbox_days, undo)?;
+    let target =
+        if let Some((row, record)) = crate::reservation::inbox::dismissal_target(&config, input) {
+            let group = serde_json::from_value(row["group"].clone())?;
+            if !undo && group != Group::NeedsYou {
+                bail!("cannot dismiss {input}: reservation is already dismissed");
+            }
+            DismissalTarget {
+                repository: row["repository"].as_str().unwrap_or_default().into(),
+                name: input.into(),
+                subject: format!(
+                    "Reservation {}",
+                    row["reservation"]["reference"].as_str().unwrap_or_default()
+                ),
+                group,
+                kind: "Reservation".into(),
+                members: vec![(record, input.into())],
+                dismissed: !row["dismissal"].is_null(),
+            }
+        } else {
+            row_for(&snapshot, &github, input, config.inbox_days, undo)?
+        };
     if target.members.is_empty() {
         bail!("cannot dismiss {input}: row has no Command record");
     }

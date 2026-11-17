@@ -10,6 +10,10 @@ use crate::git::Git;
 use crate::issue::IssueUrl;
 use crate::progress;
 
+pub(crate) mod inbox;
+mod recovery;
+pub(crate) use recovery::recover;
+
 pub struct Reservation {
     launch: Git,
     reference: String,
@@ -36,9 +40,14 @@ impl Reservation {
         } else {
             format!("https://github.com/{}.git", issue.repo_slug())
         };
-        Ok(!launch
-            .run(&["ls-remote", "--refs", &remote, &reference(issue.number)])?
-            .is_empty())
+        let reference = reference(issue.number);
+        let held = launch.run(&["ls-remote", "--refs", &remote, &reference])?;
+        if remote == "origin"
+            && let Some((sha, _)) = held.split_once('\t')
+        {
+            recovery::blocked(launch, &reference, sha);
+        }
+        Ok(!held.is_empty())
     }
 
     /// Create a unique commit and atomically reserve `issue` with an empty
@@ -120,6 +129,7 @@ impl Reservation {
             if let Some((other, _)) = remote.split_once('\t')
                 && other != token
             {
+                recovery::blocked(launch, &reference, other);
                 return Ok(None);
             }
             return Err(error).with_context(|| format!(
