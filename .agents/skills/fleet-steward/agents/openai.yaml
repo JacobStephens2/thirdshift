@@ -1,0 +1,5 @@
+interface:
+  display_name: "Fleet steward"
+  short_description: "Tend a thirdshift fleet for one tick"
+policy:
+  allow_implicit_invocation: false
