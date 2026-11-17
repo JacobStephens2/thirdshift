@@ -80,7 +80,7 @@ test('Working identifies live Review and Fix targets locally and across the Flee
           const row = page.locator(`.command[data-machine="${machine}"][data-command*="${name}.command.json"]`);
           const subject = row.locator('.row-head .subject');
           const link = subject.getByRole('link', { name: `PR #${number}`, exact: true });
-          assert.equal(await link.isVisible(), true, `${width}px ${machine} ${name}: visible PR target`);
+          await link.waitFor({ state: 'visible' });
           assert.equal(await link.getAttribute('href'), `https://github.com/acme/widgets/pull/${number}`);
           assert.equal(await subject.getByText('acme/widgets', { exact: true }).isVisible(), true);
           assert.match(await subject.textContent(), new RegExp(kind));
