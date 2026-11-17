@@ -4146,6 +4146,7 @@ thirdshift pickup                      # take the lowest-numbered Ready issue an
 thirdshift pickup merge parallel 2     # merge its pull request; two Tickets at once if it is a Spec
 thirdshift pickup base main no-merge   # run it on main, whatever branch the clone is on, and leave its pull request for review
 thirdshift pickup highest-first        # take the highest-numbered Ready issue instead, for that one pass
+thirdshift pickup skip-author alice --skip-author bob  # leave these authors' issues alone
 ```
 
 Pickup has no Built-in process file. It selects and reserves the Ready issue,
@@ -4153,9 +4154,12 @@ then starts `ticket-run` or `spec-run` as a command on that Issue URL would.
 
 Which end of the issue numbers the pass takes is its order: `lowest-first` by default, `highest-first` with `pickup.order = "highest-first"` in the [User config](#user-config), or for one pass with `lowest-first` or `highest-first` on the command, which wins over the User config. Two schedules working through the same queue from opposite ends, one with each order, collide less often; the reservation below still protects either choice.
 
+Add `skip-author <login>` (or `--skip-author <login>`) on each cron line to pass over issues written by that account, even a **Trusted account**. Repeat it for several accounts; logins match case-insensitively. The Pass logs `#947 passed over: written by alice, whom this Pass skips` and searches for the next Ready issue. A skipped Spec author excludes the whole Spec. A Spec run dispatched by this Pass also stops before a Ticket written by a skipped account, with the same failure handling as an untrusted Ticket author. These choices belong to this Pass, with no User config setting; explicitly running `thirdshift <Issue URL>` still runs the named issue under the usual trust checks. The word never makes an untrusted author eligible.
+
 A Ready issue is an open issue that:
 
 - is labelled `ready-for-agent`: an issue without the label is never taken;
+- was written by a **Trusted account**, with its latest `ready-for-agent` labelling made by one and no later title or body edit by another account; this Pass may additionally exclude its author with `skip-author <login>`;
 - has none of the labels that make an **Unready Ticket**, `ready-for-human`, `needs-info`, `wontfix` and `needs-triage`, so a contradictory label errs on the side of not running;
 - carries no [Claim](#the-claim): it is not labelled `in-progress`;
 - is not a sub-issue. A sub-issue is a **Ticket** of a **Spec**, and is never run on its own, whatever the Spec's labels: it is reached through its Spec, when the Spec is itself a Ready issue, so its work always goes through the **Spec branch**. Labelling one Ticket never promotes its Spec, either;
@@ -4316,11 +4320,14 @@ With no issue or `--file`, `thirdshift triage [base <branch>]` is an unattended 
 ```sh
 thirdshift triage
 thirdshift triage base release </dev/null
+thirdshift triage skip-author alice --skip-author bob </dev/null
 # In crontab, from the repository's Launch directory:
 */5 * * * * cd /srv/widgets && thirdshift triage base main
 ```
 
 A Triage Pass checks the [Command limit](#the-command-limit), runs the [Sweep](#the-sweep), clears `agent-failed` from open issues the Day shift has acted on, and checks `pickup.failure_limit`. It then selects one open `needs-triage` issue in `pickup.order` (lowest number first by default). Each issue passed over gets a progress line explaining why: another triage state (`ready-for-agent`, `ready-for-human`, `needs-info`, `wontfix`), `in-progress`, `agent-failed`, sub-issues of its own, or an untrusted author or title/body edit. It reserves the first eligible issue on origin and rechecks its state and trust; a reserved or stale issue is passed over for the next candidate. The selected issue is triaged in place as below. With `--recommend-only`, a Pass still reserves its selection but makes no Claim or publication.
+
+The same repeatable `skip-author <login>` / `--skip-author <login>` word excludes named authors case-insensitively from this Triage Pass, logging why and continuing to the next eligible issue without changing the skipped issue. Use it on both Pickup and Triage cron lines to leave that account's backlog alone. It only narrows the Trusted-account rule. The word requires a login and is refused on other commands, on targeted Triage runs and on Triage Reports, including non-empty piped input.
 
 A skipped Triage Pass exits `0`, prints nothing on stdout and sends no Run notification. Its reason is recorded in the Activity log only when it changes; `activity.quiet_skips` also suppresses terminal output. A Pass that takes an issue keeps its Command log and Session trace, records the Triage run in the Activity log and sends the configured Run notification.
 

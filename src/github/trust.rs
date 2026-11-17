@@ -11,6 +11,25 @@ use crate::issue::IssueUrl;
 use crate::labels::READY_FOR_AGENT;
 use crate::trust::{Action, IssueText, Reads};
 
+impl GitHub {
+    /// The issue author's login, or none for a deleted account.
+    pub fn issue_author(&self, issue: &IssueUrl) -> Result<Option<String>> {
+        let json = self.gh_json(&[
+            "api",
+            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
+        ])?;
+        if json["user"].is_null() {
+            return Ok(None);
+        }
+        Ok(Some(
+            json["user"]["login"]
+                .as_str()
+                .context("gh api output has no issue author login")?
+                .to_string(),
+        ))
+    }
+}
+
 impl Reads for GitHub {
     fn author_association(&self, issue: &IssueUrl) -> Result<String> {
         let json = self.gh_json(&[

@@ -37,6 +37,7 @@ pub fn run(
     flags: &Flags,
     config: &UserConfig,
     harness: &mut crate::harness::Choice,
+    skip_authors: &crate::skip_authors::SkipAuthors,
 ) -> Result<Outcome, FailedRun> {
     let Launch {
         directory,
@@ -47,6 +48,7 @@ pub fn run(
         Start::NotAdmitted(running) => return Ok(skipped(&running.repo, &running)),
     };
     let failed = crate::pickup::failures(&mut LaunchAndGitHub {
+        skip_authors: &Default::default(),
         launch: directory.git(),
         base: &base,
         repo: &repo,
@@ -73,7 +75,7 @@ pub fn run(
     }
     for listed in candidates {
         let issue = &listed.issue;
-        if let Some(reason) = ineligible(&listed, &github)? {
+        if let Some(reason) = ineligible(&listed, &github, skip_authors)? {
             crate::progress::step(format!("#{} {reason}", issue.number));
             continue;
         }
@@ -94,6 +96,7 @@ pub fn run(
                     labels: current.labels,
                 },
                 &github,
+                skip_authors,
             )?
         } else {
             Some("is closed".into())
@@ -142,7 +145,11 @@ pub fn run(
     ))
 }
 
-fn ineligible(listed: &ListedIssue, github: &GitHub) -> Result<Option<String>> {
+fn ineligible(
+    listed: &ListedIssue,
+    github: &GitHub,
+    skip_authors: &crate::skip_authors::SkipAuthors,
+) -> Result<Option<String>> {
     let excluded: [Label; 6] = [
         labels::READY_FOR_AGENT,
         labels::READY_FOR_HUMAN,
@@ -164,5 +171,10 @@ fn ineligible(listed: &ListedIssue, github: &GitHub) -> Result<Option<String>> {
     if candidate.has_sub_issues() {
         return Ok(Some("is a parent Spec with sub-issues".into()));
     }
-    existing::trust_reason(&listed.issue, github)
+    if let Some(reason) = existing::trust_reason(&listed.issue, github)? {
+        return Ok(Some(reason));
+    }
+    Ok(skip_authors
+        .reason(github, &listed.issue)?
+        .map(|reason| format!("passed over: {reason}")))
 }
