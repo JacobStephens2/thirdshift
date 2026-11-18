@@ -560,7 +560,10 @@ print(json.dumps({{'type':'result','subtype':'success','is_error':False,'result'
             let mut paths = entries
                 .map(|entry| entry.unwrap().path())
                 .collect::<Vec<_>>();
-            paths.sort();
+            // Same-second Command names end in opaque random tokens. These
+            // Sessions run sequentially, so their completed writes give the
+            // fixture's call order without treating tokens as timestamps.
+            paths.sort_by_key(|path| fs::metadata(path).unwrap().modified().unwrap());
             for path in paths {
                 if path
                     .to_string_lossy()
@@ -886,6 +889,45 @@ fn copy_environment(source: &Command, destination: &mut Command) {
 
 fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
+}
+
+#[test]
+fn summary_calls_in_the_same_second_follow_execution_order_not_opaque_log_tokens() {
+    let release = Release {
+        temp: TempDir::new().unwrap(),
+    };
+    let logs = release
+        .root()
+        .join("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/release");
+    fs::create_dir_all(&logs).unwrap();
+    for (token, prompt, nanos) in [("z", "first", 1), ("a", "second", 2)] {
+        let path = logs.join(format!(
+            "20260101T000000+0000~{token}-release-summary.logs.jsonl"
+        ));
+        fs::write(
+            &path,
+            json!({"body": {"stringValue": json!({
+                "release_test_input": {"prompt": prompt}
+            }).to_string()}})
+            .to_string(),
+        )
+        .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(nanos),
+            ))
+            .unwrap();
+    }
+
+    let calls = release.agent_calls();
+
+    assert_eq!(
+        calls,
+        [json!({"prompt": "first"}), json!({"prompt": "second"})]
+    );
 }
 
 /// Sources `script` from `scripts/` without running it, then runs the bash
