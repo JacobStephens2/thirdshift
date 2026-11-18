@@ -41,6 +41,12 @@ pub(crate) enum Work {
     Experiment(String),
 }
 
+enum Cleanup {
+    Orphaned,
+    Continued,
+    Dismissed,
+}
+
 impl Owner {
     fn retention(&self) -> Result<Retention> {
         self.record
@@ -84,7 +90,7 @@ impl Drop for Guard {
                                             && previous.launch == owner.launch);
                                 Ok(prior.keep && same_work)
                             },
-                            "completed continuation's retained",
+                            Cleanup::Continued,
                         )?;
                     }
                 }
@@ -151,7 +157,11 @@ pub(crate) fn begin(child: bool) -> Result<()> {
         _lease: Some(lease),
     });
     drop(current);
-    clean(&root, |owner| Ok(!owner.retention()?.keep), "orphaned")?;
+    clean(
+        &root,
+        |owner| Ok(!owner.retention()?.keep),
+        Cleanup::Orphaned,
+    )?;
     clean_legacy(&std::env::temp_dir())?;
     Ok(())
 }
@@ -232,7 +242,12 @@ fn owned_directory(path: &Path) -> bool {
     })
 }
 
-fn clean(root: &Path, remove: impl Fn(&Owner) -> Result<bool>, reason: &str) -> Result<()> {
+fn clean(root: &Path, remove: impl Fn(&Owner) -> Result<bool>, cleanup: Cleanup) -> Result<()> {
+    let (reason, show) = match cleanup {
+        Cleanup::Orphaned => ("orphaned", true),
+        Cleanup::Continued => ("completed continuation's retained", false),
+        Cleanup::Dismissed => ("dismissed", false),
+    };
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
@@ -251,12 +266,19 @@ fn clean(root: &Path, remove: impl Fn(&Owner) -> Result<bool>, reason: &str) -> 
             let owner = read_owner(&path)?;
             if owner.dead() && remove(&owner)? {
                 fs::remove_dir_all(&path)?;
-                event(format!(
+                let message = format!(
                     "removed {reason} Command scratch {} (process {}; started {})",
                     path.display(),
                     owner.process,
                     owner.started
-                ));
+                );
+                if show {
+                    event(message);
+                } else {
+                    // End-of-Command cleanup must not displace the final outcome
+                    // line consumed by parent Runs and the CLI's readers.
+                    crate::logs::activity(message);
+                }
             }
             Ok(())
         })();
@@ -306,7 +328,7 @@ pub(crate) fn dismiss(record: &Path) -> Result<()> {
         clean(
             &root,
             |owner| Ok(owner.record.as_deref() == Some(record)),
-            "dismissed",
+            Cleanup::Dismissed,
         )?;
     }
     Ok(())
