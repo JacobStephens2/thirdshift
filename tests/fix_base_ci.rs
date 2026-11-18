@@ -412,15 +412,22 @@ fn merge_base_fix_self_merges_only_the_new_base_repair() {
     }
 }
 
-fn reviewed_red_pr(scenario: &Scenario, branch: &str) -> String {
-    scenario.origin_has_branch(branch, "main", &["Feature"]);
-    let url = scenario.github_has_pr(branch, "main", "OPEN");
+fn recorded_review(scenario: &Scenario, branch: &str) {
     let head = scenario.origin_git(&["rev-parse", branch]);
     let mut state = scenario.gh_state();
     state["prs"][0]["comments"] = json!([{
         "body": format!("<!-- thirdshift-review {} -->", json!({"reviewed_head":head.trim()})),
         "author_association":"COLLABORATOR", "user":{"login":"runner"}
     }]);
+    scenario.write_gh_state(&state);
+}
+
+fn reviewed_red_pr(scenario: &Scenario, branch: &str) -> String {
+    scenario.origin_has_branch(branch, "main", &["Feature"]);
+    let url = scenario.github_has_pr(branch, "main", "OPEN");
+    recorded_review(scenario, branch);
+    let head = scenario.origin_git(&["rev-parse", branch]);
+    let mut state = scenario.gh_state();
     state["checks"][head.trim()] = json!([{"name":"repair-check","conclusion":"failure"}]);
     scenario.write_gh_state(&state);
     scenario.agent_does(FIX);
@@ -489,6 +496,11 @@ fn merge_base_fix_does_not_grant_an_existing_repair_pr_permission_to_merge() {
     let retry = scenario.run(&["fix", &url, "no-merge", "no-email"]);
     assert_eq!(retry.code, Some(0), "{}", retry.stderr);
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    let held = scenario.run(&["fix", &url, "merge", "no-email"]);
+    assert_eq!(held.code, Some(1), "{}", held.stderr);
+    assert!(held.stderr.contains("no recorded agent review"), "{}", held.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    recorded_review(&scenario, &branch);
     let merge = scenario.run(&["fix", &url, "merge", "no-email"]);
     assert_eq!(merge.code, Some(0), "{}", merge.stderr);
     assert_eq!(
