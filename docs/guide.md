@@ -129,6 +129,8 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 Every Console page's tab title names the serving host. The Inbox keeps its Needs you count beside the host, including through live updates.
 
+Lanes and Stages show each run's recorded issue title, falling back to its pull-request title from the kept GitHub answer (or its recorded PR title). With neither title, a Custom process keeps its Process label; other runs show `(title unavailable)`. A recorded pull request links to GitHub beside the issue link, labelled with its title when available or `PR #N` otherwise.
+
 ### Other local accounts
 
 By default, the Console and `thirdshift status` show only the serving OS account's Commands. Set `other_accounts = "readable"` under `[console]` in the User config to include other local accounts whose logs can be read, or use `other_accounts = ["conductor", "operator"]` to consider only named accounts. `"none"` is the default.
