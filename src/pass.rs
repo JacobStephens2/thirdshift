@@ -53,6 +53,7 @@ pub enum Dispatch<'a> {
         issue: &'a IssueUrl,
         is_spec: bool,
         base: &'a str,
+        claim_generation: usize,
     },
 }
 
@@ -371,7 +372,12 @@ impl Outside for LaunchAndGitHub<'_> {
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
-        let from_pickup = matches!(dispatch, Dispatch::ReadyIssue { .. });
+        let pickup_claim_generation = match &dispatch {
+            Dispatch::ReadyIssue {
+                claim_generation, ..
+            } => Some(*claim_generation),
+            Dispatch::SecurityFix { .. } | Dispatch::ArchitectPlan { .. } => None,
+        };
         let security_fix_findings = match &dispatch {
             Dispatch::SecurityFix { finding, .. } => std::slice::from_ref(*finding),
             Dispatch::ArchitectPlan { .. } | Dispatch::ReadyIssue { .. } => &[],
@@ -387,6 +393,7 @@ impl Outside for LaunchAndGitHub<'_> {
                 issue,
                 is_spec,
                 base,
+                ..
             } => (
                 issue,
                 Asks::of_ready_issue(issue, is_spec, self.flags, self.config),
@@ -414,10 +421,11 @@ impl Outside for LaunchAndGitHub<'_> {
             self.harness,
             security_fix_findings,
         );
-        let started_by = if from_pickup {
+        let started_by = if let Some(claim_generation) = pickup_claim_generation {
             StartedBy::Pickup {
                 base,
                 skip_authors: self.skip_authors,
+                claim_generation,
             }
         } else {
             StartedBy::Dispatch { base }
@@ -1112,6 +1120,7 @@ mod in_memory {
                     issue,
                     is_spec,
                     base,
+                    ..
                 } => Call::DispatchReadyIssue {
                     issue: issue.number,
                     is_spec,

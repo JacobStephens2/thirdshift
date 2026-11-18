@@ -2194,6 +2194,67 @@ fi
 }
 
 #[test]
+fn pickup_local_branch_advice_names_the_issue_url_for_every_occupied_checkout() {
+    for checkout in ["launch", "main", "worktree"] {
+        let (temp, original) = super::tests::launch_directory();
+        original.run(&["branch", BRANCH]).unwrap();
+        let launch = match checkout {
+            "launch" => {
+                original.run(&["switch", BRANCH]).unwrap();
+                original
+            }
+            "main" => {
+                original.run(&["switch", BRANCH]).unwrap();
+                let path = temp.path().join("other-launch");
+                original
+                    .run(&[
+                        "worktree",
+                        "add",
+                        "-b",
+                        "launch-base",
+                        path.to_str().unwrap(),
+                        "main",
+                    ])
+                    .unwrap();
+                Git::new(path)
+            }
+            _ => {
+                let path = temp.path().join("manual-checkout");
+                original
+                    .run(&["worktree", "add", path.to_str().unwrap(), BRANCH])
+                    .unwrap();
+                original
+            }
+        };
+        let before = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
+
+        let issue =
+            crate::issue::IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let error = local_branch_advice(
+            &launch,
+            advice::branch_conflict(BRANCH, false),
+            Retry::IssueUrl(&issue),
+        )
+        .to_string();
+
+        assert!(
+            error.contains("run thirdshift https://github.com/acme/widgets/issues/7 from the Launch directory on the Base branch"),
+            "{checkout}: {error}"
+        );
+        assert!(
+            !error.contains("rerun the original thirdshift command"),
+            "{checkout}: {error}"
+        );
+        assert!(error.contains("Occupied checkout"), "{checkout}: {error}");
+        assert_eq!(
+            launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
+            before
+        );
+        assert!(!launch.on_origin(BRANCH).unwrap());
+    }
+}
+
+#[test]
 fn local_branch_advice_commands_preserve_then_recover_work_from_any_directory() {
     for action in ["push", "branch -m", "branch -d"] {
         let (temp, original) = super::tests::launch_directory();
@@ -2210,6 +2271,12 @@ fn local_branch_advice_commands_preserve_then_recover_work_from_any_directory() 
             .to_string();
 
         assert!(error.contains("Alternatives"), "{error}");
+        assert!(
+            error.contains(
+                "rerun the original thirdshift command from the Launch directory on the Base branch"
+            ),
+            "{error}"
+        );
         assert!(error.contains("Continuation"), "{error}");
         assert!(error.contains("git -C "), "{error}");
         assert_eq!(launch.run(&["rev-parse", BRANCH]).unwrap(), before);

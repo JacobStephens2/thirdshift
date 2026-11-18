@@ -6,8 +6,25 @@ use std::path::Path;
 
 use crate::args::shell_command;
 use crate::git::Git;
+use crate::issue::IssueUrl;
 
 use super::acquisition::{Registration, registrations};
+
+/// What the operator should run after preserving the conflicting work.
+#[derive(Clone, Copy)]
+pub(crate) enum Retry<'a> {
+    OriginalCommand,
+    IssueUrl(&'a IssueUrl),
+}
+
+impl fmt::Display for Retry<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OriginalCommand => write!(f, "rerun the original thirdshift command"),
+            Self::IssueUrl(issue) => write!(f, "run thirdshift {}", issue.url),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct BranchConflict {
@@ -39,7 +56,11 @@ pub(super) fn branch_conflict(branch: &str, on_origin: bool) -> anyhow::Error {
     .into()
 }
 
-pub(crate) fn local_branch_advice(launch: &Git, mut error: anyhow::Error) -> anyhow::Error {
+pub(crate) fn local_branch_advice(
+    launch: &Git,
+    mut error: anyhow::Error,
+    retry: Retry<'_>,
+) -> anyhow::Error {
     let Some(conflict) = error.downcast_mut::<BranchConflict>() else {
         return error;
     };
@@ -60,7 +81,7 @@ pub(crate) fn local_branch_advice(launch: &Git, mut error: anyhow::Error) -> any
     conflict.advice = format!(
         "\nAlternatives (choose one; thirdshift has not run these commands). Commands use git -C to name their working directory and can be run from any directory.\n\
          Inspect and commit any checkout changes before pushing preserved work:\n  {push}\n\
-         A push may refuse if origin has different work; inspect and reconcile it first, without forcing. After a successful push, rerun the original thirdshift command from the Launch directory on the Base branch to use the normal Continuation path for the published Issue branch.\n\
+         A push may refuse if origin has different work; inspect and reconcile it first, without forcing. After a successful push, {retry} from the Launch directory on the Base branch to use the normal Continuation path for the published Issue branch.\n\
          Or preserve the local branch under an unused name (choose another name if this one exists):\n  {rename}\n\
          Or delete the local branch only when its work is preserved and Git permits it:\n  {delete}\n\
          Deletion is optional. Git may refuse while unmerged work remains; inspect and preserve it first."
@@ -69,7 +90,7 @@ pub(crate) fn local_branch_advice(launch: &Git, mut error: anyhow::Error) -> any
         Ok(entries) => {
             let reference = format!("refs/heads/{branch}");
             for entry in entries.iter().filter(|entry| entry.branch.as_deref() == Some(&reference)) {
-                conflict.advice.push_str(&checkout_advice(launch, entry, None, entries.first().is_some_and(|main| main.path == entry.path)));
+                conflict.advice.push_str(&checkout_advice(launch, entry, None, entries.first().is_some_and(|main| main.path == entry.path), retry));
             }
         }
         Err(inspection) => conflict.advice.push_str(&format!(
@@ -104,6 +125,7 @@ pub(super) fn occupied_advice(
             entry,
             Some(&path),
             entries.first().is_some_and(|main| main.path == entry.path),
+            Retry::OriginalCommand,
         ));
     }
     if advice.is_empty() {
@@ -140,6 +162,7 @@ fn checkout_advice(
     entry: &Registration,
     target: Option<&Path>,
     main_checkout: bool,
+    retry: Retry<'_>,
 ) -> String {
     let mut advice = format!(
         "\nOccupied checkout {} on {}. Before renaming or deleting its branch, leave or inspect this checkout.\n\
@@ -153,11 +176,14 @@ fn checkout_advice(
     );
     if launch.dir().canonicalize().ok().as_ref() == Some(&entry.path) {
         advice.push_str("\nThis is the Launch directory. After inspecting and preserving its work, leave the Issue branch here before retrying from the Base branch. The acquisition path must also be free for normal Continuation; if this checkout occupies that path, use a Launch directory under a different parent directory. Do not remove the Launch directory.");
+        if matches!(retry, Retry::IssueUrl(_)) {
+            advice.push_str(&format!(" Once the Issue branch is published and the acquisition path is free, {retry} from the Launch directory on the Base branch for normal Continuation."));
+        }
     } else if main_checkout {
-        advice.push_str("\nThis is the main checkout; Git cannot remove it with worktree remove. After inspecting and preserving its work, a branch switch can free the Issue branch. The acquisition path must also be free: if this checkout occupies that path, use a Launch directory under a different parent directory, keeping this checkout. Once the Issue branch is published and the acquisition path is free, rerun the original thirdshift command from the Launch directory on the Base branch for normal Continuation.");
+        advice.push_str(&format!("\nThis is the main checkout; Git cannot remove it with worktree remove. After inspecting and preserving its work, a branch switch can free the Issue branch. The acquisition path must also be free: if this checkout occupies that path, use a Launch directory under a different parent directory, keeping this checkout. Once the Issue branch is published and the acquisition path is free, {retry} from the Launch directory on the Base branch for normal Continuation."));
     } else {
         advice.push_str(&format!(
-            "\nTo free the checkout for a retry, remove it only after preserving its work, then rerun the original thirdshift command from the Launch directory on the Base branch. If the selected Issue branch is on origin, the retry uses the normal Continuation path. Commands use git -C and can run from any directory:\n  {}\n\
+            "\nTo free the checkout for a retry, remove it only after preserving its work, then {retry} from the Launch directory on the Base branch. If the selected Issue branch is on origin, the retry uses the normal Continuation path. Commands use git -C and can run from any directory:\n  {}\n\
              Removal is optional and may refuse while work remains or the Worktree is locked; inspect and preserve it first. No force flags are used.",
             command(launch, &["worktree", "remove", "--", &entry.path.to_string_lossy()])
         ));

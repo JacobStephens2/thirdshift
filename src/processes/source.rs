@@ -833,7 +833,12 @@ pub(super) fn run_issue_branch(
         Ok(dir) => Git::new(dir),
         Err(error) => return Err(failed_before_steps(notification, error.into())),
     };
-    let selection = match branch::select(&launch_git, &GitHub::new(), &issue) {
+    let selection = match branch::select(
+        &launch_git,
+        &GitHub::new(),
+        &issue,
+        crate::worktree::Retry::OriginalCommand,
+    ) {
         Ok(selection) => selection,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
