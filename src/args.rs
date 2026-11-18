@@ -484,13 +484,19 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// child Run module first, which takes the hidden arguments a child Run is
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
-    ensure!(
-        args.first().is_some_and(|word| word == "fix")
-            || !args
+    // Help and version have no option values; other parsers distinguish
+    // command words from literal values as they consume their arguments.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("help" | "--help" | "-h" | "version" | "--version" | "-V")
+    ) {
+        ensure!(
+            !args[1..]
                 .iter()
                 .any(|word| matches!(word.as_str(), "merge-base-fix" | "--merge-base-fix")),
-        "merge-base-fix applies only to a Fix Pass"
-    );
+            "merge-base-fix applies only to a Fix Pass"
+        );
+    }
     if args.first().is_some_and(|word| word == "start")
         || (matches!(args.first().map(String::as_str), Some("config" | "update"))
             && args.iter().any(|word| word == "--machine"))
@@ -1848,6 +1854,9 @@ fn take_flag<'a>(
         return Ok(true);
     }
     match arg {
+        "merge-base-fix" | "--merge-base-fix" => {
+            bail!("merge-base-fix applies only to a Fix Pass")
+        }
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
@@ -2013,6 +2022,16 @@ mod tests {
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
     use crate::test_support::guidance::words as shell_words;
+
+    #[test]
+    fn merge_base_fix_remains_a_literal_base_value() {
+        assert_eq!(
+            pickup_args(&["pickup", "base", "merge-base-fix"])
+                .base
+                .as_deref(),
+            Some("merge-base-fix")
+        );
+    }
 
     #[test]
     fn merge_base_fix_is_only_a_fix_pass_word() {
