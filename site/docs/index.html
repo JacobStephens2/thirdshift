@@ -2811,6 +2811,23 @@ skipped. While the repository is at its <a href="#the-command-limit">Command lim
 <details class="fold"><summary><h3>User config</h3></summary>
 <div class="manual-content" id="user-config">
 <p>A <strong>User config</strong> at <code>~/.thirdshift/config.toml</code> sets this machine&#39;s defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.</p>
+<p>After saving the User config and any entered Credentials, <code>thirdshift setup</code>
+checks the host tools for pull request <strong>Visual evidence</strong>: <code>gh &gt;= 2.103.2</code>,
+<code>ffmpeg</code> on <code>PATH</code>, and an installed Playwright Chromium executable. It checks
+Playwright&#39;s standard cache (<code>~/.cache/ms-playwright</code> on Linux,
+<code>~/Library/Caches/ms-playwright</code> on macOS), or <code>PLAYWRIGHT_BROWSERS_PATH</code> when
+set. A browser folder without an executable does not pass.</p>
+<p>Setup prints <code>Visual evidence: PASS</code> when all three are present. Otherwise it
+prints <code>WARN</code>, names the missing or outdated tools, and shows the exact repair
+commands: Homebrew on macOS; <code>apt</code> (including GitHub&#39;s package repository for
+an up-to-date <code>gh</code>) and Playwright&#39;s Chromium installation on Debian/Ubuntu.
+Playwright installation needs Node.js and npm; Setup includes their installation
+when Chromium is missing. On a terminal, one <code>Install or upgrade Visual evidence tools now? [y/N]</code> prompt offers to run those commands in the foreground.
+Enter or <code>N</code> leaves the host unchanged; <code>y</code> runs the commands, checks again,
+and reports the updated status. An installer failure or interruption warns and
+keeps the saved User config and Credentials. Without a terminal, Setup only
+reports status and commands, runs no installer, and exits <code>0</code>. A passing check
+asks no install question.</p>
 <p>Read every setting with its value and default, read one, or set one:</p>
 <pre><code class="language-sh">thirdshift config
 thirdshift config spec.parallel

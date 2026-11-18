@@ -12,6 +12,7 @@
 
 pub(crate) mod questions;
 pub(crate) mod sandbox;
+mod visual_evidence;
 
 #[cfg(test)]
 mod console_tests;
@@ -107,6 +108,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
     };
     check_security_sandbox(outside, &text, path, home)?;
     let Some(answers) = &answered else {
+        check_visual_evidence(outside, asking);
         return Ok(written);
     };
     offer_console_install(outside, answers);
@@ -114,6 +116,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
         outside.step(written);
         written = outside.save_credentials(edits)?;
     }
+    check_visual_evidence(outside, asking);
     if !answers.send_test() {
         return Ok(written);
     }
@@ -141,6 +144,7 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
              thirdshift setup changes it",
             path.display()
         ));
+        check_visual_evidence(outside, false);
         return Ok(());
     };
     outside.step(format!("wrote the User config {}", path.display()));
@@ -160,7 +164,46 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
             Err(error) => outside.step(format!("warning: {error:#}")),
         }
     }
+    check_visual_evidence(outside, true);
     Ok(())
+}
+
+/// This post-save offer is advisory, including input errors and interruption.
+fn check_visual_evidence(outside: &mut impl Outside, asking: bool) {
+    let probe = outside.visual_evidence();
+    outside.say(probe.report());
+    if probe.ready() {
+        return;
+    }
+    let commands = probe.commands();
+    for command in &commands {
+        outside.say(format!("  {command}"));
+    }
+    if !asking {
+        return;
+    }
+    let install = outside.read(visual_evidence::PROMPT);
+    match install {
+        Ok(Some(answer))
+            if answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") => {}
+        Ok(Some(_)) | Ok(None) => return,
+        Err(error) => {
+            outside.say(format!(
+                "Visual evidence: WARN ({error:#}); saved settings kept"
+            ));
+            return;
+        }
+    }
+    for command in commands {
+        if let Err(error) = outside.install_visual_evidence(command) {
+            outside.say(format!(
+                "Visual evidence: WARN ({error:#}); saved settings kept"
+            ));
+            break;
+        }
+    }
+    let updated = outside.visual_evidence();
+    outside.say(updated.report());
 }
 
 /// Check the settings actually saved, including retained non-terminal answers.
@@ -285,6 +328,10 @@ pub(crate) trait Outside: Terminal {
     fn send_test(&mut self, email: &EmailSettings) -> Result<String>;
     /// Probe OS isolation and return its result and any operator-run remedies.
     fn security_sandbox(&mut self, config_path: &Path) -> String;
+    /// Inspect host Visual evidence capabilities without installing anything.
+    fn visual_evidence(&mut self) -> visual_evidence::Probe;
+    /// Run one of the displayed install commands on the foreground terminal.
+    fn install_visual_evidence(&mut self, command: &str) -> Result<()>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
 }
@@ -416,6 +463,14 @@ impl Outside for OnMachine<'_> {
         sandbox::report(config_path)
     }
 
+    fn visual_evidence(&mut self) -> visual_evidence::Probe {
+        visual_evidence::probe(self.home)
+    }
+
+    fn install_visual_evidence(&mut self, command: &str) -> Result<()> {
+        visual_evidence::install(command)
+    }
+
     fn step(&mut self, line: String) {
         progress::step(line);
     }
@@ -445,6 +500,8 @@ mod scripted {
     /// A call Setup made, in the order it made it.
     #[derive(Debug, PartialEq, Eq)]
     pub enum Call {
+        VisualProbe,
+        InstallVisual(String),
         /// It showed this prompt and read an answer.
         Ask(String),
         /// It showed this prompt and read a hidden answer.
@@ -484,6 +541,8 @@ mod scripted {
     /// answers; the complete Harness interaction outcome; where a key is found;
     /// the two emails; the User config, if any; and what fails.
     pub struct Scripted {
+        pub visual: VecDeque<visual_evidence::Probe>,
+        pub installer_error: Option<&'static str>,
         pub terminal: bool,
         /// Each answer, with part of the prompt it is for. Once they run
         /// out, stdin is closed.
@@ -506,6 +565,13 @@ mod scripted {
         /// User config.
         pub fn answering(answers: &[(&'static str, &'static str)]) -> Self {
             Scripted {
+                visual: VecDeque::from([visual_evidence::Probe {
+                    gh: visual_evidence::Gh::Ready,
+                    ffmpeg: true,
+                    chromium: true,
+                    platform: visual_evidence::Platform::Linux,
+                }]),
+                installer_error: None,
                 terminal: true,
                 answers: answers.iter().copied().collect(),
                 harness: Ok(None),
@@ -567,7 +633,11 @@ mod scripted {
                 .filter(|call| {
                     !matches!(
                         call,
-                        Call::Ask(_) | Call::AskHidden(_) | Call::Say(_) | Call::HarnessSettings(_)
+                        Call::Ask(_)
+                            | Call::AskHidden(_)
+                            | Call::Say(_)
+                            | Call::HarnessSettings(_)
+                            | Call::VisualProbe
                     )
                 })
                 .collect()
@@ -694,6 +764,23 @@ mod scripted {
             "Security sandbox probe: scripted result".into()
         }
 
+        fn visual_evidence(&mut self) -> visual_evidence::Probe {
+            self.calls.push(Call::VisualProbe);
+            if self.visual.len() > 1 {
+                self.visual.pop_front().unwrap()
+            } else {
+                self.visual.front().unwrap().clone()
+            }
+        }
+
+        fn install_visual_evidence(&mut self, command: &str) -> Result<()> {
+            self.calls.push(Call::InstallVisual(command.into()));
+            if let Some(error) = self.installer_error {
+                bail!("{error}");
+            }
+            Ok(())
+        }
+
         fn step(&mut self, line: String) {
             self.calls.push(Call::Step(line));
         }
@@ -747,6 +834,132 @@ mod tests {
         (CLAUDE_TOKEN, ""),
         (CONSOLE, ""),
     ];
+
+    #[test]
+    fn visual_evidence_installs_only_after_saving_and_reprobes_for_both_platforms() {
+        use visual_evidence::{Gh, Platform, Probe};
+        for platform in [Platform::Linux, Platform::MacOs] {
+            let mut answers = ENTER_THROUGHOUT.to_vec();
+            answers[7] = (CLAUDE_TOKEN, "saved-trial-token");
+            answers.push((visual_evidence::PROMPT, "y"));
+            let mut outside = Scripted::answering(&answers);
+            outside.visual = std::collections::VecDeque::from([
+                Probe {
+                    gh: Gh::Outdated,
+                    ffmpeg: false,
+                    chromium: false,
+                    platform,
+                },
+                Probe {
+                    gh: Gh::Ready,
+                    ffmpeg: true,
+                    chromium: true,
+                    platform,
+                },
+            ]);
+            setup(&mut outside).unwrap();
+            let saved = outside
+                .calls
+                .iter()
+                .position(|call| matches!(call, Call::SaveClaudeSetupToken(_)))
+                .unwrap();
+            let probed = outside
+                .calls
+                .iter()
+                .position(|call| matches!(call, Call::VisualProbe))
+                .unwrap();
+            let installed: Vec<_> = outside
+                .calls
+                .iter()
+                .filter_map(|call| {
+                    if let Call::InstallVisual(command) = call {
+                        Some(command.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert!(saved < probed, "{:?}", outside.calls);
+            assert_eq!(
+                outside
+                    .calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::VisualProbe))
+                    .count(),
+                2
+            );
+            assert_eq!(outside.said().last(), Some(&visual_evidence::PASS));
+            for command in &installed {
+                assert!(outside.said().contains(&format!("  {command}").as_str()));
+            }
+            match platform {
+                Platform::Linux => {
+                    assert!(installed.contains(&"sudo apt install -y ffmpeg"));
+                    assert!(installed.contains(&"sudo apt install -y nodejs npm"));
+                    assert!(
+                        installed
+                            .iter()
+                            .any(|command| command.contains("https://cli.github.com/packages"))
+                    );
+                    assert!(installed.contains(
+                        &"npx --yes --package=playwright playwright install --with-deps chromium"
+                    ));
+                }
+                Platform::MacOs => {
+                    assert!(installed.contains(&"brew upgrade gh"));
+                    assert!(installed.contains(&"brew install ffmpeg"));
+                    assert!(
+                        installed.contains(
+                            &"npx --yes --package=playwright playwright install chromium"
+                        )
+                    );
+                }
+            }
+            assert!(outside.answers.is_empty());
+        }
+    }
+
+    #[test]
+    fn visual_evidence_installer_failure_or_interruption_warns_and_keeps_saved_answers() {
+        for error in ["installer exited 1", "interrupted"] {
+            let mut answers = ENTER_THROUGHOUT.to_vec();
+            answers[7] = (CLAUDE_TOKEN, "saved-trial-token");
+            answers.push((visual_evidence::PROMPT, "y"));
+            let mut outside = Scripted::answering(&answers);
+            outside.visual.front_mut().unwrap().ffmpeg = false;
+            outside.installer_error = Some(error);
+            let done = setup(&mut outside).unwrap();
+            assert!(done.contains("Credentials"));
+            assert!(outside.user_config.is_some());
+            assert!(
+                outside
+                    .calls
+                    .contains(&Call::SaveClaudeSetupToken("saved-trial-token".into()))
+            );
+            assert_eq!(
+                outside
+                    .calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::InstallVisual(_)))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                outside
+                    .calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::VisualProbe))
+                    .count(),
+                2
+            );
+            assert!(
+                outside
+                    .said()
+                    .iter()
+                    .any(|line| line.contains(error) && line.contains("saved settings kept"))
+            );
+        }
+    }
 
     /// The answers that turn Run notifications on, to `me@example.com` from
     /// the default sender, then `rest`.
@@ -1751,7 +1964,7 @@ always = false # quiet, please
                 assert!(!prompt.contains(asked), "{prompt}");
             }
         }
-        assert!(outside.said().is_empty(), "{:?}", outside.said());
+        assert_eq!(outside.said(), [visual_evidence::PASS]);
         assert_eq!(outside.effects().len(), 1, "{:?}", outside.effects());
         assert_eq!(table(&outside)["email"]["always"].as_bool(), Some(false));
     }
@@ -1801,7 +2014,7 @@ always = false # quiet, please
         let done = setup(&mut outside).unwrap();
 
         assert_eq!(done, format!("wrote the User config {PATH}"));
-        assert_eq!(outside.said(), [SKIPPED]);
+        assert_eq!(outside.said(), [SKIPPED, visual_evidence::PASS]);
         assert!(!outside.prompts().contains(&TEST_EMAIL));
         assert_eq!(outside.effects().len(), 1, "{:?}", outside.effects());
         assert_eq!(table(&outside)["email"]["always"].as_bool(), Some(true));
@@ -1827,7 +2040,10 @@ always = false # quiet, please
         assert_eq!(hidden, [&Call::AskHidden(KEY_PROMPT.to_string()); 2]);
         assert_eq!(
             outside.said(),
-            ["That isn't a Resend API key, which starts with re_."]
+            [
+                "That isn't a Resend API key, which starts with re_.",
+                visual_evidence::PASS
+            ]
         );
         assert!(outside.calls.contains(&Call::SaveKey(KEY.to_string())));
         assert!(
@@ -1851,7 +2067,7 @@ always = false # quiet, please
 
         setup(&mut outside).unwrap();
 
-        assert!(outside.said().is_empty(), "{:?}", outside.said());
+        assert_eq!(outside.said(), [visual_evidence::PASS]);
         assert!(
             !outside
                 .calls
@@ -1892,7 +2108,10 @@ always = false # quiet, please
 
         assert_eq!(
             outside.said(),
-            ["The Resend API key comes from RESEND_API_KEY."]
+            [
+                "The Resend API key comes from RESEND_API_KEY.",
+                visual_evidence::PASS
+            ]
         );
         for prompt in outside.prompts() {
             assert!(!prompt.contains(KEY_QUESTION), "{prompt}");
