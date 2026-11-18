@@ -28,11 +28,17 @@ pub(crate) struct Section {
     pub group: &'static str,
     pub title: &'static str,
     pub rows: Vec<Row>,
-    pub references: Vec<String>,
+    pub references: Vec<LandingReference>,
+}
+
+pub(crate) struct LandingReference {
+    pub repository: String,
+    pub text: String,
 }
 
 pub(crate) struct Row {
     order: crate::logs::reading::RowOrder,
+    pub repository: String,
     pub machine: String,
     pub console: String,
     pub stale: bool,
@@ -365,12 +371,15 @@ impl Inbox {
             section.rows.sort_by_key(|row| row.order);
             if checked.landing && value["group"] == "needs you" {
                 // The secondary Landing reference belongs beside all machines' rows.
-                let reference = format!(
-                    "[{}] {} · {} · see Needs you",
-                    entry.name,
-                    subject,
-                    value["needs_you_kind"].as_str().unwrap_or("Needs you")
-                );
+                let reference = LandingReference {
+                    repository: value["repository"].as_str().unwrap_or_default().to_owned(),
+                    text: format!(
+                        "[{}] {} · {} · see Needs you",
+                        entry.name,
+                        subject,
+                        value["needs_you_kind"].as_str().unwrap_or("Needs you")
+                    ),
+                };
                 if let Some(landing) = self
                     .sections
                     .iter_mut()
@@ -530,6 +539,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     let release_link =
         command_release_link(&facts.kind, facts.release_url.as_deref(), &facts.repository);
     let mut row = Row {
+        repository: facts.repository.clone(),
         order: group
             .unwrap_or(Group::History)
             .row_order(kind, facts.ended_at.as_deref().or(Some(&facts.started_at))),
@@ -825,6 +835,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 None,
             );
             let mut row = Row {
+                repository: command.repository.clone(),
                 order: Group::History.row_order(
                     None,
                     command.ended_at.as_deref().or(Some(&command.started_at)),
@@ -967,10 +978,13 @@ pub(super) fn from_read(
                         Some(account) => format!("[{account}] {subject}"),
                         None => subject,
                     };
-                    Some(format!(
-                        "{subject} · {} · see Needs you",
-                        item.needs_you_kind.expect("Needs you has a kind").title()
-                    ))
+                    Some(LandingReference {
+                        repository: command.record.repository.clone(),
+                        text: format!(
+                            "{subject} · {} · see Needs you",
+                            item.needs_you_kind.expect("Needs you has a kind").title()
+                        ),
+                    })
                 })
                 .collect();
             Ok(Section {

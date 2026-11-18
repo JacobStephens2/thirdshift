@@ -4,6 +4,206 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn repository_filter_narrows_every_inbox_section_and_keeps_navigation() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (number, outcome, days) in [
+        (1, "merged", 0),
+        (2, "failed", 0),
+        (3, "ready for review", 0),
+        (4, "merged", 2),
+    ] {
+        record(home.path(), number, Some(outcome), days);
+        let mut other = record(home.path(), number + 10, Some(outcome), days);
+        other["repository"] = "acme/gadgets".into();
+        other["issue"]["url"] =
+            format!("https://github.com/acme/gadgets/issues/{}", number + 10).into();
+        if outcome == "ready for review" {
+            other["pull_request"] = "https://github.com/acme/gadgets/pull/30".into();
+        }
+        super::write_record(home.path(), number + 10, &other);
+    }
+    // Both live sections filter too, while all four Commands still count.
+    for (number, repository, stage) in [
+        (20, "acme/gadgets", "implement"),
+        (21, "acme/widgets", "implement"),
+        (22, "acme/gadgets", "CI watch"),
+        (23, "acme/widgets", "CI watch"),
+    ] {
+        let mut live = super::watching::live_record(home.path(), number, std::process::id());
+        live["kind"] = "Run".into();
+        live["repository"] = repository.into();
+        live["issue"]["url"] = format!("https://github.com/{repository}/issues/{number}").into();
+        live["stages"][0]["name"] = stage.into();
+        super::write_record(home.path(), number, &live);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let unfiltered = console.get("/?section=done").text().unwrap();
+    let machine = unfiltered
+        .split("<select name=\"machine\">")
+        .nth(1)
+        .unwrap()
+        .split("<option value=\"")
+        .nth(2)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let html = console
+        .get(&format!(
+            "/?section=done&machine={machine}&repository=ACME%2Fwidgets"
+        ))
+        .text()
+        .unwrap();
+    assert!(
+        !html.contains("acme/gadgets#"),
+        "repository filter leaked another repository's rows"
+    );
+    for (group, title, count) in [
+        ("needs you", "Needs you", 1),
+        ("ready for review", "Ready for review", 1),
+        ("landing", "Landing", 1),
+        ("working", "Working", 1),
+        ("done", "Done", 1),
+        ("resolved", "Resolved", 1),
+    ] {
+        assert!(
+            section(&html, group).contains(&format!(
+                "<summary><h3>{title} <span class=\"count\">{count}</span>"
+            )),
+            "wrong count for {group}: {}",
+            section(&html, group)
+        );
+        let slug = group.replace(' ', "-");
+        assert!(
+            html.contains(&format!(
+                "href=\"/?section={slug}&#38;machine={machine}&#38;repository=ACME%2Fwidgets\""
+            )),
+            "{group} link lost a filter"
+        );
+        assert!(
+            html.contains(&format!(
+                "<span>{title}</span><span class=\"count\">{count}</span>"
+            )),
+            "wrong folder count for {group}"
+        );
+    }
+    let form = html
+        .split("class=\"machine-filter\"")
+        .nth(1)
+        .unwrap()
+        .split("</form>")
+        .next()
+        .unwrap();
+    assert!(form.contains("name=\"section\" value=\"done\""), "{form}");
+    assert!(
+        form.contains(&format!("value=\"{machine}\" selected")),
+        "{form}"
+    );
+    assert!(
+        form.contains("<option value=\"\">Every repository</option>"),
+        "{form}"
+    );
+    assert!(form.contains("selected>acme/widgets</option>"), "{form}");
+    assert!(form.contains(">acme/gadgets</option>"), "{form}");
+    assert_eq!(form.matches(">acme/widgets</option>").count(), 1);
+    assert!(
+        html.contains("<strong>4 active runs</strong>"),
+        "active count was filtered"
+    );
+    let cleared = console
+        .get(&format!("/?section=done&machine={machine}&repository="))
+        .text()
+        .unwrap();
+    assert!(section(&cleared, "done").contains("acme/gadgets#11"));
+    assert!(section(&unfiltered, "done").contains("acme/gadgets#11"));
+    let empty = console
+        .get("/?repository=unused%2Frepository")
+        .text()
+        .unwrap();
+    for group in [
+        "needs you",
+        "ready for review",
+        "landing",
+        "working",
+        "done",
+        "resolved",
+    ] {
+        assert!(
+            section(&empty, group).contains("Nothing here."),
+            "{group} should be empty"
+        );
+    }
+}
+
+#[test]
+fn repository_choices_and_rows_follow_the_selected_fleet_machine() {
+    use std::time::{Duration, Instant};
+
+    let owner = tempfile::tempdir().unwrap();
+    let caller = tempfile::tempdir().unwrap();
+    configure(owner.path());
+    configure(caller.path());
+    record(owner.path(), 1, Some("merged"), 0);
+    let mut other = record(owner.path(), 2, Some("merged"), 0);
+    other["repository"] = "acme/gadgets".into();
+    other["issue"]["url"] = "https://github.com/acme/gadgets/issues/2".into();
+    super::write_record(owner.path(), 2, &other);
+    let mut local = record(caller.path(), 3, Some("merged"), 0);
+    local["repository"] = "acme/local-only".into();
+    local["issue"]["url"] = "https://github.com/acme/local-only/issues/3".into();
+    super::write_record(caller.path(), 3, &local);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let owning = Console::start(binary, owner.path());
+    let token = super::tokens::create(owner.path(), "caller", &["--scopes", "read"]);
+    assert!(
+        super::fleet::add(caller.path(), "owner", &owning.address, &token)
+            .status
+            .success()
+    );
+    let console = Console::start(binary, caller.path());
+    let _events = console.get("/events");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let fleet = loop {
+        let html = console.get("/?section=done").text().unwrap();
+        if section(&html, "done").contains("acme/widgets#1") {
+            break html;
+        }
+        assert!(Instant::now() < deadline, "Fleet rows never arrived");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(fleet.contains(">acme/local-only</option>"));
+    assert!(fleet.contains(">acme/widgets</option>"));
+    assert!(fleet.contains(">acme/gadgets</option>"));
+    let html = console
+        .get("/?section=done&machine=owner&repository=acme%2Fwidgets")
+        .text()
+        .unwrap();
+    let done = section(&html, "done");
+    assert!(done.contains("acme/widgets#1"), "{done}");
+    assert!(!done.contains("acme/gadgets#2"), "{done}");
+    assert!(!done.contains("acme/local-only#3"), "{done}");
+    assert!(done.contains("<span class=\"count\">1</span>"), "{done}");
+    assert!(html.contains(">acme/gadgets</option>"));
+    assert!(!html.contains(">acme/local-only</option>"));
+    assert!(html.contains("value=\"owner\" selected"));
+    assert!(
+        html.contains("href=\"/?section=working&#38;machine=owner&#38;repository=acme%2Fwidgets\"")
+    );
+    let empty = console
+        .get("/?section=done&machine=owner&repository=unused%2Frepository")
+        .text()
+        .unwrap();
+    assert!(section(&empty, "done").contains("Nothing here."));
+    // Repository is a page filter; the owning status API stays unfiltered.
+    let status: Value = owning
+        .get("/api/v1/status?repository=acme%2Fwidgets")
+        .json()
+        .unwrap();
+    assert_eq!(status["commands"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn done_headers_identify_command_kinds_locally_and_across_fleet() {
     use serde_json::json;
     use std::time::{Duration, Instant};

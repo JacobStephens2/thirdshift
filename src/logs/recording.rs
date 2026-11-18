@@ -802,6 +802,7 @@ impl<O: Outside> Record<O> {
         self.check_suspension();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.outcome = Some(outcome.into());
+            tree.command.scratch_retained = outcome == "paused";
             tree.command.cause = cause.map(String::from);
             tree.command.ended_at = Some(self.outside.now().to_rfc3339());
             self.write_record();
@@ -876,6 +877,9 @@ impl<O: Outside> Record<O> {
         let Some((path, facts)) = &self.command_record else {
             return;
         };
+        if facts.command.parent_record.is_none() {
+            crate::scratch::record(path);
+        }
         let written = serde_json::to_vec_pretty(facts)
             .map_err(anyhow::Error::from)
             .and_then(|bytes| self.outside.replace_record(path, &bytes));

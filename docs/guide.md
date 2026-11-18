@@ -511,7 +511,9 @@ thirdshift console --no-sign-in
 
 Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts, with Done and Resolved folded below them: open either to see what finished without leaving the page. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. With `run`, use **Start work** on Inbox or **Run now** on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system's scheduler remain available too.
 
-Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing any machine filter.
+Choose **Machine** and **Repository** above the Inbox to narrow every section and its count, including Done. Repository choices come from the Inbox rows on the selected Machine, or the whole Fleet when no Machine is chosen. For example, `/?section=done&repository=acme/widgets` shows that repository's Done rows. Section links keep both filters; **Every repository** clears the repository choice. The active-runs count still includes all repositories on the selected Machine or Fleet. These filters work without JavaScript and apply only to the Console page.
+
+Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing the Machine and Repository filters.
 
 Every top-level Inbox row offers **Copy** in Overview and individual folders, including Ready for review. Paste its rendered context into an agent chat: section, owning machine, Command selector, repository, displayed title, state, any CI and Merge conflict facts, causes and Tickets, with absolute issue, pull request, Details and log links. It includes `thirdshift show '<command>' --json`, qualified with `--machine '<name>'` for Fleet rows. Copy works by mouse or keyboard without changing Command details or fetching logs or additional GitHub data. If clipboard access is refused or unavailable, the **Inbox information** dialog selects a snapshot for copying by keyboard and keeps it through live updates.
 
@@ -1162,7 +1164,7 @@ When a Harness session ends normally, fails or is stopped, thirdshift stops its 
 
 On Linux without a user manager, cleanup is best effort: each session carries a unique `THIRDSHIFT_SESSION` environment marker, and thirdshift finds processes belonging to the same OS user with that exact marker. It sends SIGTERM, waits the existing ten-second grace period, then sends SIGKILL to survivors. A process that clears its environment can escape this fallback. Parallel sessions have different markers and scopes. Cleanup logs a count when it kills survivors; a sweep failure logs a warning and leaves the Command's outcome unchanged. This cleans up work from the current session, not processes older versions already leaked.
 
-File cleanup removes thirdshift's own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Other files an agent creates as your user stay. For example, one Ticket run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
+File cleanup removes thirdshift's own worktree, local Issue branch and Command scratch, including the extracted Factory skills and session `mktemp` files. Paused Commands and failures with Recovery retain scratch until successful continuation or Dismissal; see [Logs](#logs). The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Files an agent creates outside Command scratch, such as a downloaded JDK in `~/.local/jdk/`, stay:
 
 - **Install the target repository's toolchains up front** (language runtimes, package managers, test tools), so the agents don't download their own on every Ticket run.
 - **For UI work, install the headless browser dependencies**, e.g. `libgbm1` on Ubuntu server, which headless Chromium needs. Without it, agents can't take screenshots to check a UI change and fall back to reading the code.
@@ -3327,6 +3329,30 @@ Console.
 
 ### Logs
 
+Each Command owns a private directory under `~/.thirdshift/scratch/`. All its
+sessions and child Ticket runs use a `TMPDIR` inside it, and its Factory skills
+are extracted there too. Sessions use `mktemp`; explicit temporary path templates
+use `$TMPDIR`. Sandboxed sessions each see only their own temporary subdirectory;
+sealed and Trial sandboxes expose it as `/sandbox/tmp`, backed by Command scratch,
+so mounting temporary storage does not expose the host home.
+Command logs, Session traces and recorded artifacts stay in their documented
+locations rather than disposable scratch.
+
+Normal completion and interruption remove scratch. A Paused Command or a failed
+Command with a Recovery command keeps it for inspection, including after an
+interruption that leaves Recovery. A successful continuation or Dismissal removes
+the retained directory; unrelated Commands leave it alone. Undoing a Dismissal
+cannot restore deleted scratch files.
+
+At startup, each Command removes orphaned scratch only on the owning host's
+proof that its process is gone, using the same process clocks as reservation
+recovery. Live owners, other hosts and uncertain process probes are kept.
+Startup also removes legacy `thirdshift-skills-*` directories in the system
+temporary directory older than two days, only when owned by the current user
+and containing only known Factory skill paths and `LICENSE`, without symlinks
+or extra user files. Removals are logged. Repository `.agents/skills` and files
+sessions write outside their scratch directory are outside this cleanup.
+
 Export a Command's whole **Trace** for another tool with:
 
 ```sh
@@ -4435,7 +4461,7 @@ When triaging an existing issue labelled `security-finding`, the Run notificatio
 
 The Command record, Activity log, `status` and Run notification name it a **Triage run**. A Report or explicitly named issue always takes a Command slot, even above the Command limit; unattended Triage Passes honour that limit. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
-Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
+Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes the throwaway worktree and a private Command scratch subdirectory writable. Scratch files and a private Harness home stay in that subdirectory. The home holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
 
 ## Scoring runs
 
@@ -4609,7 +4635,7 @@ more than 1,000 closures in one second fail visibly without advancing the window
 Your operating system can schedule it weekly, for example:
 
 ```cron
-0 3 * * 1 /usr/local/bin/thirdshift score >> /tmp/thirdshift-cron.log 2>&1
+0 3 * * 1 /usr/local/bin/thirdshift score >> ~/.thirdshift/cron.log 2>&1
 ```
 
 ## Building from source

@@ -76,6 +76,8 @@ function morph(html) {
   const selection = selected?.id || selected?.closest('details')?.id;
   const selectedSummary = selected?.matches('summary');
   const previousGrowth = growth();
+  const filters = new Map([...current.querySelectorAll('.machine-filter select')]
+    .map(input => [input.name, input.value]));
   Idiomorph.morph(current, replacement, {
     callbacks: {
       beforeNodeMorphed(node) {
@@ -87,6 +89,11 @@ function morph(html) {
       }
     }
   });
+  // A live refresh must keep choices the person has not submitted yet.
+  for (const input of current.querySelectorAll('.machine-filter select')) {
+    const value = filters.get(input.name);
+    if ([...input.options].some(option => option.value === value)) input.value = value;
+  }
   updateStarts(next);
   const focusedNode = document.getElementById(focused);
   (wasSummary ? focusedNode?.querySelector("summary") : focusedNode)?.focus({ preventScroll: true });

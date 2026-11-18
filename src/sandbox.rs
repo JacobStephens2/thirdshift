@@ -562,6 +562,7 @@ fn finish(
 ) -> Result<Prepared> {
     let bwrap = resolve_binary("bwrap")?;
     let socat = resolve_binary("socat")?;
+    temporary_into(&mut binds, &mut environment)?;
     let proxy = proxy::start(allowed).map_err(|error| {
         anyhow::Error::new(Unavailable {
             diagnostic: format!("{error:#}"),
@@ -641,6 +642,17 @@ fn finish(
 /// The relay's standard input comes from nowhere, so it never steals the
 /// Harness's own; when the Harness ends, its process namespace ends the relay
 /// with it.
+/// A neutral namespace path keeps the host home hidden even for sealed Sessions.
+/// The backing directory remains owned and cleaned by the Command.
+fn temporary_into(binds: &mut Binds, environment: &mut Environment) -> Result<()> {
+    if let Some(tmp) = crate::scratch::sandbox_temp()? {
+        let destination = Path::new("/sandbox/tmp");
+        binds.read_write(&tmp, destination);
+        environment.set("TMPDIR", destination);
+    }
+    Ok(())
+}
+
 fn relay_script(socat: &Path) -> String {
     let socat = socat.display();
     format!(
