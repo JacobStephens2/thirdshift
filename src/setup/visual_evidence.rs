@@ -174,6 +174,8 @@ fn has_chromium(cache: &Path) -> bool {
         let name = name.to_string_lossy();
         (name.starts_with("chromium-") || name.starts_with("chromium_headless_shell-"))
             && [
+                "chrome-linux/headless_shell",
+                "chrome-mac/headless_shell",
                 "chrome-linux/chrome",
                 "chrome-linux64/chrome",
                 "chrome-linux-arm64/chrome",

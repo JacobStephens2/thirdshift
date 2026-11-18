@@ -1460,6 +1460,29 @@ fn visual_evidence_ready_tools_pass_without_an_install_prompt() {
 }
 
 #[test]
+fn visual_evidence_accepts_existing_playwright_headless_shell() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    let relative = if cfg!(target_os = "macos") {
+        "home/Library/Caches/ms-playwright/chromium_headless_shell-1194/chrome-mac/headless_shell"
+    } else {
+        "home/.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell"
+    };
+    let browser = scenario.path(relative);
+    fs::create_dir_all(browser.parent().unwrap()).unwrap();
+    write_executable(&browser, "#!/bin/sh\nexit 0\n");
+
+    let result = scenario.run(&["setup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(user_config(&scenario).is_some());
+    assert!(
+        result.stderr.contains("Visual evidence: PASS"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn visual_evidence_gh_version_threshold_and_cache_executables_are_checked() {
     for (version, ready) in [
         ("2.103.1", false),
