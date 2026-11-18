@@ -136,6 +136,23 @@ test('Repository filtering preserves Machine and section through native form nav
   }
 });
 
+test('Submitting Repository after navigating from Overview keeps the displayed folder', async t => {
+  const page = await pageFor(t);
+  // No live refresh can accidentally repair the form before submission.
+  await page.route('**/events', route => route.abort());
+  await page.goto(`${origin}/?section=overview`);
+  await page.locator('.folders [data-group="done"]').click();
+  await page.waitForURL(url => url.searchParams.get('section') === 'done');
+  const form = page.locator('.machine-filter');
+  await form.locator('[name="repository"]').selectOption('acme/widgets');
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('repository') === 'acme/widgets'),
+    form.getByRole('button', { name: 'Filter', exact: true }).click(),
+  ]);
+  assert.equal(new URL(page.url()).searchParams.get('section'), 'done',
+    'submitting Repository must preserve the displayed Done section');
+});
+
 test('Done headers keep Command kinds and outcomes readable on desktop and phones', async t => {
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));
