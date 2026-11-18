@@ -246,6 +246,10 @@ _Avoid_: security axis, security audit (a **Security audit** covers the whole Ba
 **Delivery**:
 The [workflow](docs/guide.md#delivery-and-pull-request-identity) that publishes work as a ready-for-review or merged pull request, including the **Repair loop** and **Self-merge** when asked. A **Ticket run**'s **Built-in process** owns its opening session, **Security review** and Delivery sequence; Delivery owns publication, recovery and the merge rules. A **Spec run**'s Spec PR Delivery opens with the **Spec review** and optional Security review before publication.
 
+**Visual evidence**:
+The screenshots and walkthrough recordings in a pull request's Evidence section showing a UI change before and after, or a walkthrough of driving its interactive flow, attached to the pull request so they inherit its repository's access control rather than committed to a branch. Required alongside execution output whenever a change alters rendered UI and a headless browser can run; otherwise the pull request states why it could not be captured.
+_Avoid_: computer use, video artifact, test skill, app harness
+
 **Self-merge**:
 The step at the end of a **Ticket run** asked to merge in which thirdshift itself merges Delivery's captured pull request by number in its repository, with a merge commit at the exact head whose CI it watched. A **Custom process** reaches that same step through a `self-merge` catalogue Step directly after `delivery`, and only when its command or the **User config** asks. A fresh observation validates its expected **Issue branch** and **Base branch**, open state, readiness and mergeability immediately before the request. GitHub guards the requested head, but offers no atomic expected-base guard against a retarget between that observation and the server merge. No human reviews it first. A failed or interrupted request counts as merged only when a completion observation of the same number confirms the requested head and expected branches. Completion then continues even after Command interruption. It ends with the **Issue branch** deleted, the issue closed by thirdshift, unless it is already closed, and the issue's **Claim** removed. A protected path in a Custom process holds it and leaves the pull request ready for review, as an unaddressed **Security finding** does.
 
@@ -303,7 +307,7 @@ The per-machine secrets file next to the **User config**, readable only by its o
 _Avoid_: secrets file, key file
 
 **Setup**:
-Writing the **User config** by answering a few questions, one per setting that matters most, with every other setting written out at its default so the file shows everything that can be changed. It also offers to save a Claude setup token in the **Credentials**, and, with **Run notifications** on, a Resend API key. Offered by the first **Ticket run** on a machine with no User config, and run again at any time to change the answers.
+Writing the **User config** by answering a few questions, one per setting that matters most, with every other setting written out at its default so the file shows everything that can be changed. It also offers to save a Claude setup token in the **Credentials**, with **Run notifications** on a Resend API key, and, from a terminal, to install or update missing host tools needed for **Visual evidence**. Offered by the first **Ticket run** on a machine with no User config, and run again at any time to change the answers.
 _Avoid_: init, onboarding, configure
 
 ### Logs and records

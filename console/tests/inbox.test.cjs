@@ -66,6 +66,93 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Repository filtering preserves Machine and section through native form navigation', async t => {
+  const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const base = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
+  const paths = [601, 602].map(number => join(directory, `${number}-fixture.command.json`));
+  const fixtures = ['acme/widgets', 'acme/gadgets'].map((repository, index) => ({
+    ...base, kind: 'Run', name: `repository-filter-${index}`, repository,
+    issue: index ? null : { number: 601, url: 'https://github.com/acme/widgets/issues/601', title: 'Filter completed work' },
+    outcome: 'merged', cause: null, tickets: [],
+  }));
+  try {
+    await Promise.all(paths.map((path, index) => replaceRecord(path, JSON.stringify(fixtures[index]))));
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      for (const javaScriptEnabled of [true, false]) {
+        const page = await pageFor(t, { viewport, javaScriptEnabled });
+        await page.goto(`${origin}/?section=done`);
+        const form = page.locator('.machine-filter');
+        const machine = await form.locator('[name="machine"] option').nth(1).getAttribute('value');
+        await form.locator('[name="machine"]').selectOption(machine);
+        await form.locator('[name="repository"]').selectOption('acme/widgets');
+        if (javaScriptEnabled) {
+          const title = `Live filter update at ${viewport.width}px`;
+          await replaceRecord(paths[0], JSON.stringify({ ...fixtures[0],
+            issue: { ...fixtures[0].issue, title },
+          }));
+          await page.locator('details[data-group="done"] .issue-title').getByText(title, { exact: true }).waitFor();
+          assert.equal(await form.locator('[name="machine"]').inputValue(), machine);
+          assert.equal(await form.locator('[name="repository"]').inputValue(), 'acme/widgets');
+        }
+        await Promise.all([
+          page.waitForURL(url => url.searchParams.get('repository') === 'acme/widgets'),
+          form.getByRole('button', { name: 'Filter', exact: true }).click(),
+        ]);
+        assert.equal(new URL(page.url()).searchParams.get('section'), 'done');
+        assert.equal(new URL(page.url()).searchParams.get('machine'), machine);
+        const rows = page.locator('details[data-group="done"] > .commands > .command');
+        assert.equal(await rows.count(), 1);
+        assert.match(await rows.textContent(), /acme\/widgets#601/);
+        assert.equal(await page.locator('.folders [data-group="done"] .count').textContent(), '1');
+        assert.equal(await form.locator('[name="machine"]').inputValue(), machine);
+        assert.equal(await form.locator('[name="repository"]').inputValue(), 'acme/widgets');
+        assert.deepEqual(await form.locator('[name="repository"] option').allTextContents(),
+          ['Every repository', 'acme/gadgets', 'acme/widgets']);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        for (const section of ['working', 'done']) {
+          await Promise.all([
+            page.waitForURL(url => url.searchParams.get('section') === section),
+            page.locator(`.folders [data-group="${section}"]`).click(),
+          ]);
+          assert.equal(new URL(page.url()).searchParams.get('repository'), 'acme/widgets');
+          assert.equal(new URL(page.url()).searchParams.get('machine'), machine);
+        }
+        await form.locator('[name="repository"]').selectOption('');
+        await Promise.all([
+          page.waitForURL(url => !url.searchParams.get('repository')),
+          form.getByRole('button', { name: 'Filter', exact: true }).click(),
+        ]);
+        assert.equal(await rows.count(), 2);
+        assert.equal(new URL(page.url()).searchParams.get('section'), 'done');
+        assert.equal(new URL(page.url()).searchParams.get('machine'), machine);
+        await page.goto(`${origin}/?section=done&repository=unused%2Frepository`);
+        assert.equal(await rows.count(), 0);
+        await page.locator('details[data-group="done"]').getByText('Nothing here.', { exact: true }).waitFor();
+        await page.close();
+      }
+    }
+  } finally {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+  }
+});
+
+test('Submitting Repository after navigating from Overview keeps the displayed folder', async t => {
+  const page = await pageFor(t);
+  // No live refresh can accidentally repair the form before submission.
+  await page.route('**/events', route => route.abort());
+  await page.goto(`${origin}/?section=overview`);
+  await page.locator('.folders [data-group="done"]').click();
+  await page.waitForURL(url => url.searchParams.get('section') === 'done');
+  const form = page.locator('.machine-filter');
+  await form.locator('[name="repository"]').selectOption('acme/widgets');
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('repository') === 'acme/widgets'),
+    form.getByRole('button', { name: 'Filter', exact: true }).click(),
+  ]);
+  assert.equal(new URL(page.url()).searchParams.get('section'), 'done',
+    'submitting Repository must preserve the displayed Done section');
+});
+
 test('Done headers keep Command kinds and outcomes readable on desktop and phones', async t => {
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));

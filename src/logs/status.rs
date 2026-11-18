@@ -134,7 +134,7 @@ impl Read {
     }
 
     pub fn times(&self, hours: f64, by_repository: bool) -> Result<time::Views> {
-        time::from_read(&self.snapshot, self.now, hours, by_repository)
+        time::from_read(self, hours, by_repository)
     }
 }
 
