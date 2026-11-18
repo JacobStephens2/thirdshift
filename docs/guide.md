@@ -129,6 +129,11 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 Every Console page's tab title names the serving host. The Inbox keeps its Needs you count beside the host, including through live updates.
 
+Open Command details to read a saved [Run notification](#run-notifications),
+including its subject and full body, locally or across the Fleet. The same text
+is available with `thirdshift show <command>` and in its JSON/API view, whether
+or not email is enabled. Security notifications require the `security` scope.
+
 ### Other local accounts
 
 By default, the Console and `thirdshift status` show only the serving OS account's Commands. Set `other_accounts = "readable"` under `[console]` in the User config to include other local accounts whose logs can be read, or use `other_accounts = ["conductor", "operator"]` to consider only named accounts. `"none"` is the default.
@@ -3204,6 +3209,16 @@ Setup validates the Credentials before asking questions on a terminal. For email
 
 #### Run notifications
 
+Email can be turned off while monitoring the Console: Command details shows the
+saved Run notification's subject and full body below its facts, including across
+the Fleet. `thirdshift show <command>` prints the same text; `show --json` and
+`GET /api/v1/peek?command=<command>` return `command.notification` as
+`{ "subject": "…", "body": "…" }`, or `null` when none is available. Security
+details, including their notification, require the `security` scope in the
+Console and its API. Live Commands, skipped Passes and dispatched children can
+have no saved notification. Missing, unreadable, malformed or oversized files
+(over 4 MiB) leave the rest of Command details available.
+
 A Command that waited for primary GitHub quota includes one line, `Waited <duration> for the GitHub quota (<resource>)`, totaling its waits and its child Ticket runs' waits. A Command that never waited has no such line; secondary-limit retries add none.
 
 `--email` (or `email`) asks a Ticket run for a **Run notification**: one email, sent when the Ticket run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to the matching `email.to_by_repo` entry, falling back to `email.to`. With `email.always = true` in the [User config](#user-config), a Ticket run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Ticket run; an address after `--email` still wins over both configured recipients. Giving a flag twice, or any two of `--email`, `--email-unless-merged` and `--no-email`, is an argument error.
@@ -3370,7 +3385,7 @@ each with its compiled-in file's hash. A run with no Process file has no hash.
 Older records can omit these fields. Status, the Console,
 the Activity log and Run notifications keep their existing run-type names.
 
-When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. These files are not included in `thirdshift logs` or the Console's log inventory.
+When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. Read the saved subject and body in Console Command details (also across the Fleet), `thirdshift show <command>` or its JSON/API view. These files remain outside `thirdshift logs` and the Console's log inventory.
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.logs.jsonl`.
 

@@ -1,12 +1,52 @@
 //! Render one Command and stream its selected log bytes.
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 
 use crate::config::UserConfig;
 use crate::logs::reading::{Command, Framing, Observation, Reader, Snapshot};
+
+/// The exact subject and body saved by the owning Command, independent of email.
+#[derive(serde::Deserialize, serde::Serialize)]
+pub(crate) struct SavedNotification {
+    subject: String,
+    body: String,
+}
+
+impl SavedNotification {
+    pub(crate) fn text(&self) -> String {
+        format!("Subject: {}\n\n{}", self.subject, self.body)
+    }
+}
+
+fn notification(command: Observation<'_>) -> Option<SavedNotification> {
+    // Keep malformed or unexpectedly large sidecars from hiding Command details.
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let path = command.command_log()?.with_extension("notification.txt");
+    let path = crate::logs::reading::detail_file(&path, command.accepted_log_directory())?;
+    // Nonblocking open also refuses a FIFO without waiting for its writer.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(MAX_BYTES + 1).read_to_string(&mut text).ok()?;
+    if text.len() as u64 > MAX_BYTES {
+        return None;
+    }
+    let (subject, body) = text.strip_prefix("Subject: ")?.split_once("\n\n")?;
+    Some(SavedNotification {
+        subject: subject.to_owned(),
+        body: body.to_owned(),
+    })
+}
 
 pub(crate) fn log_path(
     config: &UserConfig,
@@ -73,7 +113,7 @@ pub(crate) fn process_steps(
     command_log: &std::path::Path,
     accepted: Option<&std::path::Path>,
 ) -> Vec<ShownStep> {
-    let Some(path) = crate::logs::reading::steps_command_log(command_log, accepted) else {
+    let Some(path) = crate::logs::reading::detail_file(command_log, accepted) else {
         return Vec::new();
     };
     let Ok(log) = std::fs::read_to_string(path) else {
@@ -182,6 +222,9 @@ fn print(command: Observation<'_>, now: DateTime<Local>) -> Result<()> {
             println!("Session trace: {}", path.display());
         }
     }
+    if let Some(notification) = notification(command) {
+        println!("Run notification:\n{}", notification.text());
+    }
     Ok(())
 }
 
@@ -282,6 +325,7 @@ pub(in crate::logs) fn details(
         Default::default()
     };
     let mut value = crate::logs::metrics::details(snapshot, command)?;
+    value["notification"] = serde_json::to_value(notification(command))?;
     value
         .as_object_mut()
         .expect("Command details object")
