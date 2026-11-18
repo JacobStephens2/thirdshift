@@ -27,8 +27,13 @@ Use this template for writing the PR body:
 
 <required for visual changes when a headless browser is available; repeat for each viewport/flow>
 
-![Before](<raw gist URL for before capture>)
-![After](<raw gist URL for after capture>)
+**Before — <flow>, <viewport>**
+
+![Before <flow> at <viewport>](<raw gist URL for before capture>)
+
+**After — <flow>, <viewport>**
+
+![After <flow> at <viewport>](<raw gist URL for after capture>)
 
 ## Merge Danger
 
@@ -168,7 +173,7 @@ You may use one of these, you may use several, it is unlikely you will use all o
 
 Always include **Execution evidence**: the exact test or command, its actual failing-before output and its actual passing-after output. Keep this separate from **Visual evidence**.
 
-For changes to rendered UI, HTML, CSS, templates or visual layout, **Visual evidence** is also required when a headless browser is available: embed `![Before](<raw gist URL>)` and `![After](<raw gist URL>)` using `.png` screenshots, or `.gif` recordings for interactive or animated flows. Pair captures at the same viewport and state: `1440×900` desktop, plus `390×844` mobile when responsive layout is affected; label each pair with its viewport and flow. If a headless browser is unavailable, state that limitation in Evidence.
+For changes to rendered UI, HTML, CSS, templates or visual layout, **Visual evidence** is also required when a headless browser is available: embed `.png` screenshots, or `.gif` recordings for interactive or animated flows, with descriptive image alt text. Pair captures at the same viewport and state: `1440×900` desktop, plus `390×844` mobile when responsive layout is affected. Place a visible bold text label immediately above every image, including Before or After, flow and viewport: for example, `**Before — Console Inbox, desktop 1440×900**` and `**After — Console Inbox, desktop 1440×900**`. Repeat these labels for every viewport and flow, for both PNG screenshots and GIF recordings. If a headless browser is unavailable, state that limitation in Evidence.
 
 #### Recover a missing Before capture
 
