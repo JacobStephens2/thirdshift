@@ -3218,7 +3218,9 @@ Console.</p>
 <p>Each Command owns a private directory under <code>~/.thirdshift/scratch/</code>. All its
 sessions and child Ticket runs use a <code>TMPDIR</code> inside it, and its Factory skills
 are extracted there too. Sessions use <code>mktemp</code>; explicit temporary path templates
-use <code>$TMPDIR</code>. Sandboxed sessions each see only their own temporary subdirectory.
+use <code>$TMPDIR</code>. Sandboxed sessions each see only their own temporary subdirectory;
+sealed and Trial sandboxes expose it as <code>/sandbox/tmp</code>, backed by Command scratch,
+so mounting temporary storage does not expose the host home.
 Command logs, Session traces and recorded artifacts stay in their documented
 locations rather than disposable scratch.</p>
 <p>Normal completion and interruption remove scratch. A Paused Command or a failed

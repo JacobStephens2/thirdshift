@@ -276,10 +276,7 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
             ])?;
         }
         let mut environment = Environment::default();
-        if let Some(tmp) = crate::scratch::sandbox_temp()? {
-            binds.read_write(&tmp, &tmp);
-            environment.set("TMPDIR", &tmp);
-        }
+        super::temporary_into(&mut binds, &mut environment)?;
         toolchains_into(&config::home()?, &mut binds, &mut environment);
         environment.set_str("HOME", "/sandbox/home");
         let environment = environment.finish(&[]);
