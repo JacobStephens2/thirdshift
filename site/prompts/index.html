@@ -1969,7 +1969,7 @@ You may use one of these, you may use several, it is unlikely you will use all o
 
 Always include **Execution evidence**: the exact test or command, its actual failing-before output and its actual passing-after output. Keep this separate from **Visual evidence**.
 
-For changes to rendered HTML, CSS, templates, frontend routes or interactive UI state, use `thirdshift-verify-ui` for interactive exploration and Visual evidence. Static layout/typography/copy uses matching Before/After `.png` pairs. Interactive changes always include an After walkthrough `.mp4`; also include a matching Before walkthrough when fixing a bug or changing an existing flow, omitting Before video for net-new controls/routes. Add static pairs where layout changed. Use `1440×900` desktop plus `390×844` mobile when responsive behavior is affected. Immediately above every attached image or video paragraph, put a visible bold label naming Before/After, flow and viewport, e.g. `**After — Console Inbox, desktop 1440×900**`. Keep the PR Ready for review with an explicit `## Evidence` limitation if a capability cannot run.
+For changes to rendered HTML, CSS, templates, frontend routes or interactive UI state, use `thirdshift-verify-ui` for interactive exploration and Visual evidence. It owns capture selection, Before recovery, recording and viewport rules. Publish the resulting captures as described below; keep any verification limitation explicit in `## Evidence`.
 
 #### Publish the captures
 
