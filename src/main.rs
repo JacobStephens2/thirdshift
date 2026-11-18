@@ -189,7 +189,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login> [merge | no-merge]  Review and fix one PR; --recommend-only posts findings
-       thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
+       thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass (Pass-only merge-base-fix: Self-merge new Base CI repairs)
        thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
        thirdshift release [<version> | --major | --minor | --patch] [--with-experiment] [--review]  Release or resume green shipped changes; no version runs a Pass
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
@@ -242,7 +242,6 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, release without version, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
-  merge-base-fix                     Fix Pass only: Self-merge newly authored Base branch CI repairs; selected PRs keep their merge policy
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
