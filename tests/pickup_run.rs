@@ -1131,7 +1131,7 @@ fn pickup_preflight_advice_uses_the_issue_url_only_before_the_first_claim() {
 
             let result = scenario.run(&["pickup"]);
 
-            assert!(!result.success, "{}", result.stderr);
+            assert_ne!(result.code, 0, "{}", result.stderr);
             assert!(
                 result
                     .stderr
