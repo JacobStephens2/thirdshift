@@ -4,6 +4,55 @@ const SUBJECT: &str = "[thirdshift] Result <script>";
 const BODY: &str = "Ticket outcomes:\n#7 ready\nhttps://github.com/acme/widgets/pull/10\n<script>alert(1)</script>\n";
 
 #[test]
+fn dispatched_children_do_not_inherit_the_parent_notification() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut parent = record(home.path(), 7, Some("failed"), 0);
+    let mut child = parent.clone();
+    child["kind"] = json!("Run");
+    child["name"] = json!("acme/widgets#7");
+    parent["kind"] = json!("Pickup run");
+    parent["name"] = json!("pickup-fixture");
+    parent["dispatched"] = json!([child]);
+    write_record(home.path(), 7, &parent);
+    let path = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");
+    fs::write(
+        path.with_extension("notification.txt"),
+        "Subject: Parent Pickup result\n\nParent notice only\n",
+    )
+    .unwrap();
+    let child = format!("{}::acme/widgets#7", path.display());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let url = reqwest::Url::parse_with_params(
+        &format!("{}/api/v1/peek", console.address),
+        &[("command", &child)],
+    )
+    .unwrap();
+    let details = api::json(reqwest::blocking::get(url).unwrap());
+    assert_eq!(details["command"]["kind"], "Run");
+    assert!(details["command"]["notification"].is_null(), "{details}");
+    assert_eq!(api::cli(home.path(), &["show", &child, "--json"]), details);
+    let shown = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .env("HOME", home.path())
+        .args(["show", &child])
+        .output()
+        .unwrap();
+    assert!(shown.status.success());
+    assert!(
+        !String::from_utf8(shown.stdout)
+            .unwrap()
+            .contains("Parent notice only")
+    );
+    let parent = api::cli(home.path(), &["show", path.to_str().unwrap(), "--json"]);
+    assert_eq!(
+        parent["command"]["notification"]["subject"],
+        "Parent Pickup result"
+    );
+}
+
+#[test]
 fn saved_notifications_are_shared_by_command_details_and_cli_for_every_run_kind() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

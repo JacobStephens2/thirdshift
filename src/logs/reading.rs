@@ -35,7 +35,7 @@ pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Departure, Group, InboxItem, NeedsYouKind, RowOrder};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};
-pub(super) use selection::Observation;
+pub(super) use selection::{Observation, Selection};
 
 pub(super) struct Snapshot {
     pub(super) unavailable_accounts: BTreeSet<String>,

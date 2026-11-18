@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 
 use crate::config::UserConfig;
-use crate::logs::reading::{Command, Framing, Observation, Reader, Snapshot};
+use crate::logs::reading::{Command, Framing, Observation, Reader, Selection, Snapshot};
 
 /// The exact subject and body saved by the owning Command, independent of email.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -22,7 +22,17 @@ impl SavedNotification {
     }
 }
 
-fn notification(command: Observation<'_>) -> Option<SavedNotification> {
+fn notification(selected: Selection<'_>) -> Option<SavedNotification> {
+    let command = selected.observation;
+    // An embedded dispatch shares its parent's record and log, but only the
+    // owning Command saved a notification. Child Ticket runs saved none either.
+    if let Observation::Record(command) = command
+        && !selected
+            .owner
+            .is_some_and(|owner| std::ptr::eq(owner, command))
+    {
+        return None;
+    }
     // Keep malformed or unexpectedly large sidecars from hiding Command details.
     const MAX_BYTES: u64 = 4 * 1024 * 1024;
     let path = command.command_log()?.with_extension("notification.txt");
@@ -209,7 +219,8 @@ fn is_uint(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn print(command: Observation<'_>, now: DateTime<Local>) -> Result<()> {
+fn print(selected: Selection<'_>, now: DateTime<Local>) -> Result<()> {
+    let command = selected.observation;
     match command {
         Observation::Record(command) => print_details(command, "", now)?,
         Observation::History(command) => super::print_history(command),
@@ -222,7 +233,7 @@ fn print(command: Observation<'_>, now: DateTime<Local>) -> Result<()> {
             println!("Session trace: {}", path.display());
         }
     }
-    if let Some(notification) = notification(command) {
+    if let Some(notification) = notification(selected) {
         println!("Run notification:\n{}", notification.text());
     }
     Ok(())
@@ -278,14 +289,14 @@ fn print_details(command: &Command, indent: &str, now: DateTime<Local>) -> Resul
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
-    let command = snapshot.resolve(input)?.observation;
+    let selected = snapshot.resolve(input)?;
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&envelope(details(&config, &snapshot, command)?))?
+            serde_json::to_string_pretty(&envelope(details(&config, &snapshot, selected)?))?
         );
     } else {
-        print(command, snapshot.observed_at())?;
+        print(selected, snapshot.observed_at())?;
     }
     Ok(())
 }
@@ -312,8 +323,9 @@ fn collect_subject_urls<'a>(
 pub(in crate::logs) fn details(
     config: &UserConfig,
     snapshot: &Snapshot,
-    command: Observation<'_>,
+    selected: Selection<'_>,
 ) -> Result<serde_json::Value> {
+    let command = selected.observation;
     let kept = crate::logs::github::load(&config.logs_dir);
     let github = if let Observation::Record(command_record) = command
         && let Some(row) = command.selector()
@@ -325,7 +337,7 @@ pub(in crate::logs) fn details(
         Default::default()
     };
     let mut value = crate::logs::metrics::details(snapshot, command)?;
-    value["notification"] = serde_json::to_value(notification(command))?;
+    value["notification"] = serde_json::to_value(notification(selected))?;
     value
         .as_object_mut()
         .expect("Command details object")

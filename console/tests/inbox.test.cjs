@@ -930,7 +930,7 @@ async function showDetails(page, row) {
 
 test('Command details shows the saved Run notification safely on desktop and phone', async t => {
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.notification.txt');
-  const text = 'Subject: Result <script>\n\nRecommendation:\nhttps://github.com/acme/widgets/issues/7\n<script>unsafe()</script>\n' + 'long'.repeat(100);
+  const text = 'Subject: Result <script>\n\nRecommendation:\nhttps://github.com/acme/widgets/issues/7\nReset: 2026-11-18T12:34:56.123Z\n<script>unsafe()</script>\n' + 'long'.repeat(100);
   await writeFile(path, text);
   try {
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
