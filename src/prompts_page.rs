@@ -705,6 +705,7 @@ fn skill_used_by(skill: &str) -> String {
         "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
         "thirdshift-code-review" => format!("{}, a Review run, or a Code review Trial", unit_links(&[REVIEW])),
         "thirdshift-pr" => unit_links(&[REVIEW]),
+        "thirdshift-verify-ui" => format!("{} and {}, when UI changes; also a standalone skill Step", unit_links(&[IMPLEMENT]), unit_links(&[REVIEW])),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
         }

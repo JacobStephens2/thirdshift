@@ -29,11 +29,11 @@ Use this template for writing the PR body:
 
 **Before — <flow>, <viewport>**
 
-![Before <flow> at <viewport>](<raw gist URL for before capture>)
+![Before <flow> at <viewport>](<absolute mktemp PNG path>)
 
 **After — <flow>, <viewport>**
 
-![After <flow> at <viewport>](<raw gist URL for after capture>)
+![After <flow> at <viewport>](<absolute mktemp PNG path>)
 
 ## Merge Danger
 
@@ -171,92 +171,66 @@ You may use one of these, you may use several, it is unlikely you will use all o
 
 Always include **Execution evidence**: the exact test or command, its actual failing-before output and its actual passing-after output. Keep this separate from **Visual evidence**.
 
-For changes to rendered UI, HTML, CSS, templates or visual layout, **Visual evidence** is also required when a headless browser is available: embed `.png` screenshots, or `.gif` recordings for interactive or animated flows, with descriptive image alt text. Pair captures at the same viewport and state: `1440×900` desktop, plus `390×844` mobile when responsive layout is affected. Place a visible bold text label immediately above every image, including Before or After, flow and viewport: for example, `**Before — Console Inbox, desktop 1440×900**` and `**After — Console Inbox, desktop 1440×900**`. Repeat these labels for every viewport and flow, for both PNG screenshots and GIF recordings. If a headless browser is unavailable, state that limitation in Evidence.
-
-#### Recover a missing Before capture
-
-Use the implementation or diagnosis session's `mktemp` capture paths. If Before is missing (including during a Spec review), capture the Base branch commit in a temporary detached worktree, using the same viewport and state as After. Replace `main` below with the PR's Base branch, build and serve that checkout with the project's commands, save each Before capture with `mktemp /tmp/before-desktop.XXXXXX.png` (or `.gif`), then stop the server and remove the worktree:
-
-```sh
-(
-  set -eu
-  before_root=$(mktemp -d /tmp/pr-before.XXXXXX)
-  trap 'git worktree remove --force "$before_root/worktree"; rmdir "$before_root"' EXIT
-  git worktree add --detach "$before_root/worktree" main
-  # Build and serve "$before_root/worktree"; save Before with mktemp /tmp/before-desktop.XXXXXX.png at After's viewport and state.
-  # Stop that server before this subshell exits and removes the worktree.
-)
-```
+For changes to rendered HTML, CSS, templates, frontend routes or interactive UI state, use `thirdshift-verify-ui` for interactive exploration and Visual evidence. Static layout/typography/copy uses matching Before/After `.png` pairs. Interactive changes always include an After walkthrough `.mp4`; also include a matching Before walkthrough when fixing a bug or changing an existing flow, omitting Before video for net-new controls/routes. Add static pairs where layout changed. Use `1440×900` desktop plus `390×844` mobile when responsive behavior is affected. Immediately above every attached image or video paragraph, put a visible bold label naming Before/After, flow and viewport, e.g. `**After — Console Inbox, desktop 1440×900**`. Keep the PR Ready for review with an explicit `## Evidence` limitation if a capability cannot run.
 
 #### Publish the captures
 
-Host PR-evidence media in a **secret git-pushed Gist**, keeping repository branches free of PR-evidence media files. Use an authenticated `gh` account with Gist access and a Git author configured. Secret Gists are unlisted but readable by anyone with the URL, so publish only captures suitable for that audience, with secrets redacted.
+Use `thirdshift-verify-ui` (Day shift: `verify-ui`) for exploration and capture rules. Publish only reviewed faux/redacted proof captures, using GitHub attachments so images and native video players inherit repository read permissions (ADR 0034). Keep captures outside git.
 
-`gh gist create` sends text through the API; create a placeholder text file, then push the binary captures with Git. Export `BEFORE_DESKTOP` and `AFTER_DESKTOP` as the exact `mktemp` paths from this session, and `BEFORE_MOBILE` and `AFTER_MOBILE` when those pairs exist. The recipe copies a path only when it is a regular file owned by this user, and refuses a symlink instead of publishing the link's target:
+Write the final PR body to a temporary file. Place a bold visible flow-and-viewport label immediately above **each** attachment paragraph, including Before or After. Reference the exact absolute capture path in that paragraph: `![After login at desktop 1440×900](/tmp/after-desktop.A1b2C3.png)` for PNG; use the same standalone image-style paragraph for `.mp4`. The CLI turns that video paragraph into a bare uploaded URL so GitHub renders its native player. `gh --attach` rewrites these local references to uploaded URLs in place; without a body reference it appends media at the end, away from its label. Preserve previously uploaded attachment paragraphs when updating unrelated body text.
+
+Save the following Bash block in a `mktemp` script, remove the script on exit, and run it as `bash "$publish_script" create "$PR_BODY" "$capture1" "$capture2"` (any number of captures up to 50). Export `BASE_BRANCH`, `ISSUE_BRANCH`, `PR_TITLE` for create; use `edit` and export `PR_URL` for an existing PR. Set `EVIDENCE_REDACTED=yes` only after visually checking every capture for faux/redacted data. Check that this branch's PR remains open immediately before publishing; stop if merged or closed. Keep the PR Ready for review.
+
+This validates **all** captures before the first irreversible upload, refusing symlinks before reading any target. Require `gh >= 2.103.2` (including GitHub App installation-token support), regular files owned by this user, safe filenames, PNG/MP4 extensions, non-empty files and the `8 MB` cap.
 
 ```sh
 (
   set -eu
-  evidence_root=$(mktemp -d /tmp/pr-evidence.XXXXXX)
-  trap 'rm -rf "$evidence_root"' EXIT
-  printf '%s\n' 'Before and After PR evidence' > "$evidence_root/README.md"
-  # gh gist create defaults to secret visibility.
-  gist_url=$(gh gist create --desc "PR visual evidence" "$evidence_root/README.md")
-  gist_id=${gist_url##*/}
-  git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-    clone "https://gist.github.com/$gist_id.git" "$evidence_root/gist"
-  copy_regular() {
-    src=$1
-    if [ -L "$src" ] || [ ! -f "$src" ] || [ ! -O "$src" ]; then
-      printf 'refusing capture that is not a regular file owned by this user: %s\n' "$src" >&2
+  action=${1:?create or edit}
+  body=${2:?PR body file}
+  shift 2
+  case "$action" in create|edit) ;; *) echo 'expected create or edit' >&2; exit 1 ;; esac
+  [ "${EVIDENCE_REDACTED:-}" = yes ] || { echo 'review captures for faux/redacted data first' >&2; exit 1; }
+  gh --version | awk '
+    NR == 1 {
+      split($3, v, ".")
+      ok = v[1] ~ /^[0-9]+$/ && v[2] ~ /^[0-9]+$/ && v[3] ~ /^[0-9]+$/ &&
+        (v[1] > 2 || (v[1] == 2 && (v[2] > 103 || (v[2] == 103 && v[3] >= 2))))
+    }
+    END { exit !ok }
+  ' || { echo 'Visual evidence needs gh >= 2.103.2 --attach' >&2; exit 1; }
+  [ "$#" -gt 0 ] && [ "$#" -le 50 ] || { echo 'expected 1–50 captures' >&2; exit 1; }
+  attachments=()
+  for capture in "$@"; do
+    if [ -L "$capture" ] || [ ! -f "$capture" ] || [ ! -O "$capture" ]; then
+      printf 'refusing capture that is not a regular file owned by this user: %s\n' "$capture" >&2
       exit 1
     fi
-    filename=${src##*/}
-    case "$filename" in
-      *[!A-Za-z0-9._-]* | '' | .*)
-        printf 'refusing capture filename: %s\n' "$filename" >&2
-        exit 1
-        ;;
-    esac
-    case "$filename" in
-      *.png | *.gif) ;;
-      *)
-        printf 'refusing capture filename: %s\n' "$filename" >&2
-        exit 1
-        ;;
-    esac
-    dest=$evidence_root/gist/$filename
-    cp -P -- "$src" "$dest"
-    if [ -L "$dest" ] || [ ! -f "$dest" ]; then
-      rm -f -- "$dest"
-      printf 'refusing capture that is not a regular file owned by this user: %s\n' "$src" >&2
-      exit 1
-    fi
-    git -C "$evidence_root/gist" add -- "$filename"
-  }
-  copy_regular "${BEFORE_DESKTOP:?}"
-  copy_regular "${AFTER_DESKTOP:?}"
-  if [ -n "${BEFORE_MOBILE:-}" ]; then
-    copy_regular "$BEFORE_MOBILE"
-  fi
-  if [ -n "${AFTER_MOBILE:-}" ]; then
-    copy_regular "$AFTER_MOBILE"
-  fi
-  git -C "$evidence_root/gist" commit -m "Add Before and After captures"
-  git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-    -C "$evidence_root/gist" push origin HEAD
-  gist_owner=$(gh api "gists/$gist_id" --jq '.owner.login')
-  gist_sha=$(git -C "$evidence_root/gist" rev-parse HEAD)
-  for capture in "$evidence_root/gist/"*.png "$evidence_root/gist/"*.gif; do
-    [ -f "$capture" ] && [ ! -L "$capture" ] || continue
     filename=${capture##*/}
-    printf 'https://gist.githubusercontent.com/%s/%s/raw/%s/%s\n' \
-      "$gist_owner" "$gist_id" "$gist_sha" "$filename"
+    case "$filename" in
+      *[!A-Za-z0-9._-]* | '') printf 'refusing capture filename: %s\n' "$filename" >&2; exit 1 ;;
+    esac
+    case "$filename" in
+      *.png | *.mp4) ;;
+      *) printf 'refusing capture extension: %s\n' "$filename" >&2; exit 1 ;;
+    esac
+    bytes=$(wc -c < "$capture")
+    if [ "$bytes" -eq 0 ] || [ "$bytes" -gt 8388608 ]; then
+      printf 'refusing empty or oversized capture: %s\n' "$capture" >&2
+      exit 1
+    fi
+    attachments+=(--attach "$capture")
   done
+  if [ "$action" = create ]; then
+    gh pr create --base "${BASE_BRANCH:?}" --head "${ISSUE_BRANCH:?}" \
+      --title "${PR_TITLE:?}" --body-file "$body" "${attachments[@]}"
+  else
+    gh pr edit "${PR_URL:?}" --body-file "$body" "${attachments[@]}"
+  fi
 )
 ```
 
-Embed the printed commit-pinned URLs in the Before and After image slots. The temporary clone is removed on exit; retain the Gist so the PR's evidence remains available.
+If the app, browser, `ffmpeg` or `gh >= 2.103.2 --attach` cannot run, publish the PR Ready for review with an explicit limitation in `## Evidence`, naming the failed capability and any available execution checks. GitHub Enterprise Server does not support these attachments. If uploading partly succeeds, `gh pr create` can print the newly created PR URL while exiting nonzero: inspect that PR and its body, retain successful URLs and retry only missing media with `gh pr edit --attach`; avoid creating a duplicate PR or reuploading successful captures.
 
 ### Merge Danger
 
