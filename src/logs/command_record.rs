@@ -129,6 +129,9 @@ pub(super) struct CommandRecord {
     pub limit: Option<crate::session::limits::Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
+    /// Temporary files survive only a pause or a failure with Recovery.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch_retained: bool,
     /// A Paused Command's Claim put `ready-for-agent` back, so a later
     /// Pickup run retakes its issue: it sits in Done, not Needs you.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -477,6 +480,10 @@ impl CommandRecord {
     ) {
         self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
+        self.scratch_retained = account.outcome == "paused"
+            || account
+                .recovery
+                .is_some_and(|recovery| recovery.command().is_some());
         // A Quota wait may already have opened this record. Pre-audit GitHub
         // diagnostics stay on the terminal; the record keeps the fixed cause.
         self.cause = account.pre_audit_failure.map(str::to_owned).or_else(|| {
@@ -607,6 +614,7 @@ impl CommandRecord {
             waiting_for: Vec::new(),
             limit: None,
             resume_command: None,
+            scratch_retained: false,
             handed_back_for_pickup: false,
             issue_branch: None,
             base_branch: None,

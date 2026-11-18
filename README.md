@@ -91,6 +91,8 @@ thirdshift logs 'widgets#7' --follow
 
 `status` groups Commands by what needs you, what is ready for review, what is landing and what is still working. `show` includes stages and child Ticket runs. [Session traces](docs/guide.md#logs) retain agent events and timed work; you can inspect the span tree or export a Command's whole Trace.
 
+Disposable session files and Factory skills live in each Command's private `~/.thirdshift/scratch/` directory. Completion removes it; a Paused Command or failure with Recovery keeps it until successful continuation or Dismissal. The next Command cleans orphaned scratch on this host and verified legacy Factory skills older than two days. [Host storage](docs/guide.md#logs).
+
 For a live browser view of the same Inbox, with stages, logs and Session traces:
 
 ```sh

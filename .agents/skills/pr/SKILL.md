@@ -199,7 +199,7 @@ Host PR-evidence media in a **secret git-pushed Gist**, keeping repository branc
 ```sh
 (
   set -eu
-  evidence_root=$(mktemp -d /tmp/pr-evidence.XXXXXX)
+  evidence_root=$(mktemp -d -t pr-evidence.XXXXXX)
   trap 'rm -rf "$evidence_root"' EXIT
   printf '%s\n' 'Before and After PR evidence' > "$evidence_root/README.md"
   # gh gist create defaults to secret visibility.

@@ -175,15 +175,15 @@ For changes to rendered UI, HTML, CSS, templates or visual layout, **Visual evid
 
 #### Recover a missing Before capture
 
-Use the implementation or diagnosis session's `mktemp` capture paths. If Before is missing (including during a Spec review), capture the Base branch commit in a temporary detached worktree, using the same viewport and state as After. Replace `main` below with the PR's Base branch, build and serve that checkout with the project's commands, save each Before capture with `mktemp /tmp/before-desktop.XXXXXX.png` (or `.gif`), then stop the server and remove the worktree:
+Use the implementation or diagnosis session's `mktemp` capture paths. If Before is missing (including during a Spec review), capture the Base branch commit in a temporary detached worktree, using the same viewport and state as After. Replace `main` below with the PR's Base branch, build and serve that checkout with the project's commands, save each Before capture with `mktemp "$TMPDIR/before-desktop.XXXXXX.png"` (or `.gif`), then stop the server and remove the worktree:
 
 ```sh
 (
   set -eu
-  before_root=$(mktemp -d /tmp/pr-before.XXXXXX)
+  before_root=$(mktemp -d "$TMPDIR/pr-before.XXXXXX")
   trap 'git worktree remove --force "$before_root/worktree"; rmdir "$before_root"' EXIT
   git worktree add --detach "$before_root/worktree" main
-  # Build and serve "$before_root/worktree"; save Before with mktemp /tmp/before-desktop.XXXXXX.png at After's viewport and state.
+  # Build and serve "$before_root/worktree"; save Before with mktemp "$TMPDIR/before-desktop.XXXXXX.png" at After's viewport and state.
   # Stop that server before this subshell exits and removes the worktree.
 )
 ```
@@ -197,7 +197,7 @@ Host PR-evidence media in a **secret git-pushed Gist**, keeping repository branc
 ```sh
 (
   set -eu
-  evidence_root=$(mktemp -d /tmp/pr-evidence.XXXXXX)
+  evidence_root=$(mktemp -d -t pr-evidence.XXXXXX)
   trap 'rm -rf "$evidence_root"' EXIT
   printf '%s\n' 'Before and After PR evidence' > "$evidence_root/README.md"
   # gh gist create defaults to secret visibility.
