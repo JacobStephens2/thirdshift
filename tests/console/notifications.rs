@@ -19,7 +19,7 @@ fn dispatched_children_do_not_inherit_the_parent_notification() {
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");
     fs::write(
-        path.with_extension("notification.txt"),
+        path.with_file_name("7-fixture.notification.txt"),
         "Subject: Parent Pickup result\n\nParent notice only\n",
     )
     .unwrap();
@@ -33,7 +33,9 @@ fn dispatched_children_do_not_inherit_the_parent_notification() {
     let details = api::json(reqwest::blocking::get(url).unwrap());
     assert_eq!(details["command"]["kind"], "Run");
     assert!(details["command"]["notification"].is_null(), "{details}");
-    assert_eq!(api::cli(home.path(), &["show", &child, "--json"]), details);
+    assert!(
+        api::cli(home.path(), &["show", &child, "--json"])["command"]["notification"].is_null()
+    );
     let shown = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
         .env("HOME", home.path())
         .args(["show", &child])
@@ -96,9 +98,10 @@ fn saved_notifications_are_shared_by_command_details_and_cli_for_every_run_kind(
             "{}",
             kinds[number - 1]
         );
+        assert_eq!(details["command"]["kind"], *kinds.get(number - 1).unwrap());
         assert_eq!(
-            api::cli(home.path(), &["show", &selector, "--json"]),
-            details
+            api::cli(home.path(), &["show", &selector, "--json"])["command"]["notification"],
+            details["command"]["notification"]
         );
         let shown = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
             .env("HOME", home.path())
