@@ -562,6 +562,10 @@ fn finish(
 ) -> Result<Prepared> {
     let bwrap = resolve_binary("bwrap")?;
     let socat = resolve_binary("socat")?;
+    if let Some(tmp) = crate::scratch::sandbox_temp()? {
+        binds.read_write(&tmp, &tmp);
+        environment.set("TMPDIR", &tmp);
+    }
     let proxy = proxy::start(allowed).map_err(|error| {
         anyhow::Error::new(Unavailable {
             diagnostic: format!("{error:#}"),

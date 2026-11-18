@@ -396,7 +396,7 @@ How long a stage usually takes in a repository: the middle half of that stage's 
 _Avoid_: average, baseline, estimate
 
 **Dismissal**:
-A person's judgment, from the CLI or the **Console**, that a row in **Needs you** or Ready for review asks nothing more of the **Day shift**. The row leaves that group, with every **Command** it stands for, and nothing else changes: a live Command keeps running, and its issue, its labels and its pull request stay as they are. It holds until the row turns into a kind it wasn't when dismissed, such as a **Slow** Ticket run that then dies, or until someone takes it back. The **Activity log** records who made it, and who took it back.
+A person's judgment, from the CLI or the **Console**, that a row in **Needs you** or Ready for review asks nothing more of the **Day shift**. The row leaves that group, with every **Command** it stands for, and retained scratch from an ended Command is removed; a live Command keeps running, and its issue, its labels and its pull request stay as they are. It holds until the row turns into a kind it wasn't when dismissed, such as a **Slow** Ticket run that then dies, or until someone takes it back. The **Activity log** records who made it, and who took it back.
 _Avoid_: acknowledgement, archive, snooze, mute, hide
 
 **Theme**:

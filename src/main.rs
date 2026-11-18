@@ -120,6 +120,8 @@ mod scope;
 #[cfg(target_os = "linux")]
 mod scoring;
 #[cfg(target_os = "linux")]
+mod scratch;
+#[cfg(target_os = "linux")]
 mod security;
 #[cfg(target_os = "linux")]
 mod session;
@@ -254,6 +256,7 @@ fn main() -> ExitCode {
     if let Some(result) = setup::sandbox::child(&args) {
         return result;
     }
+    let _scratch = scratch::Guard;
     let RunArgs {
         issue,
         flags,

@@ -8,6 +8,26 @@ pub(super) fn declarations(fixture: &Fixture, text: &str) {
     fs::write(path, format!("{text}\n{manifest}")).unwrap();
 }
 
+#[test]
+fn custom_runner_uses_command_scratch_without_the_sandbox() {
+    let fixture = process::fixture();
+    let scratch = fixture.scenario.path("home/.thirdshift/scratch");
+    runner(
+        &fixture,
+        &format!(
+            "import tempfile\nassert pathlib.Path(os.environ['TMPDIR']).is_relative_to({scratch:?})\nassert pathlib.Path(tempfile.mkstemp()[1]).is_relative_to({scratch:?})\n{DELIVER}\n",
+            scratch = scratch.to_str().unwrap()
+        ),
+    );
+    let result = run(&fixture, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+    }
+    assert_eq!(fs::read_dir(scratch).unwrap().count(), 0);
+}
+
 /// The Custom runner sandbox needs bwrap namespaces and socat for its proxy
 /// relay. Hosts without either skip, rather than fail with
 /// `sandbox_unavailable`.

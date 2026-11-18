@@ -1155,7 +1155,7 @@ When a Harness session ends normally, fails or is stopped, thirdshift stops its 
 
 On Linux without a user manager, cleanup is best effort: each session carries a unique `THIRDSHIFT_SESSION` environment marker, and thirdshift finds processes belonging to the same OS user with that exact marker. It sends SIGTERM, waits the existing ten-second grace period, then sends SIGKILL to survivors. A process that clears its environment can escape this fallback. Parallel sessions have different markers and scopes. Cleanup logs a count when it kills survivors; a sweep failure logs a warning and leaves the Command's outcome unchanged. This cleans up work from the current session, not processes older versions already leaked.
 
-File cleanup removes thirdshift's own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Other files an agent creates as your user stay. For example, one Ticket run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
+File cleanup removes thirdshift's own worktree, local Issue branch and Command scratch, including the extracted Factory skills and session `mktemp` files. Paused Commands and failures with Recovery retain scratch until successful continuation or Dismissal; see [Logs](#logs). The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Files an agent creates outside Command scratch, such as a downloaded JDK in `~/.local/jdk/`, stay:
 
 - **Install the target repository's toolchains up front** (language runtimes, package managers, test tools), so the agents don't download their own on every Ticket run.
 - **For UI work, install the headless browser dependencies**, e.g. `libgbm1` on Ubuntu server, which headless Chromium needs. Without it, agents can't take screenshots to check a UI change and fall back to reading the code.
@@ -3310,6 +3310,28 @@ Console.
 
 ### Logs
 
+Each Command owns a private directory under `~/.thirdshift/scratch/`. All its
+sessions and child Ticket runs use a `TMPDIR` inside it, and its Factory skills
+are extracted there too. Sessions use `mktemp`; explicit temporary path templates
+use `$TMPDIR`. Sandboxed sessions each see only their own temporary subdirectory.
+Command logs, Session traces and recorded artifacts stay in their documented
+locations rather than disposable scratch.
+
+Normal completion and interruption remove scratch. A Paused Command or a failed
+Command with a Recovery command keeps it for inspection, including after an
+interruption that leaves Recovery. A successful continuation or Dismissal removes
+the retained directory; unrelated Commands leave it alone. Undoing a Dismissal
+cannot restore deleted scratch files.
+
+At startup, each Command removes orphaned scratch only on the owning host's
+proof that its process is gone, using the same process clocks as reservation
+recovery. Live owners, other hosts and uncertain process probes are kept.
+Startup also removes legacy `thirdshift-skills-*` directories in the system
+temporary directory older than two days, only when owned by the current user
+and containing only known Factory skill paths and `LICENSE`, without symlinks
+or extra user files. Removals are logged. Repository `.agents/skills` and files
+sessions write outside their scratch directory are outside this cleanup.
+
 Export a Command's whole **Trace** for another tool with:
 
 ```sh
@@ -4418,7 +4440,7 @@ When triaging an existing issue labelled `security-finding`, the Run notificatio
 
 The Command record, Activity log, `status` and Run notification name it a **Triage run**. A Report or explicitly named issue always takes a Command slot, even above the Command limit; unattended Triage Passes honour that limit. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
-Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
+Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes the throwaway worktree and a private Command scratch subdirectory writable. Scratch files and a private Harness home stay in that subdirectory. The home holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
 
 ## Scoring runs
 
@@ -4592,7 +4614,7 @@ more than 1,000 closures in one second fail visibly without advancing the window
 Your operating system can schedule it weekly, for example:
 
 ```cron
-0 3 * * 1 /usr/local/bin/thirdshift score >> /tmp/thirdshift-cron.log 2>&1
+0 3 * * 1 /usr/local/bin/thirdshift score >> ~/.thirdshift/cron.log 2>&1
 ```
 
 ## Building from source

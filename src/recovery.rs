@@ -202,6 +202,14 @@ impl Recovery {
     }
 
     /// Literal lines shared by terminal, Activity and Run notification output.
+    /// The safe continuation or retry offered by this Recovery, if any.
+    pub(crate) fn command(&self) -> Option<&str> {
+        self.continuation
+            .as_ref()
+            .filter(|_| !self.spec_pr_changed)
+            .map(|context| context.command.as_str())
+    }
+
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!("{STOPPED}{}", self.stage.name())];
         if let Some((TicketProgress { landed, total }, reviewed)) = self.tickets {
