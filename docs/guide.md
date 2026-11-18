@@ -4267,7 +4267,7 @@ thirdshift: 03:00:02 #19 labelled in-progress
 thirdshift: 03:00:03 #21 is a Ticket of #20, which is not ready
 thirdshift: 03:00:03 #26 labelled base-fix
 thirdshift: 03:00:04 #30 blocked by #29
-thirdshift: 03:00:05 #31 started: issue-31 is on origin; no ready-for-agent hand-back after the last Claim ended
+thirdshift: 03:00:05 #31 started: issue-31 is on origin and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/31 to continue it
 thirdshift: 03:00:06 #32 started: PR https://github.com/acme/widgets/pull/37; no ready-for-agent hand-back after the last Claim ended
 thirdshift: 03:00:06 #33 every Ticket is closed
 thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 5 minutes ago
@@ -4277,7 +4277,7 @@ thirdshift: 03:00:09 #38 has no Ticket that can start: #39 labelled needs-info; 
 thirdshift: 03:00:09 no Ready issue on acme/widgets
 ```
 
-A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed` unless its latest Spec branch on `origin` can be continued, with no PR or an open PR. A Spec whose later Ticket read is empty is still passed over. One with open Tickets but no Startable Ticket gets `has no Ticket that can start`, naming each open Ticket and why it can't start: the Unready label it has, the open issues blocking it, `has sub-issues` or `outside the Spec's repository`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. When thirdshift never Claimed it, the line names the Issue URL command that can continue it; rerunning Pickup still passes it over. If Pickup encounters a local Issue branch conflict before making its first Claim, its preservation advice names that same command to run after publishing the branch and freeing its checkout. Work whose Claim ended without a hand-back keeps the `no ready-for-agent hand-back after the last Claim ended` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed` unless its latest Spec branch on `origin` can be continued, with no PR or an open PR. A Spec whose later Ticket read is empty is still passed over. One with open Tickets but no Startable Ticket gets `has no Ticket that can start`, naming each open Ticket and why it can't start: the Unready label it has, the open issues blocking it, `has sub-issues` or `outside the Spec's repository`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
 thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400

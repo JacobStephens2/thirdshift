@@ -257,7 +257,10 @@ enum Reason {
     /// It is blocked by these open issues.
     Blocked(Vec<u64>),
     /// It was started, as this shows, without a recorded hand-back.
-    Started(Started),
+    Started {
+        evidence: Started,
+        never_claimed: bool,
+    },
     /// It is a Spec whose Tickets are all closed: the Spec run it would be
     /// dispatched as refuses it, having nothing to do.
     TicketsClosed,
@@ -417,14 +420,24 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                     .collect();
                 format!("blocked by {}", blockers.join(", "))
             }
-            Reason::Started(started) => {
-                let evidence = match started {
+            Reason::Started {
+                evidence,
+                never_claimed,
+            } => {
+                let evidence = match evidence {
                     Started::Branch(branch) => format!("{branch} is on origin"),
                     Started::PullRequest(url) => format!("PR {url}"),
                 };
-                format!(
-                    "started: {evidence}; no ready-for-agent hand-back after the last Claim ended"
-                )
+                if *never_claimed {
+                    let url = &self.candidates[at].issue.url;
+                    format!(
+                        "started: {evidence} and thirdshift never claimed it; run thirdshift {url} to continue it"
+                    )
+                } else {
+                    format!(
+                        "started: {evidence}; no ready-for-agent hand-back after the last Claim ended"
+                    )
+                }
             }
             Reason::TicketsClosed => "every Ticket is closed".to_string(),
             Reason::NoStartableTicket(tickets) => {
@@ -539,7 +552,10 @@ fn standing_of(
     if let Some(started) = reads.started(&candidate.issue)?
         && !read.handed_back
     {
-        return passed_over(Reason::Started(started));
+        return passed_over(Reason::Started {
+            evidence: started,
+            never_claimed: read.claim_generation == 0,
+        });
     }
     if read.claimed {
         return passed_over(Reason::Claimed);
@@ -625,6 +641,8 @@ mod tests {
         last_shaped: Option<Shaped>,
         /// Label history establishes hand-back after the last Claim ended.
         handed_back: bool,
+        /// The number of Claim applications in the label history.
+        claim_generation: usize,
         /// What shows it was started, if it was.
         started: Option<Started>,
         /// Its Tickets as a Spec run reads them, if they are not each a
@@ -657,7 +675,7 @@ mod tests {
                 .push(Seen::CandidateRead(issue.number));
             let facts = self.facts(issue);
             Ok(Candidate {
-                claim_generation: 0,
+                claim_generation: facts.map_or(0, |facts| facts.claim_generation),
                 claimed: false,
                 parent: facts.and_then(|facts| facts.parent.clone()),
                 sub_issue_is_open: facts
@@ -1002,16 +1020,16 @@ mod tests {
     }
 
     #[test]
-    fn a_never_claimed_started_issue_explains_the_missing_hand_back() {
+    fn a_never_claimed_started_issue_names_the_issue_url_command() {
         let pr = "https://github.com/acme/widgets/pull/12";
         for (started, said) in [
             (
                 Started::Branch("issue-7-branch-2".to_string()),
-                "#7 started: issue-7-branch-2 is on origin; no ready-for-agent hand-back after the last Claim ended".to_string(),
+                "#7 started: issue-7-branch-2 is on origin and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it".to_string(),
             ),
             (
                 Started::PullRequest(pr.to_string()),
-                format!("#7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended"),
+                format!("#7 started: PR {pr} and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it"),
             ),
         ] {
             let facts = Facts {
@@ -1024,6 +1042,24 @@ mod tests {
             let [candidate, started] = every_read(7);
             assert_eq!(seen, [candidate, started, passed_over(&said)]);
         }
+    }
+
+    #[test]
+    fn a_released_started_issue_still_explains_the_missing_hand_back() {
+        let facts = Facts {
+            started: Some(Started::Branch("issue-7".to_string())),
+            claim_generation: 1,
+            ..Facts::default()
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, facts)]);
+
+        assert_eq!(ready, None);
+        assert_eq!(
+            seen.last(),
+            Some(&passed_over(
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended"
+            ))
+        );
     }
 
     #[test]
@@ -1107,6 +1143,7 @@ mod tests {
             let facts = Facts {
                 started: Some(Started::Branch("issue-7".to_string())),
                 handed_back: true,
+                claim_generation: 1,
                 parent,
                 open_blockers: blockers,
                 sub_issue_is_open: tickets,
@@ -1126,6 +1163,7 @@ mod tests {
     fn a_spec_whose_tickets_are_all_closed_is_passed_over_unless_it_was_started() {
         let spec = |started: Option<Started>| Facts {
             sub_issue_is_open: vec![false, false],
+            claim_generation: 1,
             started,
             ..Facts::default()
         };
@@ -1354,6 +1392,7 @@ mod tests {
         // apply with nothing started, so not settled has a row of its own,
         // and no startable Ticket the last, once #7 has settled.
         let facts = |parent: bool, blocked: bool, started: bool, closed: bool| Facts {
+            claim_generation: 1,
             parent: parent.then(|| url(3)),
             sub_issue_is_open: vec![!closed],
             open_blockers: if blocked { vec![5] } else { vec![] },
@@ -1424,6 +1463,7 @@ mod tests {
     #[test]
     fn each_line_comes_as_its_issue_is_passed_over_and_the_search_stops_at_the_first_ready_issue() {
         let started = Facts {
+            claim_generation: 1,
             started: Some(Started::Branch("issue-7".to_string())),
             ..Facts::default()
         };
@@ -1470,6 +1510,7 @@ mod tests {
     #[test]
     fn highest_first_takes_the_highest_ready_issue_passing_over_downward() {
         let started = Facts {
+            claim_generation: 1,
             started: Some(Started::Branch("issue-71".to_string())),
             ..Facts::default()
         };

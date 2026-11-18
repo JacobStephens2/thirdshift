@@ -139,6 +139,8 @@ pub enum StartedBy<'a> {
     Pickup {
         base: &'a str,
         skip_authors: &'a crate::skip_authors::SkipAuthors,
+        /// The Claim count observed when Pickup refreshed its Ready issue.
+        claim_generation: usize,
     },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
     /// a Base fix: the Base branch is the one the child Run was given.
@@ -252,6 +254,16 @@ fn run(
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);
     let mut outside = LaunchAndGitHub {
+        retry: match started_by {
+            StartedBy::Pickup {
+                claim_generation: 0,
+                ..
+            } => crate::worktree::Retry::IssueUrl(issue),
+            StartedBy::Pickup { .. }
+            | StartedBy::Command
+            | StartedBy::Dispatch { .. }
+            | StartedBy::Child(_) => crate::worktree::Retry::OriginalCommand,
+        },
         skip_authors: match started_by {
             StartedBy::Pickup { skip_authors, .. } => skip_authors,
             StartedBy::Command | StartedBy::Dispatch { .. } | StartedBy::Child(_) => {
@@ -504,6 +516,7 @@ trait Outside {
 /// Session `logs`, its sessions on the Harness in `child_asks`, which it
 /// hands on to every child Run.
 struct LaunchAndGitHub<'a> {
+    retry: crate::worktree::Retry<'a>,
     skip_authors: &'a crate::skip_authors::SkipAuthors,
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
@@ -593,7 +606,8 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn select(&mut self) -> Result<Selection> {
-        let selection = branch::select(self.directory.git(), &GitHub::new(), self.issue)?;
+        let selection =
+            branch::select(self.directory.git(), &GitHub::new(), self.issue, self.retry)?;
         self.issue_branch = Some(selection.branch().into());
         logs::issue_branch(Some(selection.branch()));
         Ok(selection)

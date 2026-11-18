@@ -265,7 +265,9 @@ fn run_through<R>(
     // One refused is released before the next issue is tried.
     let (
         ReadyIssue {
-            listed, is_spec, ..
+            listed,
+            is_spec,
+            claim_generation,
         },
         _reservation,
     ) = loop {
@@ -297,6 +299,7 @@ fn run_through<R>(
         issue: &listed.issue,
         is_spec,
         base,
+        claim_generation,
     });
     Ok(Outcome::Took(Took {
         issue: listed.issue,
