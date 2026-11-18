@@ -235,6 +235,7 @@ mod linux {
                 TerminalStep::line("Run notifications, an email", "n"),
                 TerminalStep::line("Claude setup token", ""),
                 TerminalStep::line("Run the Console?", "n"),
+                TerminalStep::line("Install or upgrade Visual evidence tools now? [y/N]", "n"),
             ]);
         }
         let result = scenario.run_terminal_bounded(
