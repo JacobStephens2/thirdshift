@@ -145,6 +145,15 @@ fn hostname(console: &Console) -> String {
         .to_owned()
 }
 
+fn harness_summary(page: &str) -> &str {
+    page.split("aria-labelledby=\"plan-usage-summary\"")
+        .nth(1)
+        .expect("By Harness summary")
+        .split("</section>")
+        .next()
+        .unwrap()
+}
+
 #[test]
 fn inbox_plan_usage_deadlines_use_local_minutes_and_escape_window_names() {
     let scenario = support::Scenario::new();
@@ -275,6 +284,27 @@ fn plan_usage_page_and_api_answer_as_the_cli_and_the_header_warns_of_limited_rou
         );
     }
     let page = console.get("/plan-usage").text().unwrap();
+    let summary = harness_summary(&page);
+    let mut previous = 0;
+    for harness in ["claude", "codex", "muse", "agy", "grok"] {
+        let position = summary
+            .find(&format!("data-harness=\"{harness}\""))
+            .unwrap();
+        assert!(position > previous, "subscription order: {summary}");
+        previous = position;
+    }
+    assert!(summary.contains("90% used"), "{summary}");
+    assert!(summary.contains("Routes limited"), "{summary}");
+    assert!(summary.contains("Cooldown until"), "{summary}");
+    assert!(!summary.contains(&host), "{summary}");
+    // The summary is an HTML projection; the API keeps its CLI contract.
+    assert!(local.get("summary").is_none(), "{local:#}");
+    parity(
+        &console,
+        home.path(),
+        "/api/v1/plan-usage",
+        &["plan-usage", "--json"],
+    );
     assert!(page.contains("thirdshift plan-usage --machine"), "{page}");
     assert!(
         page.contains("harness.routes 1, ceiling 85%: in cooldown"),
@@ -358,6 +388,115 @@ fn claude(hours: i64, used: f64) -> Value {
     json!({"observed_at": rfc3339(-hours), "source": "session",
         "account": {"signed_in": true, "label": "me@example.test", "organization": "org-1"},
         "windows": [{"name": "five_hour", "used_percent": used, "resets_at": rfc3339(3)}]})
+}
+
+#[test]
+fn harness_summary_keeps_identities_restrictions_and_freshest_unidentified_state_in_scope() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure_with(
+        local_home.path(),
+        "[harness]\ndefault = \"agy\"\nmax_utilization = 85\n",
+    );
+    configure(remote_home.path());
+    installed(local_home.path());
+    let observed = rfc3339(-2);
+    saved(
+        local_home.path(),
+        json!({
+            "claude": claude(2, 10.0),
+            "agy": {"observed_at": observed, "read_at": rfc3339(-1),
+                "windows": [{"name": "weekly", "used_percent": 90.0}]},
+            "grok": {"observed_at": observed,
+                "ordinary_usage_allowed": false, "spend_control_reached": true,
+                "cooldown": {"since": observed, "until": rfc3339(1)},
+                "windows": [
+                    {"name": "expired <window>", "used_percent": 99.0, "resets_at": rfc3339(-1)},
+                    {"name": "unknown"},
+                    {"name": "monthly", "used_percent": 42.0, "resets_at": rfc3339(24)}]}
+        }),
+    );
+    let mut other = claude(0, 70.0);
+    other["account"]["organization"] = json!("org-2");
+    other["account"]["label"] = json!("other <account>");
+    saved(
+        remote_home.path(),
+        json!({
+            "claude": other,
+            "agy": {"observed_at": observed, "read_at": rfc3339(0),
+                "windows": [{"name": "weekly", "used_percent": 33.0}]}
+        }),
+    );
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let local = Console::start(binary, local_home.path());
+    let remote = Console::start(binary, remote_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    assert!(
+        super::fleet::add(local_home.path(), "remote", &remote.address, &token)
+            .status
+            .success()
+    );
+
+    let html = local.get("/plan-usage").text().unwrap();
+    let summary = harness_summary(&html);
+    for text in [
+        "organization org-1 · me@example.test",
+        "organization org-2 · other &#60;account&#62;",
+        "10% used",
+        "70% used",
+        "33% used",
+        "42% used",
+        "expired &#60;window&#62;",
+        "reset since observed",
+        "utilization not reported",
+        "Cooldown until",
+        "Included usage not allowed",
+        "Spend control reached",
+        "Observed",
+        "2 hours ago",
+        "resets <time",
+    ] {
+        assert!(summary.contains(text), "missing {text}: {summary}");
+    }
+    assert!(
+        !summary.contains("90% used"),
+        "freshest read wins: {summary}"
+    );
+    assert!(
+        !summary.contains("99% used"),
+        "expired utilization: {summary}"
+    );
+    let agy = summary
+        .split("data-harness=\"agy\"")
+        .nth(1)
+        .unwrap()
+        .split("</li>")
+        .next()
+        .unwrap();
+    assert!(
+        agy.contains("Routes limited"),
+        "includes the older Login's limited route: {agy}"
+    );
+    assert!(!summary.contains(&hostname(&local)), "{summary}");
+    assert!(!summary.contains("remote"), "{summary}");
+
+    let html = local.get("/plan-usage?local=true").text().unwrap();
+    let summary = harness_summary(&html);
+    assert!(summary.contains("90% used"), "local scope: {summary}");
+    assert!(
+        !summary.contains("33% used") && !summary.contains("org-2"),
+        "local scope: {summary}"
+    );
+    let html = local.get("/plan-usage?machine=remote").text().unwrap();
+    let summary = harness_summary(&html);
+    assert!(
+        summary.contains("33% used") && summary.contains("org-2"),
+        "remote scope: {summary}"
+    );
+    assert!(
+        !summary.contains("org-1") && !summary.contains("Routes limited"),
+        "remote scope: {summary}"
+    );
 }
 
 #[test]
