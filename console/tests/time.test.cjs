@@ -177,6 +177,53 @@ test('a live Lanes push preserves an unsubmitted hours selection', async t => {
   } finally { await replaceRecord(path, before); }
 });
 
+test('Lanes and Stages show cached PR titles and links on desktop and phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/3-fixture.command.json');
+  const cachePath = join(home, '.thirdshift/logs/github-inbox.json');
+  const original = await readFile(path, 'utf8');
+  const originalCache = await readFile(cachePath, 'utf8').catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  t.after(async () => {
+    await replaceRecord(path, original);
+    if (originalCache === null) await rm(cachePath, { force: true });
+    else await writeFile(cachePath, originalCache);
+  });
+  const record = JSON.parse(original);
+  record.name = 'acme/widgets#3';
+  record.issue.title = null;
+  record.pull_request = 'https://github.com/acme/widgets/pull/103';
+  const title = 'Retain descriptive pull-request titles <script>unsafe()</script> & issue links';
+  const facts = { state: 'Open', title, merged_at: null, closed_at: null };
+  await writeFile(cachePath, JSON.stringify({ version: 2,
+    subjects: { [record.pull_request]: facts },
+    history: { [`${path}::${record.name}`]: facts }
+  }));
+  await replaceRecord(path, JSON.stringify(record));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      for (const view of ['lanes', 'stages']) {
+        await page.goto(`${origin}/?page=${view}`);
+        const run = page.locator(view === 'lanes' ? '.time-run' : 'thead .command')
+          .filter({ has: page.getByRole('link', { name: 'Ticket run · acme/widgets#3', exact: true }) });
+        const link = run.getByRole('link', { name: title, exact: true });
+        assert.ok((await run.textContent()).includes(title), await run.innerHTML());
+        await link.waitFor();
+        assert.equal(await link.getAttribute('href'), record.pull_request);
+        assert.equal(await run.getByRole('link', { name: 'Issue #3', exact: true }).count(), 1);
+        assert.equal(await run.locator('script').count(), 0);
+        if (view === 'lanes') assert.equal(await run.locator(':scope > p').first().textContent(), title);
+        else assert.equal(await run.getByText('acme/widgets#3', { exact: true }).count(), 0);
+        await link.scrollIntoViewIfNeeded();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      }
+    } finally { await context.close(); }
+  }
+});
+
 test('time headings distinguish a live Pickup run and its Run and name kinds once at 390 px', { skip: process.platform !== 'linux' }, async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());

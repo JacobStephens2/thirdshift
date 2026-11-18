@@ -1106,6 +1106,72 @@ fn an_issue_that_also_has_a_label_that_makes_an_unready_ticket_is_not_taken() {
 }
 
 #[test]
+fn pickup_preflight_advice_uses_the_issue_url_only_before_the_first_claim() {
+    for is_spec in [false, true] {
+        for never_claimed in [false, true] {
+            let scenario = Scenario::new();
+            ready_issue(&scenario, 7, &[]);
+            if is_spec {
+                scenario.spec_has_tickets(7, &[(8, &[])]);
+            }
+            if !never_claimed {
+                hand_back_spec(&scenario);
+            }
+            let path = scenario.path("manual-checkout");
+            scenario.launch_git(&[
+                "worktree",
+                "add",
+                "-b",
+                "issue-7",
+                path.to_str().unwrap(),
+                "main",
+            ]);
+            let head = scenario.launch_git(&["rev-parse", "issue-7"]);
+            let registrations = scenario.launch_git(&["worktree", "list", "--porcelain"]);
+
+            let result = scenario.run(&["pickup"]);
+
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(
+                result
+                    .stderr
+                    .contains("the local branch issue-7 is not on origin"),
+                "{}",
+                result.stderr
+            );
+            assert!(
+                result.stderr.contains("Occupied checkout"),
+                "{}",
+                result.stderr
+            );
+            let original = "rerun the original thirdshift command";
+            let explicit = "run thirdshift https://github.com/acme/widgets/issues/7 from the Launch directory on the Base branch";
+            assert!(
+                result
+                    .stderr
+                    .contains(if never_claimed { explicit } else { original }),
+                "{}",
+                result.stderr
+            );
+            assert!(
+                !result
+                    .stderr
+                    .contains(if never_claimed { original } else { explicit }),
+                "{}",
+                result.stderr
+            );
+            assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+            assert!(scenario.claude_calls().is_empty());
+            assert_eq!(scenario.launch_git(&["rev-parse", "issue-7"]), head);
+            assert_eq!(
+                scenario.launch_git(&["worktree", "list", "--porcelain"]),
+                registrations
+            );
+        }
+    }
+}
+
+#[test]
 fn an_issue_with_an_issue_branch_on_origin_is_not_taken() {
     for branch in ["issue-7", "issue-7-branch-2"] {
         let scenario = Scenario::new();
@@ -1115,7 +1181,7 @@ fn an_issue_with_an_issue_branch_on_origin_is_not_taken() {
         let result = scenario.run(&["pickup"]);
 
         let line = format!(
-            "#7 started: {branch} is on origin; no ready-for-agent hand-back after the last Claim ended"
+            "#7 started: {branch} is on origin and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it"
         );
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{branch}");
@@ -1131,8 +1197,9 @@ fn an_issue_with_a_pull_request_from_an_issue_branch_in_any_state_is_not_taken()
 
         let result = scenario.run(&["pickup"]);
 
-        let line =
-            format!("#7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended");
+        let line = format!(
+            "#7 started: PR {pr} and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it"
+        );
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{state}");
     }
@@ -1156,7 +1223,7 @@ fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_take
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-70"), "ready for review");
     let url = scenario.issue_url(70);
     let lines = format!(
-        "thirdshift: #7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended\n\
+        "thirdshift: #7 started: PR {pr} and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it\n\
          thirdshift: #8 labelled wontfix\n\
          thirdshift: #9 labelled in-progress\n\
          thirdshift: taking Ready issue #70 \"Issue 70\", as thirdshift {url} would\n"
@@ -1471,7 +1538,7 @@ fn an_all_closed_spec_still_requires_a_resumable_latest_branch_and_a_hand_back()
         let result = scenario.run(&["pickup"]);
 
         let reason = if case == "no hand-back" {
-            "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended"
+            "#7 started: issue-7 is on origin and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it"
         } else {
             EVERY_TICKET_CLOSED
         };
@@ -3858,6 +3925,7 @@ fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
         vec![claim, end, ready, Off(READY_FOR_AGENT)],
     ];
     for history in histories {
+        let never_claimed = !history.iter().any(|event| matches!(event, On(IN_PROGRESS)));
         let scenario = Scenario::new();
         ready_issue(&scenario, 7, &[]);
         scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
@@ -3875,9 +3943,11 @@ fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
         assert_skipped(
             &scenario,
             &result,
-            &no_ready_issue_after(&[
-                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
-            ]),
+            &no_ready_issue_after(&[if never_claimed {
+                "#7 started: issue-7 is on origin and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/7 to continue it"
+            } else {
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended"
+            }]),
         );
     }
 }

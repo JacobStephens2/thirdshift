@@ -134,6 +134,8 @@ including its subject and full body, locally or across the Fleet. The same text
 is available with `thirdshift show <command>` and in its JSON/API view, whether
 or not email is enabled. Security notifications require the `security` scope.
 
+Lanes and Stages show each run's recorded issue title, falling back to its pull-request title from the kept GitHub answer (or its recorded PR title). With neither title, a Custom process keeps its Process label; other runs show `(title unavailable)`. A recorded pull request links to GitHub beside the issue link, labelled with its title when available or `PR #N` otherwise.
+
 ### Other local accounts
 
 By default, the Console and `thirdshift status` show only the serving OS account's Commands. Set `other_accounts = "readable"` under `[console]` in the User config to include other local accounts whose logs can be read, or use `other_accounts = ["conductor", "operator"]` to consider only named accounts. `"none"` is the default.
@@ -2129,7 +2131,7 @@ The Fleet view shows each subscription login once. Machines whose `claude` repor
 
 `--clear [<harness>]` forgets the cooldowns and revalidation backoff recorded on this machine, for one subscription Harness or all, so the next factory session tries those routes again. It acts on this machine only; clear another machine's on that machine or its Console.
 
-The Console's **Plan usage** page (`/plan-usage`, `g` then `p`) shows the same view, the Fleet by default, with a Machine selector for **Fleet**, **This machine** or one machine, and a **Clear cooldowns** form for viewers with `act`. Every Console page's header shows **Plan usage · N routes limited** beside the host admission status, linking to the page, while any route this machine's User config names is in cooldown or at or above its `max_utilization`; its title lists those routes. The header reads only what is saved and runs no non-billed read. **Resources** stays this host's memory, load and disk alone.
+The Console's **Plan usage** page (`/plan-usage`, `g` then `p`) opens with a compact **By Harness** summary of all five subscription Harnesses above the machine details. It shows Plan windows, reset times, active cooldowns, included-usage and spend restrictions, limited routes and observation ages, without machine names. Different account identities keep separate sub-rows; unidentified Logins, including `agy` and `grok`, show their freshest observation. The Machine selector scopes both the summary and the details to **Fleet** (the default), **This machine** or one machine. The full Login and machine sections follow, with a **Clear cooldowns** form for viewers with `act`. Every Console page's header shows **Plan usage · N routes limited** beside the host admission status, linking to the page, while any route this machine's User config names is in cooldown or at or above its `max_utilization`; its title lists those routes. The header reads only what is saved and runs no non-billed read. **Resources** stays this host's memory, load and disk alone.
 
 #### Routing by Plan usage
 
@@ -4282,7 +4284,7 @@ thirdshift: 03:00:02 #19 labelled in-progress
 thirdshift: 03:00:03 #21 is a Ticket of #20, which is not ready
 thirdshift: 03:00:03 #26 labelled base-fix
 thirdshift: 03:00:04 #30 blocked by #29
-thirdshift: 03:00:05 #31 started: issue-31 is on origin; no ready-for-agent hand-back after the last Claim ended
+thirdshift: 03:00:05 #31 started: issue-31 is on origin and thirdshift never claimed it; run thirdshift https://github.com/acme/widgets/issues/31 to continue it
 thirdshift: 03:00:06 #32 started: PR https://github.com/acme/widgets/pull/37; no ready-for-agent hand-back after the last Claim ended
 thirdshift: 03:00:06 #33 every Ticket is closed
 thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 5 minutes ago
@@ -4292,7 +4294,7 @@ thirdshift: 03:00:09 #38 has no Ticket that can start: #39 labelled needs-info; 
 thirdshift: 03:00:09 no Ready issue on acme/widgets
 ```
 
-A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed` unless its latest Spec branch on `origin` can be continued, with no PR or an open PR. A Spec whose later Ticket read is empty is still passed over. One with open Tickets but no Startable Ticket gets `has no Ticket that can start`, naming each open Ticket and why it can't start: the Unready label it has, the open issues blocking it, `has sub-issues` or `outside the Spec's repository`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. When thirdshift never Claimed it, the line names the Issue URL command that can continue it; rerunning Pickup still passes it over. If Pickup encounters a local Issue branch conflict before making its first Claim, its preservation advice names that same command to run after publishing the branch and freeing its checkout. Work whose Claim ended without a hand-back keeps the `no ready-for-agent hand-back after the last Claim ended` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed` unless its latest Spec branch on `origin` can be continued, with no PR or an open PR. A Spec whose later Ticket read is empty is still passed over. One with open Tickets but no Startable Ticket gets `has no Ticket that can start`, naming each open Ticket and why it can't start: the Unready label it has, the open issues blocking it, `has sub-issues` or `outside the Spec's repository`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
 thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400

@@ -16,7 +16,7 @@ use crate::progress;
 
 mod acquisition;
 mod advice;
-pub(crate) use advice::local_branch_advice;
+pub(crate) use advice::{Retry, local_branch_advice};
 #[cfg(test)]
 mod acquisition_tests;
 #[cfg(test)]
@@ -189,7 +189,7 @@ impl Worktree {
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;
         check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)
-            .map_err(|error| local_branch_advice(launch, error))?;
+            .map_err(|error| local_branch_advice(launch, error, Retry::OriginalCommand))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -212,7 +212,7 @@ impl Worktree {
         let origin = fetched_origin(branch, |args| launch.run(args))?;
         let local = local_head(launch, branch)?;
         check_local_branch(branch, local.as_deref(), Some(&origin.commit))
-            .map_err(|error| local_branch_advice(launch, error))?;
+            .map_err(|error| local_branch_advice(launch, error, Retry::OriginalCommand))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 

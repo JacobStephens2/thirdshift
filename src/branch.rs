@@ -68,9 +68,14 @@ impl Selection {
 /// early if Worktree's advisory preflight refuses the sampled local head,
 /// before the Run makes its Claim. Worktree independently checks again
 /// during acquisition and owns normal cleanup of the acquired branch.
-pub fn select(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Selection> {
+pub fn select(
+    launch: &Git,
+    github: &GitHub,
+    issue: &IssueUrl,
+    retry: worktree::Retry<'_>,
+) -> Result<Selection> {
     select_through(&GitHubAndOrigin { launch, github }, issue)
-        .map_err(|error| worktree::local_branch_advice(launch, error))
+        .map_err(|error| worktree::local_branch_advice(launch, error, retry))
 }
 
 /// What shows an issue was started.

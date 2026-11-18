@@ -54,7 +54,9 @@ pub(super) fn inspect_review(launch: &Git, branch: &str, start: &str) -> Result<
             });
     }
     super::check_local_branch(branch, local_head(launch, branch)?.as_deref(), Some(start))
-        .map_err(|error| super::local_branch_advice(launch, error))?;
+        .map_err(|error| {
+            super::local_branch_advice(launch, error, super::Retry::OriginalCommand)
+        })?;
     Ok(None)
 }
 
@@ -164,8 +166,9 @@ impl<'a> Acquisition<'a> {
             .flatten();
         common.verify_repository(launch)?;
         if let Some(branch) = branch {
-            super::check_local_branch(branch, branch_before.as_deref(), Some(start))
-                .map_err(|error| super::local_branch_advice(launch, error))?;
+            super::check_local_branch(branch, branch_before.as_deref(), Some(start)).map_err(
+                |error| super::local_branch_advice(launch, error, super::Retry::OriginalCommand),
+            )?;
         }
         Ok(Self {
             launch,
