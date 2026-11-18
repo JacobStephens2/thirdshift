@@ -12,6 +12,12 @@ pub fn linkify(text: impl std::fmt::Display, _: &dyn Values) -> Result<Safe<Stri
     ))))
 }
 
+/// Escape saved text and link its HTTPS URLs, preserving every visible character.
+#[askama::filter_fn]
+pub fn linkify_verbatim(text: impl std::fmt::Display, _: &dyn Values) -> Result<Safe<String>> {
+    Ok(Safe(linked(&text.to_string())))
+}
+
 /// `text` with its instants in this machine's zone, to the minute.
 #[askama::filter_fn]
 pub fn readable(text: impl std::fmt::Display, _: &dyn Values) -> Result<String> {

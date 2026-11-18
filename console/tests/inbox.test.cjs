@@ -1015,6 +1015,25 @@ async function showDetails(page, row) {
   await row.locator(':scope > .row-head > .state').click();
 }
 
+test('Command details shows the saved Run notification safely on desktop and phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.notification.txt');
+  const text = 'Subject: Result <script>\n\nRecommendation:\nhttps://github.com/acme/widgets/issues/7\nReset: 2026-11-18T12:34:56.123Z\n<script>unsafe()</script>\n' + 'long'.repeat(100);
+  await writeFile(path, text);
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const page = await pageFor(t, { viewport });
+      await page.goto(origin);
+      await showDetails(page, page.locator('#inbox .command[data-command*="1-fixture.command.json"]'));
+      const notification = page.getByRole('region', { name: 'Run notification', exact: true });
+      await notification.waitFor();
+      assert.equal(await notification.locator('pre').textContent(), text);
+      assert.equal(await notification.locator('script').count(), 0);
+      assert.equal(await notification.locator('a').getAttribute('href'), 'https://github.com/acme/widgets/issues/7');
+      assert.equal(await notification.evaluate(node => node.scrollWidth > node.clientWidth), false);
+    }
+  } finally { await rm(path, { force: true }); }
+});
+
 test('Command details shows recent Command output and follows new output on desktop and phone', async t => {
   const log = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.log');
   const original = await readFile(log, 'utf8');
