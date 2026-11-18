@@ -2,10 +2,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use chrono::{DateTime, FixedOffset, Local};
+use chrono::{DateTime, FixedOffset};
 
 use crate::logs::command_record::{Issue, StageName};
-use crate::logs::reading::{Command, Entry, Observation, Snapshot};
+use crate::logs::reading::{Command, Entry, Observation};
 
 pub(crate) struct Views {
     pub lanes: Vec<Vec<Run>>,
@@ -24,6 +24,7 @@ pub(crate) struct Run {
     pub log_url: String,
     pub issue_url: Option<String>,
     pub issue_label: String,
+    pub pull_request: Option<PullRequest>,
     pub stages: Vec<Stage>,
     pub context: String,
     pub group_start: bool,
@@ -31,6 +32,12 @@ pub(crate) struct Run {
     started: Option<DateTime<FixedOffset>>,
     ended: Option<i64>,
     stage_metadata: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct PullRequest {
+    pub url: String,
+    pub label: String,
 }
 
 #[derive(Clone)]
@@ -116,7 +123,8 @@ fn issue_link(issue: Option<&Issue>) -> (Option<String>, String) {
     }
 }
 
-fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
+fn run(command: &Command, read: &super::Read, cutoff: i64) -> Run {
+    let now = read.now;
     let record = &command.record;
     let selector = Observation::Record(command).selector().unwrap_or_default();
     let live_until = (command.state == "live").then_some(now.fixed_offset());
@@ -177,6 +185,22 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         })
         .collect();
     let (issue_url, issue_label) = issue_link(record.issue.as_ref());
+    let pull_request = record
+        .pull_request
+        .as_deref()
+        .and_then(|url| super::target::validated_pr_url(url, &record.repository));
+    let pull_request_title = pull_request.as_ref().and_then(|pull| {
+        read.kept
+            .pull_request(&selector, &pull.url)
+            .and_then(|state| state.title.as_deref())
+            .filter(|title| !title.trim().is_empty())
+            .or_else(|| {
+                record
+                    .pull_request_title
+                    .as_deref()
+                    .filter(|title| !title.trim().is_empty())
+            })
+    });
     Run {
         subject: account_subject(
             record.process_heading().unwrap_or_else(|| {
@@ -188,8 +212,10 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
             .issue
             .as_ref()
             .and_then(|issue| issue.title.clone())
+            .filter(|title| !title.trim().is_empty())
+            .or_else(|| pull_request_title.map(str::to_owned))
             .or_else(|| record.process_label().map(str::to_string))
-            .unwrap_or_else(|| record.name.clone()),
+            .unwrap_or_else(|| "(title unavailable)".into()),
         state: if command.state == "ended" {
             record.outcome.clone().unwrap_or_else(|| "ended".into())
         } else {
@@ -199,6 +225,12 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         log_url: super::inspect::url("/log", &selector, None),
         issue_url,
         issue_label,
+        pull_request: pull_request.as_ref().map(|pull| PullRequest {
+            url: pull.url.clone(),
+            label: pull_request_title
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("PR #{}", pull.issue.number)),
+        }),
         selector,
         repository: record.repository.clone(),
         context: String::new(),
@@ -213,14 +245,14 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
 // Membership follows exact recorded ancestry, never an issue number shared by attempts.
 fn collect(
     command: &Command,
-    now: DateTime<Local>,
+    read: &super::Read,
     cutoff: i64,
     spec: Option<usize>,
     context: &str,
     groups: &mut Vec<Group>,
     runs: &mut Vec<Run>,
 ) {
-    let mut current = run(command, now, cutoff);
+    let mut current = run(command, read, cutoff);
     runs.push(current.clone());
     current.context = context.into();
     let spec = if command.record.kind == "Run"
@@ -249,7 +281,7 @@ fn collect(
     for dispatched in &command.dispatched {
         collect(
             dispatched,
-            now,
+            read,
             cutoff,
             spec,
             &format!("Dispatched by {parent}"),
@@ -260,7 +292,7 @@ fn collect(
     for child in &command.children {
         collect(
             child,
-            now,
+            read,
             cutoff,
             spec,
             &format!("Child of {parent}"),
@@ -331,22 +363,18 @@ fn grid(repository: String, groups: Vec<Group>) -> Grid {
     }
 }
 
-pub(super) fn from_read(
-    snapshot: &Snapshot,
-    now: DateTime<Local>,
-    hours: f64,
-    by_repository: bool,
-) -> Result<Views> {
+pub(super) fn from_read(read: &super::Read, hours: f64, by_repository: bool) -> Result<Views> {
+    let now = read.now;
     let cutoff = now - chrono::Duration::seconds((hours * 3600.0) as i64);
     let mut lanes = Vec::new();
     let mut groups = Vec::new();
-    for entry in snapshot.entries() {
+    for entry in read.snapshot.entries() {
         let mut runs = Vec::new();
         match entry {
             Entry::Record(command) => {
                 collect(
                     command,
-                    now,
+                    read,
                     cutoff.timestamp(),
                     None,
                     "",
@@ -371,6 +399,7 @@ pub(super) fn from_read(
                     log_url: super::inspect::url("/log", &selector, None),
                     issue_url,
                     issue_label,
+                    pull_request: None,
                     selector,
                     repository: command.repository.clone(),
                     context: String::new(),
@@ -431,4 +460,117 @@ pub(super) fn from_read(
         start: cutoff.format("%Y-%m-%d %H:%M %Z").to_string(),
         end: now.format("%Y-%m-%d %H:%M %Z").to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::logs::reading::Snapshot;
+    use chrono::Local;
+    use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn titles_prefer_the_issue_then_cached_pr_then_recorded_pr_then_process_label() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("acme/widgets/commands/issue");
+        fs::create_dir_all(&folder).unwrap();
+        let now = Local::now();
+        let started = (now - chrono::Duration::minutes(10)).to_rfc3339();
+        let ended = (now - chrono::Duration::minutes(1)).to_rfc3339();
+        let cases = [
+            (
+                Some("Issue title"),
+                Some("Cached title"),
+                Some("Old title"),
+                "Run",
+                "Issue title",
+            ),
+            (
+                None,
+                Some("Cached title"),
+                Some("Old title"),
+                "Run",
+                "Cached title",
+            ),
+            (
+                Some("  "),
+                Some("Cached title"),
+                None,
+                "Run",
+                "Cached title",
+            ),
+            (
+                None,
+                Some("  "),
+                Some("Recorded title"),
+                "Run",
+                "Recorded title",
+            ),
+            (None, None, None, "Run", "(title unavailable)"),
+            (None, None, None, "Process", "check-release"),
+            (None, Some("Cached title"), None, "Process", "Cached title"),
+        ];
+        let mut subjects = serde_json::Map::new();
+        for (index, (issue, cached, recorded, kind, _)) in cases.iter().enumerate() {
+            let number = index + 1;
+            let url = format!("https://github.com/acme/widgets/pull/{}", number + 100);
+            let record = json!({
+                "version": 1, "kind": kind, "name": format!("acme/widgets#{number}"),
+                "process_name": "check-release", "repository": "acme/widgets",
+                "issue": {"number": number, "url": format!("https://github.com/acme/widgets/issues/{number}"), "title": issue},
+                "hostname": "fixture", "process_id": 0, "process_start": "gone", "harness": "codex",
+                "started_at": started, "ended_at": ended, "outcome": "ready for review", "stages": [],
+                "pull_request": url, "pull_request_title": recorded
+            });
+            fs::write(
+                folder.join(format!("{number}.command.json")),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+            subjects.insert(
+                url,
+                json!({"state": "Open", "title": cached, "merged_at": null, "closed_at": null}),
+            );
+        }
+        fs::write(
+            root.path().join("github-inbox.json"),
+            serde_json::to_vec(&json!({"version": 2, "subjects": subjects})).unwrap(),
+        )
+        .unwrap();
+        let read = super::super::Read {
+            snapshot: Snapshot::load(root.path(), now).unwrap(),
+            kept: crate::logs::github::load(root.path()),
+            now,
+            reservations: Vec::new(),
+        };
+        let views = read.times(3.5, false).unwrap();
+        let expected_labels = [
+            "Cached title",
+            "Cached title",
+            "Cached title",
+            "Recorded title",
+            "PR #105",
+            "PR #106",
+            "Cached title",
+        ];
+        for (index, (_, _, _, _, expected)) in cases.iter().enumerate() {
+            let number = index + 1;
+            for runs in [
+                views.lanes.iter().flatten().collect::<Vec<_>>(),
+                views.grids[0].runs.iter().collect(),
+            ] {
+                let run = runs
+                    .into_iter()
+                    .find(|run| run.subject.ends_with(&format!("#{number}")))
+                    .unwrap();
+                assert_eq!(run.title, *expected, "run {number}");
+                let link = run.pull_request.as_ref().unwrap();
+                assert_eq!(
+                    link.url,
+                    format!("https://github.com/acme/widgets/pull/{}", number + 100)
+                );
+                assert_eq!(link.label, expected_labels[index]);
+            }
+        }
+    }
 }

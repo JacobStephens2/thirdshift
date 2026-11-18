@@ -545,6 +545,72 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
 }
 
 #[test]
+fn time_pages_show_cached_pull_request_titles_and_links_without_an_issue_title() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut value = record(home.path(), 7, Some("ready for review"), 0);
+    value["name"] = json!("acme/widgets#7");
+    value["issue"]["title"] = Value::Null;
+    value["pull_request"] = json!("https://github.com/acme/widgets/pull/107");
+    write_record(home.path(), 7, &value);
+    fs::write(
+        home.path().join(".thirdshift/logs/github-inbox.json"),
+        serde_json::to_vec(&json!({
+            "version": 2,
+            "subjects": {
+                "https://github.com/acme/widgets/pull/107": {
+                    "state": "Open", "title": "Keep <titles> & links visible",
+                    "merged_at": null, "closed_at": null
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/?page=lanes", "/?page=stages"] {
+        let html = console.get(page).text().unwrap();
+        assert!(
+            html.contains("Keep &#60;titles&#62; &#38; links visible"),
+            "{page}: {html}"
+        );
+        assert!(html.contains("href=\"https://github.com/acme/widgets/pull/107\">Keep &#60;titles&#62; &#38; links visible</a>"), "{page}: {html}");
+        assert!(html.contains("href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"));
+        assert!(!html.contains(">acme/widgets#7</p>"), "{page}: {html}");
+        assert!(!html.contains("<br>acme/widgets#7"), "{page}: {html}");
+    }
+}
+
+#[test]
+fn time_pages_keep_process_labels_and_show_unavailable_titles_without_a_pull_request() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (number, kind) in [(7, "Run"), (8, "Process")] {
+        let mut value = record(home.path(), number, Some("failed"), 0);
+        value["kind"] = json!(kind);
+        value["name"] = json!(format!("acme/widgets#{number}"));
+        value["process_name"] = json!("check-release");
+        value["issue"]["title"] = Value::Null;
+        value["pull_request"] = Value::Null;
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/lanes", "/stages"] {
+        let html = console.get(page).text().unwrap();
+        assert!(html.contains("(title unavailable)"), "{page}: {html}");
+        assert!(
+            html.contains(if page == "/lanes" {
+                "<p>check-release</p>"
+            } else {
+                "<br>check-release"
+            }),
+            "{page}: {html}"
+        );
+        assert!(!html.contains(">acme/widgets#7</p>") && !html.contains("<br>acme/widgets#7"));
+    }
+}
+
+#[test]
 fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_issues() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
