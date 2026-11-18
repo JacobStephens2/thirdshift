@@ -498,7 +498,11 @@ fn merge_base_fix_does_not_grant_an_existing_repair_pr_permission_to_merge() {
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
     let held = scenario.run(&["fix", &url, "merge", "no-email"]);
     assert_eq!(held.code, Some(1), "{}", held.stderr);
-    assert!(held.stderr.contains("no recorded agent review"), "{}", held.stderr);
+    assert!(
+        held.stderr.contains("no recorded agent review"),
+        "{}",
+        held.stderr
+    );
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
     recorded_review(&scenario, &branch);
     let merge = scenario.run(&["fix", &url, "merge", "no-email"]);
