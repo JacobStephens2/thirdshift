@@ -8,11 +8,19 @@ pub(crate) fn read(path: &Path) -> Result<Retention> {
     let tree: CommandTree = serde_json::from_slice(&std::fs::read(path)?)?;
     let mut keys = Vec::new();
     for facts in std::iter::once(&tree.command).chain(&tree.dispatched) {
-        if let Some(issue) = &facts.issue {
-            keys.push(Work::Issue(issue.url.clone()));
-        }
-        if let Some(pr) = &facts.pull_request {
-            keys.push(Work::PullRequest(pr.clone()));
+        // Sharing a target is not enough: Triage and recommendation-only Review
+        // do not continue Delivery. Other Commands use their exact command and
+        // Launch directory, preserving their own pause/resume behavior.
+        if matches!(
+            facts.kind.as_str(),
+            "Run" | "Spec run" | "Base fix" | "Fix run"
+        ) {
+            if let Some(issue) = &facts.issue {
+                keys.push(Work::Issue(issue.url.clone()));
+            }
+            if let Some(pr) = &facts.pull_request {
+                keys.push(Work::PullRequest(pr.clone()));
+            }
         }
         if let Some(experiment) = &facts.experiment {
             keys.push(Work::Experiment(experiment.id.clone()));
