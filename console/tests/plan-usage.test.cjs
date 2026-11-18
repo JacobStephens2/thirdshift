@@ -181,3 +181,44 @@ test('Fleet Plan usage groups a shared login, shows a pushed machine read-only a
   assert.ok(offlineBounds.y + offlineBounds.height <= 720, 'offline Fleet summary above the fold');
   assert.deepEqual(errors, []);
 });
+
+test('three distinct Logins keep all five Harnesses above the fold', async t => {
+  const harnesses = ['claude', 'codex', 'muse', 'agy', 'grok'];
+  const now = hours(0);
+  const reset = hours(24);
+  const states = id => Object.fromEntries(harnesses.map(harness => [harness, {
+    observed_at: now, source: 'session',
+    account: harness === 'claude' ? { organization: `org-${id}`, label: `person${id}@example.test` }
+      : harness === 'codex' ? { id: `account-${id}` }
+      : harness === 'muse' ? { label: `person${id}@example.test` } : undefined,
+    windows: (harness === 'claude' ? ['five_hour', 'seven_day']
+      : harness === 'codex' ? ['primary', 'secondary']
+      : harness === 'muse' ? ['window', 'weekly'] : ['weekly'])
+      .map((name, index) => ({ name, used_percent: index === 0 ? 70 : 50, resets_at: reset }))
+  }]));
+  const dense = await machine('three-logins', ROUTES, states(1));
+  t.after(() => stop(dense));
+  for (const [peer, id] of [['peer-two', 2], ['peer-three', 3]]) {
+    const token = dense.cli(['console', 'token', 'create', peer, '--scopes', 'report']);
+    const response = await fetch(`${dense.origin}/api/v1/plan-usage/report`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, machine: peer, view: { version: 1,
+        harnesses: harnesses.map(harness => ({ harness, installed: true, active: false, routes: [], ...states(id)[harness] }))
+      } })
+    });
+    assert.equal(response.status, 200, await response.text());
+  }
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${dense.origin}/plan-usage`);
+  const summary = page.getByRole('region', { name: 'By Harness', exact: true });
+  await summary.waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  assert.equal(await summary.locator('.plan-usage-summary-login').count(), 11);
+  const bounds = await summary.boundingBox();
+  assert.ok(bounds.y + bounds.height <= 720,
+    `all five Harnesses above the fold: ${JSON.stringify(bounds)}; bottom=${bounds.y + bounds.height}`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'three Logins at 390px');
+});
