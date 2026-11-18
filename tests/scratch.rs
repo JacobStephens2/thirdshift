@@ -231,6 +231,57 @@ fn sigterm_finishes_a_process_without_recovery_and_removes_scratch() {
 }
 
 #[test]
+fn sigterm_during_startup_removes_scratch_before_any_session_starts() {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let scenario = Scenario::new();
+    scenario.user_config_is("");
+    let config = scenario.path("home/.thirdshift/config.toml");
+    let contents = std::fs::read(&config).unwrap();
+    std::fs::remove_file(&config).unwrap();
+    let name = std::ffi::CString::new(config.to_str().unwrap()).unwrap();
+    // SAFETY: name is a live NUL-terminated path; mkfifo retains no pointer.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let mut held = scenario.start(&[&scenario.issue_url(7)], &[]);
+    let deadline = std::time::Instant::now() + support::WAIT_BOUND;
+    let mut writer = loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&config)
+        {
+            Ok(writer) => break writer,
+            Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Command never read User config"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("could not open config fixture: {error}"),
+        }
+    };
+    // Keep the current read blocked, but give any later config reads a regular file.
+    std::fs::remove_file(&config).unwrap();
+    std::fs::write(&config, &contents).unwrap();
+    held.signal("TERM");
+    let _ = writer.write_all(&contents);
+    drop(writer);
+    let result = held.finish();
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        std::fs::read_dir(scenario.path("home/.thirdshift/scratch"))
+            .unwrap()
+            .count(),
+        0,
+        "SIGTERM during startup left scratch: {}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
 fn a_paused_command_keeps_scratch_until_it_is_continued() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!("{}echo '{{\"type\":\"rate_limit_event\",\"rate_limit_info\":{{\"status\":\"rejected\",\"rateLimitType\":\"seven_day\",\"resetsAt\":4000000000,\"overageStatus\":\"rejected\"}}}}'\nexit 1\n", capture(&scenario)));

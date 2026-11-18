@@ -98,6 +98,9 @@ impl Drop for Guard {
 }
 
 pub(crate) fn begin(child: bool) -> Result<()> {
+    // Scratch exists during preflight and legacy cleanup, before config loads.
+    // SIGTERM must return through the Guard during that part of startup too.
+    crate::interrupt::install()?;
     let mut current = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
     if current.is_some() {
         return Ok(());
