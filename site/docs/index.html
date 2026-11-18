@@ -3419,6 +3419,7 @@ thirdshift fix 42 merge
 thirdshift fix 42 --no-merge base-fix harness codex model gpt-6.1-sol effort high
 thirdshift fix
 thirdshift fix base main --author colleague
+thirdshift fix base master no-merge merge-base-fix
 </code></pre>
 <p>A Fix run accepts an open pull request by a Trusted account, ready or draft,
 with or without a linked closing issue. Origin match, fork, closed/merged and
@@ -3452,8 +3453,25 @@ exits successfully. Stderr and the Activity log say the CI-fix found nothing
 to change on the Base branch at that commit. A local Git ref in the Launch
 repository remembers that Base branch and full commit, so later Passes there
 skip another CI-fix session for it while leaving PR selection available. It
-requests no further Check re-run.
-When the opening
+requests no further Check re-run.</p>
+<p>Add <code>merge-base-fix</code> (or <code>--merge-base-fix</code>) to let only a newly authored Base
+branch CI repair Self-merge once green, through the usual Delivery and Self-merge
+gates. It overrides <code>no-merge</code> for that repair alone. Selected pull requests keep
+following <code>merge</code> / <code>no-merge</code> and <code>merge.always</code>; for example,
+<code>thirdshift fix base master no-merge merge-base-fix</code> merges a new Base branch
+repair but leaves selected PRs ready for review, even with <code>merge.always = true</code>.
+Without <code>merge-base-fix</code>, the existing merge policy applies to both paths.
+The word applies only to a Fix Pass: targeted Fix runs and other commands reject
+it. An existing <code>fix-&lt;base&gt;-&lt;sha&gt;</code> PR selected later gets no merge permission
+from its branch name or this word; use a targeted <code>thirdshift fix &lt;PR&gt; merge</code>
+to request its Self-merge explicitly. <code>--author</code> still skips Base branch CI
+maintenance. A Ticket run&#39;s own <code>base-fix</code> still always merges, as
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0008-inherited-failures-fail-the-run.md">ADR 0008</a> requires.</p>
+<p>For a crontab line that repairs the Base branch unattended while leaving feature
+PRs for review, whatever the User config&#39;s merge default:</p>
+<pre><code class="language-cron">*/10 * * * * cd ~/repos/widgets &amp;&amp; thirdshift fix base master no-merge merge-base-fix
+</code></pre>
+<p>When the opening
 session fails after leaving work, preservation publishes it as a draft repair
 PR and offers its Fix Recovery command. Overlapping hosts
 share the Base branch CI reservation without holding back unrelated PR fixes.

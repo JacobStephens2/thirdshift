@@ -3576,6 +3576,7 @@ thirdshift fix 42 merge
 thirdshift fix 42 --no-merge base-fix harness codex model gpt-6.1-sol effort high
 thirdshift fix
 thirdshift fix base main --author colleague
+thirdshift fix base master no-merge merge-base-fix
 ```
 
 A Fix run accepts an open pull request by a Trusted account, ready or draft,
@@ -3613,6 +3614,27 @@ to change on the Base branch at that commit. A local Git ref in the Launch
 repository remembers that Base branch and full commit, so later Passes there
 skip another CI-fix session for it while leaving PR selection available. It
 requests no further Check re-run.
+
+Add `merge-base-fix` (or `--merge-base-fix`) to let only a newly authored Base
+branch CI repair Self-merge once green, through the usual Delivery and Self-merge
+gates. It overrides `no-merge` for that repair alone. Selected pull requests keep
+following `merge` / `no-merge` and `merge.always`; for example,
+`thirdshift fix base master no-merge merge-base-fix` merges a new Base branch
+repair but leaves selected PRs ready for review, even with `merge.always = true`.
+Without `merge-base-fix`, the existing merge policy applies to both paths.
+The word applies only to a Fix Pass: targeted Fix runs and other commands reject
+it. An existing `fix-<base>-<sha>` PR selected later gets no merge permission
+from its branch name or this word; use a targeted `thirdshift fix <PR> merge`
+to request its Self-merge explicitly. `--author` still skips Base branch CI
+maintenance. A Ticket run's own `base-fix` still always merges, as
+[ADR 0008](adr/0008-inherited-failures-fail-the-run.md) requires.
+
+For a crontab line that repairs the Base branch unattended while leaving feature
+PRs for review, whatever the User config's merge default:
+
+```cron
+*/10 * * * * cd ~/repos/widgets && thirdshift fix base master no-merge merge-base-fix
+```
 When the opening
 session fails after leaving work, preservation publishes it as a draft repair
 PR and offers its Fix Recovery command. Overlapping hosts
