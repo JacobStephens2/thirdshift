@@ -669,10 +669,18 @@ fn read_api_equals_cli_for_command_trees_stages_waterfall_and_logs() {
 
 #[test]
 fn release_url_keeps_api_openapi_and_cli_parity() {
-    let home = tempfile::tempdir().unwrap();
-    configure(home.path());
-    freeze_clock(home.path());
+    let scenario = support::Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    freeze_clock(&home);
     let now = (chrono::Local::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    let mut gh = scenario.gh_state();
+    gh["prs"] = json!([
+        {"number": 18, "url": "https://github.com/acme/widgets/pull/18", "state": "MERGED", "mergedAt": now},
+        {"number": 17, "url": "https://github.com/acme/widgets/pull/17", "state": "OPEN"},
+        {"number": 16, "url": "https://github.com/acme/widgets/pull/16", "state": "MERGED", "mergedAt": now},
+    ]);
+    scenario.write_gh_state(&gh);
     for fixture in [
         super::ReleaseRecordFixture {
             filename: "release-published",
@@ -702,15 +710,23 @@ fn release_url_keeps_api_openapi_and_cli_parity() {
             started_at: &now,
         },
     ] {
-        super::write_release_record(home.path(), fixture);
+        super::write_release_record(&home, fixture);
     }
 
+    let clock = home.join("api-clock.so");
+    let read_cli = |args: &[&str]| -> Value {
+        let output = scenario.run_with_env(args, &[("LD_PRELOAD", clock.to_str().unwrap())]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        serde_json::from_str(&output.stdout).unwrap()
+    };
+    // Capture the fixed GitHub answer before the Console starts refreshing it.
+    // Both processes use the fake, so host credentials and refresh scheduling
+    // cannot change the facts between the CLI and HTTP reads.
+    let expected_status = read_cli(&["status", "--all", "--json"]);
+    assert!(expected_status["github_failure"].is_null());
     let console = Console::start_command({
-        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
-        command
-            .args(["console", "--no-sign-in"])
-            .env("HOME", home.path())
-            .env("LD_PRELOAD", home.path().join("api-clock.so"));
+        let mut command = scenario.command(&["console", "--no-sign-in"]);
+        command.env("LD_PRELOAD", &clock);
         command
     });
 
@@ -721,7 +737,7 @@ fn release_url_keeps_api_openapi_and_cli_parity() {
         "/api/v1/stages",
         "/api/v1/security",
     ] {
-        parity(&console, home.path(), path, &["status", "--all", "--json"]);
+        assert_eq!(json(console.get(path)), expected_status, "{path}");
     }
     let status = json(console.get("/api/v1/status?all=true"));
     let commands = status["commands"].as_array().unwrap();
@@ -747,17 +763,13 @@ fn release_url_keeps_api_openapi_and_cli_parity() {
         .unwrap();
     assert!(unlinked.get("release_url").is_none(), "{unlinked}");
 
-    parity(
-        &console,
-        home.path(),
-        "/api/v1/peek?command=release-20261115T080000",
-        &["show", "release-20261115T080000", "--json"],
+    assert_eq!(
+        json(console.get("/api/v1/peek?command=release-20261115T080000")),
+        read_cli(&["show", "release-20261115T080000", "--json"]),
     );
-    parity(
-        &console,
-        home.path(),
-        "/api/v1/peek?command=release-20261115T060000",
-        &["show", "release-20261115T060000", "--json"],
+    assert_eq!(
+        json(console.get("/api/v1/peek?command=release-20261115T060000")),
+        read_cli(&["show", "release-20261115T060000", "--json"]),
     );
     let peek_published = json(console.get("/api/v1/peek?command=release-20261115T080000"));
     assert_eq!(
