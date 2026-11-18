@@ -108,7 +108,6 @@
         <div class="shift third"><h3>Third shift</h3><p class="who">Agents, with headless copies of the same skills</p>
           <ol class="chain"><li><a href="/prompts/#skill-thirdshift-implement">/thirdshift-implement</a></li><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ol>
           <p>thirdshift takes an Issue URL: one issue starts a Ticket run; an issue with sub-issues starts a Spec run. Its Factory skills implement the issue, review the change and write the pull request.</p>
-          <p>UI changes use <a href="/prompts/#skill-thirdshift-verify-ui"><code>/thirdshift-verify-ui</code></a> inside those sessions: explore the running app, then attach labelled screenshots and interactive walkthrough videos to the pull request. Visual evidence inherits the repository's read permissions.</p>
           <details class="reading-more fold">
             <summary>How bug issues are handled</summary>
             <div class="reading-content">
@@ -118,6 +117,7 @@
           <details class="reading-more fold">
             <summary>Skills and Processes in detail</summary>
             <div class="reading-content">
+              <p>UI changes use <a href="/prompts/#skill-thirdshift-verify-ui"><code>/thirdshift-verify-ui</code></a> inside those sessions: explore the running app, then attach labelled screenshots and interactive walkthrough videos to the pull request. Visual evidence inherits the repository's read permissions.</p>
             <p>Review Passes recognize reviewed and pushed heads only in comments by the GitHub account thirdshift acts as. When an upper pull request lacks Review run fixes delivered to its base, its comment says it needs updating before merge; the author updates the stack.</p>
             <p>Review Passes (<code>review --author</code>) and Fix Passes skip <code>release-*</code> pull requests targeting <code>main</code>, leaving their version-only heads to the Release run. Explicit <code>thirdshift fix &lt;pr-url&gt; --no-merge --no-base-fix</code> still repairs those pull requests.</p>
             <p>Review retries recover clean retained worktrees with verified ownership and committed fixes above the same captured PR head. Author Passes skip other local conflicts, notify once per state and continue to later waiting pull requests. An explicit PR URL still fails with preservation advice.</p>
