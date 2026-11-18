@@ -1,8 +1,21 @@
+{% macro window_usage(window) %}{% match window.used_percent %}{% when Some(used) %}{% if self.reset(window) %}reset since observed{% else %}<meter min="0" max="100" value="{{ used }}" aria-hidden="true"></meter> {{ used|fmt("{:.0}") }}% used{% endif %}{% when None %}utilization not reported{% endmatch %}{% if let Some(status) = window.status %} · {{ status }}{% endif %}{% if let Some(reset) = window.resets_at %}{% if self.ahead(reset) %} · resets <time datetime="{{ reset.to_rfc3339() }}">{{ self.local_time(reset) }}</time>{% endif %}{% endif %}{% endmacro %}
 <!doctype html>
 <html lang="en" data-theme="{{ page.theme }}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Plan usage · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 <main class="plan-usage"><div class="page-title"><h1>Plan usage{% if let Some(machine) = selector.chosen %} · {{ machine }}{% else %} · Fleet{% endif %}</h1><code>thirdshift {{ cli }}</code></div>
+<section aria-labelledby="plan-usage-summary"><h2 id="plan-usage-summary">By Harness</h2>
+<ul class="plan-usage-summary">{% for harness in summary %}<li data-harness="{{ harness.harness.name() }}"><h3>{{ harness.harness.name() }}</h3><div>
+{% if harness.logins.is_empty() %}<span class="empty">nothing observed yet</span>{% endif %}
+{% for entry in harness.logins %}{% let login = entry.login %}<div class="plan-usage-summary-login">
+{% if let Some(identity) = login.identity %}<strong>{{ identity }}</strong>{% else if harness.logins.len() > 1 %}<strong>identity not reported</strong>{% endif %}
+{% for window in login.state.windows %}<span>{{ window.name }}: {% call window_usage(window) %}{% endcall %}</span>{% endfor %}
+{% if let Some(cooldown) = login.state.cooldown %}{% if self.ahead(cooldown.until) %}<span>Cooldown until <time datetime="{{ cooldown.until.to_rfc3339() }}">{{ self.local_time(cooldown.until) }}</time></span>{% endif %}{% endif %}
+{% if login.state.ordinary_usage_allowed == Some(false) %}<span>Included usage not allowed</span>{% endif %}
+{% if login.state.spend_control_reached == Some(true) %}<span>Spend control reached</span>{% endif %}
+{% if entry.limited %}<span class="plan-usage-limited">Routes limited</span>{% endif %}
+<span class="empty">{% if let Some(at) = login.state.observed_at %}Observed <time datetime="{{ at.to_rfc3339() }}">{{ self.age(at) }}</time>{% else if !login.installed %}CLI not on PATH{% else %}nothing observed yet{% endif %}</span>
+</div>{% endfor %}</div></li>{% endfor %}</ul></section>
 <p>How much of each subscription Harness's allowance is used: its Plan windows, utilization, reset times and cooldowns, with each User config route to it and whether that route could take a session now. {% if selector.chosen.is_none() %}A login shared by several machines shows once, with the freshest observation and every machine using it; a Harness that names no account shows on each machine. A machine that cannot be reached shows the view this Console last read from it, and one that reports outward the view it last pushed, both read-only with their age. {% endif %}Factory sessions route on each machine's own Plan usage alone. Reload to see changes.</p>
 {% if selector.fleet || !selector.others.is_empty() || !selector.is(selector.local) %}<form class="metrics-filters" method="get" action="/plan-usage" aria-label="Plan usage machines">
 <label>Machine <select name="machine">{% if selector.fleet || selector.chosen.is_none() %}<option value=""{% if selector.chosen.is_none() %} selected{% endif %}>Fleet</option>{% endif %}<option value="{{ selector.local }}"{% if selector.is(selector.local) %} selected{% endif %}>This machine ({{ selector.local }})</option>{% for name in selector.others %}<option value="{{ name }}"{% if selector.is(name) %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
@@ -16,7 +29,7 @@
 {% if let Some(identity) = login.identity %}<dt>Login</dt><dd>{{ identity }}</dd>{% endif %}
 {% if let Some(account) = login.state.account %}<dt>Account</dt><dd>{% if account.signed_in == Some(true) %}signed in{% else if account.signed_in == Some(false) %}signed out{% endif %}{% if let Some(plan) = account.plan %} · plan {{ plan }}{% endif %}{% if let Some(tier) = account.tier %} · tier {{ tier }}{% endif %}</dd>{% endif %}
 {% for route in login.routes %}<dt>Route{% if !machines.is_empty() %} on {{ route.machine }}{% endif %}</dt><dd data-limited="{{ route.route.availability.limited() }}">{{ route.route }}</dd>{% endfor %}
-{% for window in login.state.windows %}<dt>{{ window.name }}</dt><dd>{% match window.used_percent %}{% when Some(used) %}{% if self.reset(window) %}reset since observed{% else %}<meter min="0" max="100" value="{{ used }}" aria-hidden="true"></meter> {{ used|fmt("{:.0}") }}% used{% endif %}{% when None %}utilization not reported{% endmatch %}{% if let Some(status) = window.status %} · {{ status }}{% endif %}{% if let Some(reset) = window.resets_at %}{% if self.ahead(reset) %} · resets <time datetime="{{ reset.to_rfc3339() }}">{{ self.local_time(reset) }}</time>{% endif %}{% endif %}</dd>{% endfor %}
+{% for window in login.state.windows %}<dt>{{ window.name }}</dt><dd>{% call window_usage(window) %}{% endcall %}</dd>{% endfor %}
 {% if let Some(credits) = login.state.credits %}{% if let Some(balance) = credits.balance %}<dt>Credits</dt><dd>{{ balance }}</dd>{% else if let Some(has) = credits.has_credits %}<dt>Credits</dt><dd>{% if has %}some{% else %}none{% endif %}</dd>{% endif %}{% endif %}
 {% if login.state.ordinary_usage_allowed == Some(false) %}<dt>Included usage</dt><dd>not allowed</dd>{% endif %}
 {% if login.state.spend_control_reached == Some(true) %}<dt>Spend control</dt><dd>reached</dd>{% endif %}
