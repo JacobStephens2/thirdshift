@@ -292,11 +292,14 @@ fn plan_usage_shows_configured_routes_in_order_and_omits_api_key_and_unused_harn
          [security]\nharness = \"grok\"\nroutes = [\"claude\", \"kimi\"]\n",
     );
     uninstalled(&scenario, "agy");
+    // Removing a fake must not expose a Harness installed on the host.
+    let bin = scenario.path("bin");
+    let env = [
+        ("PATH", bin.to_str().unwrap()),
+        ("FAKE_CLAUDE_SIGNED_OUT", "1"),
+    ];
     // Claude Code is signed out; Muse has no read and nothing observed.
-    let result = scenario.run_with_env(
-        &["plan-usage", "--json"],
-        &[("FAKE_CLAUDE_SIGNED_OUT", "1")],
-    );
+    let result = scenario.run_with_env(&["plan-usage", "--json"], &env);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let view: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(
@@ -333,7 +336,7 @@ fn plan_usage_shows_configured_routes_in_order_and_omits_api_key_and_unused_harn
     assert_eq!(claude["routes"][0]["setting"], "security.routes");
     assert_eq!(claude["routes"][0]["availability"], "signed_out");
 
-    let text = scenario.run_with_env(&["plan-usage"], &[("FAKE_CLAUDE_SIGNED_OUT", "1")]);
+    let text = scenario.run_with_env(&["plan-usage"], &env);
     assert_eq!(text.code, Some(0), "{}", text.stderr);
     for expected in [
         "codex (active)\n  route: harness.default, ceiling 90%: available\n  route: harness.routes 1, ceiling 90%: available, active\n",
