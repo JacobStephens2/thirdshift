@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use super::auth::Viewer;
 use crate::config::UserConfig;
+use crate::harness::Harness;
 use crate::plan_usage::fleet::{self, Login, Machine, Status};
 use crate::plan_usage::{Action, Selection, Shown};
 
@@ -69,14 +70,62 @@ impl Machines {
     }
 }
 
+/// A host-free projection of the page's already scoped Logins. Identified
+/// accounts stay separate; unidentified Logins share their freshest state,
+/// using the same observed-at/read-at ordering as Fleet grouping.
+struct HarnessSummary<'a> {
+    harness: Harness,
+    logins: Vec<SummaryLogin<'a>>,
+}
+
+struct SummaryLogin<'a> {
+    login: &'a Login,
+    limited: bool,
+}
+
+impl<'a> HarnessSummary<'a> {
+    fn all(logins: &'a [Login]) -> Vec<Self> {
+        crate::plan_usage::observation::SUBSCRIPTION
+            .into_iter()
+            .map(|harness| {
+                let mut entries: Vec<SummaryLogin<'a>> = Vec::new();
+                for login in logins.iter().filter(|login| login.harness == harness) {
+                    let limited = login
+                        .routes
+                        .iter()
+                        .any(|route| route.route.availability.limited());
+                    if let Some(kept) = entries
+                        .iter_mut()
+                        .find(|entry| entry.login.identity == login.identity)
+                    {
+                        kept.limited |= limited;
+                        if (login.state.observed_at, login.state.read_at)
+                            > (kept.login.state.observed_at, kept.login.state.read_at)
+                        {
+                            kept.login = login;
+                        }
+                    } else {
+                        entries.push(SummaryLogin { login, limited });
+                    }
+                }
+                Self {
+                    harness,
+                    logins: entries,
+                }
+            })
+            .collect()
+    }
+}
+
 #[derive(Template)]
 #[template(path = "console/plan_usage.html")]
-struct Page {
+struct Page<'a> {
     page: super::PageContext,
     csrf: String,
     /// The machines read; empty for this machine's own view.
     machines: Vec<Machine>,
-    logins: Vec<Login>,
+    logins: &'a [Login],
+    summary: Vec<HarnessSummary<'a>>,
     selector: Machines,
     harnesses: [&'static str; 5],
     /// What a view without rows says, as the CLI does.
@@ -86,7 +135,7 @@ struct Page {
     now: DateTime<Utc>,
 }
 
-impl Page {
+impl Page<'_> {
     fn age(&self, at: &DateTime<Utc>) -> String {
         super::age(at)
     }
@@ -178,7 +227,8 @@ pub(super) async fn show(
                 page: super::PageContext::new(&config, &viewer.scopes),
                 csrf: viewer.csrf,
                 machines,
-                logins,
+                summary: HarnessSummary::all(&logins),
+                logins: &logins,
                 selector,
                 harnesses: crate::plan_usage::observation::SUBSCRIPTION.map(|h| h.name()),
                 empty: crate::plan_usage::EMPTY,

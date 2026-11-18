@@ -23,6 +23,15 @@ header > .header-status { grid-column: 2; grid-row: 1 / span 2; align-self: star
 .plan-usage-login meter { width: 6em; vertical-align: middle; }
 /* Labels here name machines and Plan windows as their Harness spells them. */
 .plan-usage-login dt { text-transform: none; }
+.plan-usage-summary { list-style: none; padding: 0; margin: 6px 0 12px; font-size: 13px; }
+.plan-usage-summary > li { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 4px 12px; padding: 6px 0; border-top: 1px solid var(--rule); }
+.plan-usage-summary h3 { margin: 0; font-size: inherit; }
+.plan-usage-summary-login { display: flex; flex-wrap: wrap; gap: 2px 12px; overflow-wrap: anywhere; }
+.plan-usage-summary-login + .plan-usage-summary-login { margin-top: 4px; }
+.plan-usage-summary-login > * { min-width: 0; max-width: 100%; }
+.plan-usage-summary .empty { margin: 0; }
+.plan-usage-summary meter { width: 3em; vertical-align: middle; }
+.plan-usage-limited { color: var(--look-text); }
 header::after { grid-column: 1 / -1; }
 @media (max-width: 760px) { header { display: block; } header > .header-status { text-align: left; } }
 .brand, .harness, .age, .empty, aside { color: var(--dim); }
