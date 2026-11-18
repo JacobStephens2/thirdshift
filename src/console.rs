@@ -1327,6 +1327,7 @@ struct InboxPage {
     archive: Option<status::Archive>,
     outcome: String,
     repository: String,
+    repositories: Vec<String>,
     /// How many Failed Commands a Metrics failure link chose, if it chose any.
     chosen: Option<usize>,
     /// That link's query pairs, kept when History's own filters change.
@@ -1376,6 +1377,10 @@ impl InboxPage {
         url.query_pairs_mut().append_pair("section", &slug(group));
         if !self.machine.is_empty() {
             url.query_pairs_mut().append_pair("machine", &self.machine);
+        }
+        if !self.repository.is_empty() {
+            url.query_pairs_mut()
+                .append_pair("repository", &self.repository);
         }
         format!(
             "/{}",
@@ -1565,6 +1570,26 @@ async fn render_page(
             } else {
                 Vec::new()
             };
+            // Choices include every section on the selected Machine, before
+            // narrowing rows. The active-run total stays Machine-wide.
+            let mut repositories: Vec<_> = inbox
+                .sections
+                .iter()
+                .flat_map(|section| &section.rows)
+                .map(|row| row.repository.clone())
+                .collect();
+            repositories.sort_by_cached_key(|repository| repository.to_ascii_lowercase());
+            repositories.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            if archive_page.is_none() && !repository.is_empty() {
+                for section in &mut inbox.sections {
+                    section
+                        .rows
+                        .retain(|row| row.repository.eq_ignore_ascii_case(&repository));
+                    section
+                        .references
+                        .retain(|reference| reference.repository.eq_ignore_ascii_case(&repository));
+                }
+            }
             let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
@@ -1586,6 +1611,7 @@ async fn render_page(
                     .transpose()?,
                 outcome,
                 repository,
+                repositories,
                 chosen: chosen.map(|commands| commands.len()),
                 drilldown: metrics::drilldown(&query)?,
                 section: query_value(&query, "section"),

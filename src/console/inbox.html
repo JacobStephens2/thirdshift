@@ -40,7 +40,12 @@
       <ul class="commands">{% for item in archive.rows %}{{ self.row(item, false)|safe }}{% endfor %}</ul>
     </details>
     {% when None %}
-    <form method="get" class="machine-filter"><label>Machine <select name="machine"><option value="">Whole Fleet</option><option value="{{ page.hostname }}"{% if machine == page.hostname %} selected{% endif %}>{{ page.hostname }}</option>{% for item in page.consoles %}<option value="{{ item.name }}"{% if machine == item.name %} selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label><input type="hidden" name="section" value="{{ self.slug(self.folder()) }}"><button>Filter</button></form>
+    <form method="get" class="machine-filter">
+      <label>Machine <select name="machine"><option value="">Whole Fleet</option><option value="{{ page.hostname }}"{% if machine == page.hostname %} selected{% endif %}>{{ page.hostname }}</option>{% for item in page.consoles %}<option value="{{ item.name }}"{% if machine == item.name %} selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+      <label>Repository <select name="repository"><option value="">Every repository</option>{% for value in repositories %}<option {% if value.eq_ignore_ascii_case(repository) %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+      <input type="hidden" name="section" value="{{ self.slug(self.folder()) }}">
+      <button>Filter</button>
+    </form>
     <ul class="fleet-machines" aria-label="Fleet machines">{% for item in machines %}<li data-reachability="{{ item.reachability }}"><a href="{{ item.address }}">{{ item.name }}</a> · {{ item.reachability }} · {{ item.age }} · {{ item.active_runs }} active{% if !item.error.is_empty() %} · {{ item.error }}{% endif %}</li>{% endfor %}</ul>
     <nav class="folders" aria-label="Inbox sections"><a href="{{ self.folder_url("overview") }}" data-group="overview"{% if self.folder() == "overview" %} aria-current="page"{% endif %}><span>Overview</span></a>{% for section in inbox.sections %}<a href="{{ self.folder_url(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
@@ -76,7 +81,7 @@
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">{% for item in section.rows %}{{ self.row(item, true)|safe }}{% endfor %}</ul>
-      {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
+      {% for reference in section.references %}<p>{{ reference.text|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}
     {% if !self.idle() && !inbox.idle_passes.is_empty() %}
