@@ -242,6 +242,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, release without version, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
+  merge-base-fix                     Fix Pass only: Self-merge newly authored Base branch CI repairs; selected PRs keep their merge policy
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/

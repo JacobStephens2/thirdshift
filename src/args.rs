@@ -34,6 +34,8 @@ pub struct ReviewArgs {
 pub struct FixArgs {
     pub target: crate::fix::Target,
     pub flags: Flags,
+    /// Permit Self-merge only for a repair newly authored by this Fix Pass.
+    pub merge_base_fix: bool,
 }
 
 /// A Custom process to check or run, with the Command's explicit choices.
@@ -482,6 +484,13 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// child Run module first, which takes the hidden arguments a child Run is
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
+    ensure!(
+        args.first().is_some_and(|word| word == "fix")
+            || !args
+                .iter()
+                .any(|word| matches!(word.as_str(), "merge-base-fix" | "--merge-base-fix")),
+        "merge-base-fix applies only to a Fix Pass"
+    );
     if args.first().is_some_and(|word| word == "start")
         || (matches!(args.first().map(String::as_str), Some("config" | "update"))
             && args.iter().any(|word| word == "--machine"))
@@ -1344,11 +1353,15 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
     let mut pull_request = None;
     let mut base = None;
     let mut author = None;
+    let mut merge_base_fix = false;
     let mut flags = Flags::default();
     let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
         if matches!(arg.as_str(), "author" | "--author") {
             ask_word(&mut author, arg, words.next(), "a login")?;
+        } else if matches!(arg.as_str(), "merge-base-fix" | "--merge-base-fix") {
+            ensure!(!merge_base_fix, "repeated argument: {arg}");
+            merge_base_fix = true;
         } else if take_pass_flag(&mut base, &mut flags, arg, &mut words)? {
         } else if pull_request.is_none() {
             pull_request = Some(crate::review::PullRequestInput::parse(arg)?);
@@ -1367,12 +1380,17 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
         pull_request.is_none() || (base.is_none() && author.is_none()),
         "base and author apply only to a Fix Pass, not a targeted pull request"
     );
+    ensure!(
+        pull_request.is_none() || !merge_base_fix,
+        "merge-base-fix applies only to a Fix Pass, not a targeted pull request"
+    );
     Ok(FixArgs {
         target: match pull_request {
             Some(pr) => crate::fix::Target::PullRequest(pr),
             None => crate::fix::Target::Pass { base, author },
         },
         flags,
+        merge_base_fix,
     })
 }
 
@@ -1995,6 +2013,27 @@ mod tests {
     const URL: &str = "https://github.com/acme/widgets/issues/7";
 
     use crate::test_support::guidance::words as shell_words;
+
+    #[test]
+    fn merge_base_fix_is_only_a_fix_pass_word() {
+        for word in ["merge-base-fix", "--merge-base-fix"] {
+            for args in [
+                vec!["architect", word],
+                vec!["pickup", word],
+                vec!["secure", word],
+                vec!["triage", word],
+                vec!["review", "https://github.com/acme/widgets/pull/1", word],
+                vec![URL, word],
+                vec!["help", word],
+                vec!["fix", "1", word],
+                vec!["fix", word, "https://github.com/acme/widgets/pull/1"],
+                vec!["fix", "merge-base-fix", word],
+            ] {
+                let words: Vec<String> = args.iter().map(|word| (*word).into()).collect();
+                assert!(parse(&words).is_err(), "{args:?} was accepted");
+            }
+        }
+    }
 
     #[test]
     fn continuation_roundtrips_effective_choices_and_literal_shell_values() {

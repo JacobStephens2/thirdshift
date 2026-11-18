@@ -93,6 +93,7 @@ pub(crate) fn run(
                 let selected = FixArgs {
                     target: Target::PullRequest(crate::review::PullRequestInput::Url(pr)),
                     flags: command.flags.clone(),
+                    merge_base_fix: false,
                 };
                 return Ok(crate::command::Ending::Run(targeted(
                     &selected,
@@ -167,6 +168,7 @@ pub(crate) fn for_release(
     .map_err(|_| anyhow::anyhow!("could not start targeted Fix run"))?;
     let command = FixArgs {
         target: Target::PullRequest(crate::review::PullRequestInput::Url(pr.clone())),
+        merge_base_fix: false,
         flags: Flags {
             goal: Some(Goal::ReadyForReview),
             base_fix: Some(BaseFixAsk::Forbid),

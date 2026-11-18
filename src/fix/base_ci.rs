@@ -84,6 +84,9 @@ pub(super) fn run(
     let title = format!("Fix CI on {base}: {}", ci::title_check_names(&failed));
     logs::issue_title(Some(title.clone()));
     let mut asks = Asks::of_run(&repository, &command.flags, config);
+    if command.merge_base_fix {
+        asks.goal = Goal::Merged;
+    }
     asks.harness = harness.clone();
     let child_asks = ChildAsks::of(&asks);
     let mut repair_base = BaseFix::new(

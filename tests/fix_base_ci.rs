@@ -386,6 +386,120 @@ fn base_ci_notification_keeps_the_authored_pr_title() {
 }
 
 #[test]
+fn merge_base_fix_self_merges_only_the_new_base_repair() {
+    for config in ["", "[merge]\nalways = true\n"] {
+        for no_merge in [false, true] {
+            let scenario = Scenario::new();
+            scenario.user_config_is(config);
+            failed_base(&scenario, 2);
+            scenario.agent_does(FIX);
+            let word = if no_merge {
+                "--merge-base-fix"
+            } else {
+                "merge-base-fix"
+            };
+            let mut args = vec!["fix", "base", "main", word, "no-email"];
+            if no_merge {
+                args.push("no-merge");
+            }
+            let result = scenario.run(&args);
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            let state = scenario.gh_state();
+            assert_eq!(state["prs"][0]["state"], "MERGED", "{}", result.stderr);
+            assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+            assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+        }
+    }
+}
+
+fn reviewed_red_pr(scenario: &Scenario, branch: &str) -> String {
+    scenario.origin_has_branch(branch, "main", &["Feature"]);
+    let url = scenario.github_has_pr(branch, "main", "OPEN");
+    let head = scenario.origin_git(&["rev-parse", branch]);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["comments"] = json!([{
+        "body": format!("<!-- thirdshift-review {} -->", json!({"reviewed_head":head.trim()})),
+        "author_association":"COLLABORATOR", "user":{"login":"runner"}
+    }]);
+    state["checks"][head.trim()] = json!([{"name":"repair-check","conclusion":"failure"}]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(FIX);
+    url
+}
+
+#[test]
+fn merge_base_fix_keeps_selected_reviewed_prs_on_their_ordinary_merge_policy() {
+    for (config, goal, merged) in [
+        ("", None, false),
+        ("", Some("no-merge"), false),
+        ("[merge]\nalways = true\n", Some("no-merge"), false),
+        ("", Some("merge"), true),
+        ("[merge]\nalways = true\n", None, true),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        let url = reviewed_red_pr(&scenario, "feature");
+        let mut args = vec!["fix", "merge-base-fix", "no-base-fix", "no-email"];
+        args.extend(goal);
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let state = scenario.gh_state();
+        assert_eq!(
+            state["prs"][0]["state"],
+            if merged { "MERGED" } else { "OPEN" },
+            "{}",
+            result.stderr
+        );
+        assert_eq!(state["prs"][0]["isDraft"], false);
+        assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+        let outcome = if merged { "merged" } else { "ready for review" };
+        assert!(
+            result.stderr.contains(&format!("PR {url} is {outcome}")),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            !result.stderr.contains("Self-merge held"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn merge_base_fix_does_not_grant_an_existing_repair_pr_permission_to_merge() {
+    let scenario = Scenario::new();
+    let head = failed_base(&scenario, 2);
+    let branch = format!("fix-main-{}", &head[..7]);
+    let url = reviewed_red_pr(&scenario, &branch);
+    let result = scenario.run(&["fix", "merge-base-fix", "no-base-fix", "no-email"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "OPEN", "{}", result.stderr);
+    assert_eq!(state["prs"][0]["isDraft"], false);
+    assert!(scenario.gh_calls_of("pr", "create").is_empty());
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_maintenance_skipped(
+        &scenario,
+        &result,
+        &format!("a repair branch or pull request from {branch} already exists"),
+    );
+
+    let retry = scenario.run(&["fix", &url, "no-merge", "no-email"]);
+    assert_eq!(retry.code, Some(0), "{}", retry.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    let merge = scenario.run(&["fix", &url, "merge", "no-email"]);
+    assert_eq!(merge.code, Some(0), "{}", merge.stderr);
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "MERGED",
+        "{}",
+        merge.stderr
+    );
+}
+
+#[test]
 fn persistent_base_failure_opens_a_ready_pr_at_the_origin_tip() {
     let scenario = Scenario::new();
     let head = failed_base(&scenario, 2);
@@ -518,7 +632,7 @@ fn author_scoped_pass_leaves_base_ci_alone() {
     let owner = scenario.origin_git(&["rev-parse", "main"]);
     scenario.origin_git(&["update-ref", CI_RESERVATION, owner.trim()]);
     let mut args = PASS.to_vec();
-    args.extend(["--author", "acme"]);
+    args.extend(["--author", "acme", "merge-base-fix"]);
     let result = scenario.run(&args);
     assert_repaired(&scenario, &result, &url);
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
