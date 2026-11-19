@@ -1252,6 +1252,65 @@ test('inline Dismiss and notice Undo keep pending and error feedback through liv
   }
 });
 
+test('inline Dismiss removes the row before the request settles and restores it on failure', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const waiting = '#inbox > [data-group="needs you"] .command';
+  const rows = page.locator(waiting);
+  const count = await rows.count();
+  const row = rows.first();
+  const command = await row.getAttribute('data-command');
+  const nextCommand = await rows.nth(1).getAttribute('data-command');
+  const secondPath = await rows.nth(1).locator(':scope > .row-head form[data-dismiss] [name="command"]').inputValue();
+  const secondOriginal = await readFile(secondPath, 'utf8');
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route(`${origin}/dismiss`, async route => {
+    await held;
+    await route.continue();
+  });
+  try {
+    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+    assert.equal(await page.locator(`${waiting}[data-command="${command}"]`).count(), 0);
+    await page.waitForFunction(next => document.querySelector('.command[aria-current="true"]')?.dataset.command === next, nextCommand);
+    // A live refresh landing while the request is held must not resurrect the row.
+    const updated = JSON.parse(secondOriginal);
+    updated.cause = 'Live refresh while Dismiss is held';
+    await replaceRecord(secondPath, JSON.stringify(updated));
+    await page.waitForFunction(() => document.body.textContent.includes('Live refresh while Dismiss is held'));
+    assert.equal(await page.locator(`${waiting}[data-command="${command}"]`).count(), 0);
+    release();
+    const notice = page.locator('#dismissal-notices > [role="status"]').filter({ hasText: 'Dismissed' });
+    await notice.waitFor();
+    await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+    await page.locator(`#inbox > [data-group="done"] .command[data-command="${command}"]`).waitFor({ state: 'attached' });
+    assert.equal(await page.locator(`#inbox > [data-group="done"] .command[data-command="${command}"]`).count(), 1);
+    await notice.getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+    await replaceRecord(secondPath, secondOriginal);
+  }
+  // A failed save restores the row in place with the error and an enabled button.
+  const failedRow = page.locator(`${waiting}[data-command="${command}"]`);
+  await failedRow.waitFor();
+  await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please retry Dismiss' }));
+  try {
+    await failedRow.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    const form = failedRow.locator(':scope > .row-head form[data-dismiss]');
+    await form.getByText('Could not save the dismissal: Please retry Dismiss', { exact: true }).waitFor();
+    assert.equal(await failedRow.count(), 1);
+    assert.equal(await failedRow.evaluate(el => el.nextElementSibling?.dataset.command), nextCommand);
+    assert.equal(await form.locator('button').isEnabled(), true);
+    assert.equal(await page.locator('#dismissal-notices form').count(), 0);
+    assert.equal(await rows.count(), count);
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('the Inbox opens with Details closed, and Dismiss works by keyboard from Details beside a clicked row', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
@@ -1309,6 +1368,7 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
         await row.waitFor();
         await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
         await row.waitFor({ state: 'detached' });
+        await notice.waitFor();
         await page.waitForFunction(() => !document.querySelector('#dismissal-notices button').disabled);
         await page.mouse.move(0, 0);
         await page.clock.fastForward(10001);
@@ -3255,5 +3315,61 @@ test('Release run Done and Needs you headers link the bump PR and published Rele
     }
   } finally {
     await Promise.all([donePath, needsPath, unlinkedPath].map(path => rm(path, { force: true })));
+  }
+});
+
+test('a failed Dismiss after a live refresh restores the server-rendered row', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const waiting = '#inbox > [data-group="needs you"] .command';
+  const row = page.locator(waiting).first();
+  const command = await row.getAttribute('data-command');
+  const recordPath = await row.locator(':scope > .row-head form[data-dismiss] [name="command"]').inputValue();
+  const original = await readFile(recordPath, 'utf8');
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route(`${origin}/dismiss`, async route => {
+    await held;
+    await route.fulfill({ status: 409, body: 'Please retry Dismiss' });
+  });
+  try {
+    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.waitForFunction(({ sel, cmd }) => ![...document.querySelectorAll(sel)].some(r => r.dataset.command === cmd), { sel: waiting, cmd: command });
+    const updated = JSON.parse(original);
+    updated.cause = 'Server cause while Dismiss is held';
+    await replaceRecord(recordPath, JSON.stringify(updated));
+    await page.waitForFunction(() => window.__refreshSeen = true).catch(() => {});
+    await page.waitForTimeout(500);
+    release();
+    const restored = page.locator(`${waiting}[data-command="${command}"]`);
+    await restored.waitFor();
+    await restored.locator('form[data-dismiss]').getByText('Could not save the dismissal: Please retry Dismiss', { exact: true }).waitFor();
+    assert.ok((await restored.textContent()).includes('Server cause while Dismiss is held'));
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+    await replaceRecord(recordPath, original);
+  }
+});
+
+test('a failed Dismiss returns focus to the restored row', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const waiting = '#inbox > [data-group="needs you"] .command';
+  const row = page.locator(waiting).first();
+  const command = await row.getAttribute('data-command');
+  await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please retry Dismiss' }));
+  try {
+    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    const restored = page.locator(`${waiting}[data-command="${command}"]`);
+    await restored.locator('form[data-dismiss]').getByText('Could not save the dismissal: Please retry Dismiss', { exact: true }).waitFor();
+    const focus = await page.evaluate(cmd => ({
+      current: document.querySelector('.command[aria-current="true"]')?.dataset.command,
+      activeInRestored: document.querySelector(`.command[data-command="${cmd}"]`)?.contains(document.activeElement),
+    }), command);
+    assert.equal(focus.current, command);
+    assert.equal(focus.activeInRestored, true);
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
   }
 });
