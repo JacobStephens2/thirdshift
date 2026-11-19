@@ -442,18 +442,19 @@ pub(super) fn refresh(
                 for subject in chunk {
                     let url = &subject.url;
                     let mut state = states.get(url).cloned();
-                    if let Some(InboxState::PullRequest(pull)) = &mut state
-                        && let Err(error) = github.refresh_inbox_base(
-                            url,
-                            pull,
-                            kept.states.get(url).and_then(Option::as_ref),
-                        )
-                    {
-                        kept.failure = Some(format!("{url}: {error:#}"));
-                        read_failed = true;
+                    if let Some(InboxState::PullRequest(pull)) = &mut state {
+                        let previous = kept.states.get(url).and_then(Option::as_ref);
+                        let complete = match github.refresh_inbox_base(url, pull, previous) {
+                            Ok(complete) => complete,
+                            Err(error) => {
+                                kept.failure = Some(format!("{url}: {error:#}"));
+                                read_failed = true;
+                                false
+                            }
+                        };
                         // The comparison is part of this PR observation. Keep
                         // its previous answer and observation time together.
-                        if kept.states.get(url).is_some_and(Option::is_some) {
+                        if !complete && previous.is_some() {
                             continue;
                         }
                     }

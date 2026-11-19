@@ -63,6 +63,77 @@ rm -rf "$other"
 }
 
 #[test]
+fn quota_retry_revalidates_the_prs_base_branch() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("develop", "main", &["Advance develop"]);
+    let mut state = scenario.gh_state();
+    state["on_merge"] = serde_json::json!({
+        "times": 1,
+        "script": r#"gh fake pr issue-7 base '"develop"'"#,
+    });
+    state["refuse_merges"] = serde_json::json!({
+        "times": 1,
+        "error": "GraphQL: secondary rate limit exceeded (HTTP 429)",
+    });
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+    let result = scenario.run_with_env(
+        &["merge", &scenario.issue_url(7)],
+        &[("THIRDSHIFT_QUOTA_MINUTE_MS", "1")],
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "OPEN",
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_calls_of("pr", "merge").len(),
+        1,
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_base_first_update_still_requires_green_ci() {
+    let scenario = Scenario::new();
+    let mut state = scenario.gh_state();
+    state["on_review_decision"] = serde_json::json!({
+        "times": 1,
+        "script": r#"
+other="$(mktemp -d)"
+git clone -q -b main https://github.com/acme/widgets.git "$other"
+git -C "$other" commit --allow-empty -q -m "Advance Base"
+git -C "$other" push -q origin main
+git -C "$other" merge -q --no-ff -m "Update PR from Base" refs/remotes/origin/issue-7
+git -C "$other" push -q origin HEAD:issue-7
+rm -rf "$other"
+"#,
+    });
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "OPEN",
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn continuing_after_a_base_update_still_requires_green_ci() {
     let scenario = Scenario::new();
     advance_base_at_review_decision(&scenario, None);

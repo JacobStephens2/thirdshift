@@ -95,11 +95,11 @@ pub(crate) enum MergeAttempt {
 }
 
 #[derive(Debug)]
-struct BaseMergeGate;
+struct SelfMergeGate;
 
-impl std::fmt::Display for BaseMergeGate {
+impl std::fmt::Display for SelfMergeGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("checking Base freshness for Self-merge")
+        f.write_str("checking Self-merge eligibility")
     }
 }
 
@@ -675,6 +675,45 @@ impl<A: Adapter> PullRequest<A> {
         mut base_current: impl FnMut() -> Result<bool>,
     ) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
+        let number = self
+            .identified
+            .as_ref()
+            .expect("gate captured identity")
+            .number;
+        self.check_merge_policy(number)?;
+        let issue = self.issue.clone();
+        // The request's transport retries after quota waits. Use another
+        // handle so the gate can re-observe the captured PR before a retry.
+        let mut transport = self.adapter.clone();
+        let mut first_attempt = true;
+        let error = match transport.merge(&issue, number, watched, &mut || {
+            let mut gate = || {
+                if !std::mem::take(&mut first_attempt) {
+                    self.ensure_ready_and_mergeable()?;
+                    self.check_merge_policy(number)?;
+                }
+                base_current()
+            };
+            gate().context(SelfMergeGate)
+        }) {
+            Ok(true) => return Ok(MergeAttempt::Merged),
+            Ok(false) => return Ok(MergeAttempt::BaseMoved),
+            Err(error) if error.is::<SelfMergeGate>() => return Err(error),
+            Err(error) => error,
+        };
+        // Completion never clears or changes the recorded interruption. Only
+        // this PR, merged at the watched head and expected branches, counts.
+        if let Ok(Some(snapshot)) = self.observe(true)
+            && snapshot.pr.state == PrState::Merged
+            && snapshot.pr.base == self.base
+            && snapshot.head_commit == watched
+        {
+            return Ok(MergeAttempt::Merged);
+        }
+        Ok(MergeAttempt::Refused(error))
+    }
+
+    fn check_merge_policy(&mut self, number: u64) -> Result<()> {
         self.ensure_spec_pr_allows_merge()?;
         if let Some(reason) = &self.merge_hold {
             return Err(crate::failed_run::MergeHold {
@@ -691,11 +730,6 @@ impl<A: Adapter> PullRequest<A> {
             }
             .into());
         }
-        let number = self
-            .identified
-            .as_ref()
-            .expect("gate captured identity")
-            .number;
         if self.adapter.review_blocks_merge(&self.issue, number) {
             return Err(PolicyRefusal::ReviewRequired {
                 pr_url: self
@@ -707,24 +741,7 @@ impl<A: Adapter> PullRequest<A> {
             }
             .into());
         }
-        let error = match self.adapter.merge(&self.issue, number, watched, &mut || {
-            base_current().context(BaseMergeGate)
-        }) {
-            Ok(true) => return Ok(MergeAttempt::Merged),
-            Ok(false) => return Ok(MergeAttempt::BaseMoved),
-            Err(error) if error.is::<BaseMergeGate>() => return Err(error),
-            Err(error) => error,
-        };
-        // Completion never clears or changes the recorded interruption. Only
-        // this PR, merged at the watched head and expected branches, counts.
-        if let Ok(Some(snapshot)) = self.observe(true)
-            && snapshot.pr.state == PrState::Merged
-            && snapshot.pr.base == self.base
-            && snapshot.head_commit == watched
-        {
-            return Ok(MergeAttempt::Merged);
-        }
-        Ok(MergeAttempt::Refused(error))
+        Ok(())
     }
 
     /// After Worktree preservation, finish on the captured identity. Before
@@ -857,7 +874,7 @@ impl<A: Adapter> PullRequest<A> {
 
 /// The existing GitHub transport and a scripted test adapter vary here.
 /// Selection and transition policy stay in PullRequest.
-pub(crate) trait Adapter {
+pub(crate) trait Adapter: Clone {
     fn observe(
         &mut self,
         issue: &IssueUrl,

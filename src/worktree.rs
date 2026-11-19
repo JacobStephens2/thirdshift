@@ -470,19 +470,19 @@ impl Worktree {
     }
 
     /// Fetch Base again and compare it to the exact watched head. For heads
-    /// without checks, distinguish branching from this Base from merging it in.
+    /// without checks, tell whether they also contain work forked from older Base.
     pub(crate) fn relationship_to_base(
         &self,
         base: &str,
         head: &str,
-        check_first_parent: bool,
+        check_branch_point: bool,
     ) -> Result<BaseRelationship> {
         self.checkout.ordinary(&self.launch, |operation| {
             let origin = operation.sample_origin(base)?;
             if !operation.contains(head, &origin.commit)? {
                 return Ok(BaseRelationship::Behind);
             }
-            if check_first_parent && !operation.on_first_parent_chain(head, &origin.commit)? {
+            if check_branch_point && operation.has_older_branch_point(head, &origin.commit)? {
                 return Ok(BaseRelationship::Merged);
             }
             Ok(BaseRelationship::Current)

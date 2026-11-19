@@ -43,17 +43,18 @@ impl BaseComparison {
 }
 
 impl GitHub {
+    /// Refresh the comparison, returning false when a quota wait deferred it.
     pub(crate) fn refresh_inbox_base(
         &self,
         url: &str,
         pull: &mut PullRequestState,
         previous: Option<&InboxState>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let Some(comparison) = pull.base_comparison.as_mut() else {
-            return Ok(());
+            return Ok(true);
         };
         if comparison.first_parent_behind.is_some() {
-            return Ok(());
+            return Ok(true);
         }
         if let Some(InboxState::PullRequest(previous)) = previous
             && let Some(previous) = previous.base_comparison.as_ref()
@@ -62,12 +63,12 @@ impl GitHub {
             && previous.first_parent_behind.is_some()
         {
             comparison.first_parent_behind = previous.first_parent_behind;
-            return Ok(());
+            return Ok(true);
         }
         let (owner, repo, _) = split_pull_request_url(url).context("invalid Inbox PR URL")?;
         let repo = format!("{owner}/{repo}");
         comparison.first_parent_behind = self.first_parent_behind(&repo, comparison)?;
-        Ok(())
+        Ok(comparison.first_parent_behind.is_some())
     }
 
     fn comparison_page(&self, path: &str) -> Result<Option<Value>> {

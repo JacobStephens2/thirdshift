@@ -683,19 +683,15 @@ impl<'a> Operation<'a> {
         self.succeeds(&["merge-base", "--is-ancestor", ancestor, head])
     }
 
-    pub(super) fn on_first_parent_chain(&self, head: &str, ancestor: &str) -> Result<bool> {
-        // Count the first-parent commits before crossing into the ancestor's
-        // history. The first excluded commit is the ancestor only if it lies
-        // on that chain. Use history so a Continuation reaches the same answer.
-        let count = self
-            .run(&[
-                "rev-list",
-                "--first-parent",
-                "--count",
-                &format!("{ancestor}..{head}"),
-            ])?
-            .parse::<usize>()?;
-        Ok(self.run(&["rev-parse", &format!("{head}~{count}")])? == ancestor)
+    pub(super) fn has_older_branch_point(&self, head: &str, base: &str) -> Result<bool> {
+        // Each excluded boundary commit is a parent of work unique to the
+        // head. An older boundary means that work branched off before this
+        // Base was integrated, whichever parent the merge put first.
+        Ok(self
+            .run(&["rev-list", "--boundary", &format!("{base}..{head}")])?
+            .lines()
+            .filter_map(|line| line.strip_prefix('-'))
+            .any(|boundary| boundary != base))
     }
 
     /// Boolean probes are gated but never retried or reinterpreted as errors

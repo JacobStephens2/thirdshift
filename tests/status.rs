@@ -3716,6 +3716,20 @@ fn failed_base_comparison_preserves_the_last_stale_ci_answer() {
         after["commands"][0]["github_stale_ci"],
         before["commands"][0]["github_stale_ci"]
     );
+
+    age_cache_file(&scenario, 600);
+    gh.as_object_mut().unwrap().remove("failing");
+    gh["inbox_rate_limit"] = serde_json::json!({
+        "remaining": 499,
+        "resetAt": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()
+    });
+    scenario.write_gh_state(&gh);
+    let deferred = status();
+    assert!(deferred["github_quota_wait"].is_string());
+    assert_eq!(
+        deferred["commands"][0]["github_stale_ci"],
+        before["commands"][0]["github_stale_ci"]
+    );
 }
 
 #[test]
