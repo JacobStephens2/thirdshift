@@ -1,6 +1,6 @@
 //! Official non-billed reads of a Harness's Plan usage and account, run on
 //! demand: `codex app-server`'s `account/rateLimits/read`, `muse serve`'s
-//! `usage/read` and `account/read`, and `claude auth status --json`. None
+//! `usage/refresh` and `account/read`, and `claude auth status --json`. None
 //! starts a model turn, scrapes a web endpoint or reads a private token.
 
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ pub const WINDOWED: [Harness; 2] = [Harness::Codex, Harness::Muse];
 /// state under the snapshot's lock.
 pub enum Reading {
     Codex(Result<Value>, Option<bool>),
-    Muse(Option<BTreeMap<i64, Value>>),
+    Muse(Result<BTreeMap<i64, Value>>),
     Claude(Option<Value>),
 }
 
@@ -43,7 +43,7 @@ pub fn read(harness: Harness) -> Option<Reading> {
             Ok(result) => Reading::Codex(Ok(result), None),
             Err(error) => Reading::Codex(Err(error), codex_signed_in()),
         }),
-        Harness::Muse => Some(Reading::Muse(muse().ok())),
+        Harness::Muse => Some(Reading::Muse(muse())),
         Harness::Claude => Some(Reading::Claude(claude().ok())),
         Harness::Agy | Harness::Grok | Harness::OpenCode | Harness::Kimi => None,
     }
@@ -57,9 +57,14 @@ impl Reading {
         match self {
             Self::Codex(Ok(result), _) => take_codex(state, &result, now),
             Self::Codex(Err(_), signed) => signed_in(state, signed),
-            Self::Muse(Some(responses)) => take_muse(state, &responses, now),
+            Self::Muse(responses) => {
+                state.read_error = responses
+                    .and_then(|responses| take_muse(state, &responses, now))
+                    .err()
+                    .map(|error| super::store::one_line_read_error(&error.to_string()));
+            }
             Self::Claude(Some(status)) => take_claude(state, &status),
-            Self::Muse(None) | Self::Claude(None) => {}
+            Self::Claude(None) => {}
         }
     }
 }
@@ -208,77 +213,57 @@ fn take_codex(state: &mut State, result: &Value, now: DateTime<Utc>) {
 }
 
 fn muse() -> Result<BTreeMap<i64, Value>> {
+    // `muse schema generate-ts --out DIR --experimental` (1.4.24):
+    // `usage/read` only returns this host's last observation. A fresh
+    // serve host needs `usage/refresh` to fetch one without a model call.
     rpc(
         "muse",
         &["serve"],
         &[
-            json!({"method": "initialize", "id": 0, "params": {
+            json!({"jsonrpc": "2.0", "method": "initialize", "id": 0, "params": {
                 "clientInfo": client(), "capabilities": {"experimentalApi": true}
             }}),
-            json!({"method": "initialized"}),
-            json!({"method": "usage/read", "id": 1}),
-            json!({"method": "account/read", "id": 2}),
+            json!({"jsonrpc": "2.0", "method": "initialized"}),
+            json!({"jsonrpc": "2.0", "method": "usage/refresh", "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "account/read", "id": 2}),
         ],
         &[1, 2],
     )
 }
 
-fn take_muse(state: &mut State, responses: &BTreeMap<i64, Value>, now: DateTime<Utc>) {
-    let usage = responses
-        .get(&1)
-        .map(|response| &response["result"]["usage"])
-        .filter(|usage| usage.is_object());
-    if let Some(usage) = usage {
-        let mut windows = Vec::new();
-        for name in ["window", "weekly"] {
-            let reported = &usage[name];
-            if !reported.is_object() {
-                continue;
-            }
-            let mut window = Window::named(name).expect("a fixed window name");
-            window.used_percent = from_percent(&reported["usedPercent"]);
-            window.resets_at = milliseconds(&reported["resetsAtMs"]);
-            window.duration_minutes = reported["windowDurationMins"].as_u64();
-            windows.push(window);
-        }
-        let observed = milliseconds(&usage["observedAtMs"])
-            .filter(|observed| *observed <= now)
-            .unwrap_or(now);
-        let newer = state.observed_at.is_none_or(|saved| observed >= saved);
-        if newer {
-            state.windows = windows;
-            state.observed_at = Some(observed);
-            state.source = Some("muse serve".into());
-            let full = state
-                .windows
-                .iter()
-                .find(|window| {
-                    window.used_percent.is_some_and(|used| used >= 100.0) && !window.reset_by(now)
-                })
-                .cloned();
-            match full {
-                Some(window) => state.exhaust(
-                    &Exhausted {
-                        window: Some(window.name),
-                        resets_at: window.resets_at,
-                        overage: None,
-                    },
-                    now,
-                ),
-                None if state
-                    .cooldown
-                    .as_ref()
-                    .is_some_and(|cooldown| cooldown.since < observed) =>
-                {
-                    state.cooldown = None
-                }
-                None => {}
-            }
-        }
-        if let Some(tier) = token(&usage["tier"]) {
-            state.account.get_or_insert_default().plan = Some(tier);
-        }
+fn muse_usage(response: Option<&Value>) -> Result<(&Value, Vec<Window>)> {
+    let response = response.context("muse serve gave no usage answer")?;
+    if !response["error"].is_null() {
+        bail!(
+            "{}",
+            text(&response["error"]["message"])
+                .unwrap_or_else(|| "muse serve refused the usage read".into())
+        );
     }
+    let usage = &response["result"]["usage"];
+    let mut windows = Vec::new();
+    for name in ["window", "weekly"] {
+        let reported = &usage[name];
+        if !reported.is_object() {
+            continue;
+        }
+        let mut window = Window::named(name).expect("a fixed window name");
+        window.used_percent = from_percent(&reported["usedPercent"]);
+        window.resets_at = milliseconds(&reported["resetsAtMs"]);
+        window.duration_minutes = reported["windowDurationMins"].as_u64();
+        windows.push(window);
+    }
+    if !windows.iter().any(|window| window.used_percent.is_some()) {
+        bail!("muse serve returned no usage data");
+    }
+    Ok((usage, windows))
+}
+
+fn take_muse(
+    state: &mut State,
+    responses: &BTreeMap<i64, Value>,
+    now: DateTime<Utc>,
+) -> Result<()> {
     if let Some(response) = responses.get(&2) {
         let result = &response["result"];
         let account = if result["account"].is_object() {
@@ -289,13 +274,55 @@ fn take_muse(state: &mut State, responses: &BTreeMap<i64, Value>, now: DateTime<
         if account.is_object() {
             let saved = state.account.get_or_insert_default();
             saved.label = text(&account["label"]).or(saved.label.take());
-            saved.signed_in = account["credentialRequired"]
-                .as_bool()
-                .map(|required| !required)
-                .or_else(|| muse_state_signed_in(&account["state"]))
-                .or(saved.signed_in);
+            saved.signed_in = match account["credentialRequired"].as_bool() {
+                // Keyless gateways need no login even with a loggedOut lane.
+                Some(false) => Some(true),
+                required => muse_state_signed_in(&account["state"])
+                    .or(required.map(|required| !required))
+                    .or(saved.signed_in),
+            };
         }
     }
+    let (usage, windows) = muse_usage(responses.get(&1))?;
+    let observed = milliseconds(&usage["observedAtMs"])
+        .filter(|observed| *observed <= now)
+        .unwrap_or(now);
+    let newer = state.observed_at.is_none_or(|saved| observed >= saved);
+    if newer {
+        state.windows = windows;
+        state.observed_at = Some(observed);
+        state.source = Some("muse serve".into());
+        let full = state
+            .windows
+            .iter()
+            .filter(|window| {
+                window.used_percent.is_some_and(|used| used >= 100.0) && !window.reset_by(now)
+            })
+            .max_by_key(|window| window.resets_at)
+            .cloned();
+        match full {
+            Some(window) => state.exhaust(
+                &Exhausted {
+                    window: Some(window.name),
+                    resets_at: window.resets_at,
+                    overage: None,
+                },
+                now,
+            ),
+            None if state
+                .cooldown
+                .as_ref()
+                .is_some_and(|cooldown| cooldown.since < observed) =>
+            {
+                state.cooldown = None
+            }
+            None => {}
+        }
+    }
+    if let Some(tier) = token(&usage["tier"]) {
+        state.account.get_or_insert_default().plan = Some(tier);
+    }
+    Ok(())
 }
 
 /// What Muse's account `state` says about signing in, when it says
@@ -310,7 +337,8 @@ fn muse_state_signed_in(state: &Value) -> Option<bool> {
         "signedout" | "loggedout" | "unauthenticated" | "credentialrequired" | "none" => {
             Some(false)
         }
-        "signedin" | "loggedin" | "authenticated" | "ready" => Some(true),
+        "signedin" | "loggedin" | "authenticated" | "ready" | "envkey" | "apikey"
+        | "accountlogin" => Some(true),
         _ => None,
     }
 }
@@ -361,7 +389,7 @@ fn output_within(cli: &str, args: &[&str]) -> Result<Vec<u8>> {
     bytes.with_context(|| format!("{cli} did not answer in time"))
 }
 
-/// Send JSON-RPC `requests`, one per line without the `jsonrpc` member, to
+/// Send JSON-RPC `requests`, one per line with the caller's envelope, to
 /// `cli args` on stdin, and collect the responses whose ids are in `wanted`
 /// until they have all come, the server ends or the timeout passes.
 fn rpc(
@@ -424,6 +452,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn muse_route_stays_held_after_the_shorter_of_two_full_windows_resets() {
+        use crate::plan_usage::route::{Route, Routing};
+
+        let now = Utc::now();
+        let short_reset = now + chrono::TimeDelta::minutes(20);
+        let weekly_reset = now + chrono::TimeDelta::days(1);
+        let responses = BTreeMap::from([(
+            1,
+            json!({"id": 1, "result": {"usage": {
+                "tier": "pro", "observedAtMs": now.timestamp_millis(),
+                "window": {"usedPercent": 103, "resetsAtMs": short_reset.timestamp_millis(), "windowDurationMins": 300},
+                "weekly": {"usedPercent": 100, "resetsAtMs": weekly_reset.timestamp_millis()}
+            }}}),
+        )]);
+        let mut state = State::default();
+        take_muse(&mut state, &responses, now).unwrap();
+        let availability = state.availability(
+            &Route::named(Harness::Muse),
+            &Routing::default(),
+            true,
+            short_reset + chrono::TimeDelta::seconds(1),
+        );
+        assert!(availability.limited(), "{availability:?}");
+    }
+
+    #[test]
     fn codex_refusal_records_a_limit_and_its_permission_clears_one() {
         let now = Utc::now();
         let mut state = State::default();
@@ -473,7 +527,7 @@ mod tests {
                 json!({"id": 2, "result": {"state": "ready", "label": "me", "credentialRequired": false}}),
             ),
         ]);
-        take_muse(&mut state, &responses, now);
+        take_muse(&mut state, &responses, now).unwrap();
         assert_eq!(state.windows.len(), 2);
         assert_eq!(state.windows[0].used_percent, Some(30.0));
         let account = state.account.clone().unwrap();
@@ -487,7 +541,7 @@ mod tests {
         );
         state.observed_at = Some(now);
         state.windows.clear();
-        take_muse(&mut state, &responses, now);
+        take_muse(&mut state, &responses, now).unwrap();
         assert!(state.windows.is_empty());
     }
 
@@ -516,7 +570,8 @@ mod tests {
                 json!({"id": 2, "result": {"state": "signed_out", "label": "me"}}),
             )]),
             Utc::now(),
-        );
+        )
+        .unwrap_err();
         assert_eq!(state.account.unwrap().signed_in, Some(false));
     }
 }

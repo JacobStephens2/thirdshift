@@ -110,6 +110,9 @@ pub struct Login {
     pub machines: Vec<String>,
     /// The machine whose observation shows: the freshest.
     pub observed_on: String,
+    /// The machine whose latest read failed, independent of the observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_error_on: Option<String>,
     /// Whether the CLI is on PATH where the observation shows.
     pub installed: bool,
     /// The machines whose factory sessions would start on it now.
@@ -158,11 +161,11 @@ fn freshness(state: &State) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
 /// identity, showing the freshest observation and naming every machine on
 /// it. A row without an identity stays its machine's own.
 pub(crate) fn group(sources: &[(String, View)]) -> Vec<Login> {
-    let mut logins: Vec<Login> = Vec::new();
+    let mut logins: Vec<(Login, &State)> = Vec::new();
     for (machine, view) in sources {
         for row in &view.harnesses {
             let identity = identity(row);
-            let found = logins.iter().position(|kept| {
+            let found = logins.iter().position(|(kept, _)| {
                 kept.harness == row.harness
                     && match (&identity, &kept.identity) {
                         (Some(identity), Some(kept)) => identity == kept,
@@ -173,20 +176,22 @@ pub(crate) fn group(sources: &[(String, View)]) -> Vec<Login> {
             let index = match found {
                 Some(index) => index,
                 None => {
-                    logins.push(Login {
+                    let login = Login {
                         harness: row.harness,
                         identity,
                         machines: Vec::new(),
                         observed_on: machine.clone(),
+                        read_error_on: row.state.read_error.as_ref().map(|_| machine.clone()),
                         installed: row.installed,
                         active_on: Vec::new(),
                         routes: Vec::new(),
                         state: row.state.clone(),
-                    });
+                    };
+                    logins.push((login, &row.state));
                     logins.len() - 1
                 }
             };
-            let kept = &mut logins[index];
+            let (kept, latest_read) = &mut logins[index];
             if !kept.machines.contains(machine) {
                 kept.machines.push(machine.clone());
             }
@@ -194,6 +199,10 @@ pub(crate) fn group(sources: &[(String, View)]) -> Vec<Login> {
                 kept.state = row.state.clone();
                 kept.observed_on = machine.clone();
                 kept.installed = row.installed;
+            }
+            if row.state.read_at > latest_read.read_at {
+                *latest_read = &row.state;
+                kept.read_error_on = row.state.read_error.as_ref().map(|_| machine.clone());
             }
             if row.active {
                 kept.active_on.push(machine.clone());
@@ -206,6 +215,13 @@ pub(crate) fn group(sources: &[(String, View)]) -> Vec<Login> {
         }
     }
     logins
+        .into_iter()
+        .map(|(mut login, latest_read)| {
+            login.state.read_at = latest_read.read_at;
+            login.state.read_error.clone_from(&latest_read.read_error);
+            login
+        })
+        .collect()
 }
 
 /// A saved peer snapshot: the last view read from a machine for one person,
@@ -672,7 +688,11 @@ impl fmt::Display for Fleet {
             if login.machines.len() > 1 {
                 writeln!(f, "  freshest on {}", login.observed_on)?;
             }
-            view::write_state(f, &login.state, login.installed, self.now)?;
+            let read_error_on = login
+                .read_error_on
+                .as_deref()
+                .filter(|_| login.machines.len() > 1);
+            view::write_state(f, &login.state, login.installed, self.now, read_error_on)?;
         }
         Ok(())
     }
