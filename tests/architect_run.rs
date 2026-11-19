@@ -1078,7 +1078,7 @@ fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
     // under it, which would have it merged in again instead. The Base
     // fix issue is the next after the Tickets, #11.
     let scenario = spec_plan("");
-    scenario.checks_pass_after_merging_base("issue-9", "issue-8");
+    scenario.checks_pass_after_merging_base(&["issue-9"], "issue-8");
     scenario.agent_does_for(
         9,
         &format!(
