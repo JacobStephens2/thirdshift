@@ -222,6 +222,86 @@ fn pr_recipe_refuses_unsafe_body_file_before_publishing() {
 }
 
 #[test]
+fn pr_recipe_refuses_symlinked_ancestor_directories_for_body_and_captures() {
+    let scenario = Scenario::new();
+    let valid_capture = scenario.path("good.png");
+    fs::write(&valid_capture, "faux image").unwrap();
+    let safe_body = scenario.path("safe-body.md");
+    fs::write(&safe_body, "## Evidence\n").unwrap();
+
+    let secret_dir = scenario.path("secret-dir");
+    let inner_dir = secret_dir.join("inner");
+    fs::create_dir_all(&inner_dir).unwrap();
+    fs::write(
+        secret_dir.join("credentials.md"),
+        "SECRET-MARKER-body-dir-symlink\n",
+    )
+    .unwrap();
+    fs::write(secret_dir.join("after.png"), "faux secret png").unwrap();
+
+    let decoy_dir = scenario.path("decoy-dir");
+    symlink(&secret_dir, &decoy_dir).unwrap();
+    let nested = scenario.path("nested");
+    fs::create_dir(&nested).unwrap();
+    // Place a harmless file in `nested` so syntactic `..` normalization would hide the escape.
+    fs::write(nested.join("credentials.md"), "harmless\n").unwrap();
+    symlink(&inner_dir, nested.join("hop")).unwrap();
+
+    for (label, body) in [
+        ("direct-symlink-dir", decoy_dir.join("credentials.md")),
+        (
+            "dotdot-after-symlink-dir",
+            nested.join("hop").join("..").join("credentials.md"),
+        ),
+    ] {
+        let output = publish_with_body(
+            &scenario,
+            "create",
+            &body,
+            std::slice::from_ref(&valid_capture),
+        );
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "accepted {label} body path: {}",
+            body.display()
+        );
+        assert!(error.contains("body"), "{label}: {error}");
+        assert!(
+            scenario.gh_calls_of("pr", "create").is_empty(),
+            "published PR with {label} body path"
+        );
+        assert!(
+            !scenario
+                .gh_state()
+                .to_string()
+                .contains("SECRET-MARKER-body-dir-symlink"),
+            "{label}: symlinked directory target leaked into PR body"
+        );
+    }
+
+    for (label, capture) in [
+        ("direct-symlink-dir", decoy_dir.join("after.png")),
+        (
+            "dotdot-after-symlink-dir",
+            nested.join("hop").join("..").join("after.png"),
+        ),
+    ] {
+        let output = publish_with_body(&scenario, "create", &safe_body, &[capture]);
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "accepted {label} capture path");
+        assert!(
+            error.contains("not a regular file owned"),
+            "{label}: {error}"
+        );
+        assert!(
+            scenario.gh_calls_of("pr", "create").is_empty(),
+            "uploaded {label} capture path"
+        );
+    }
+}
+
+#[test]
 fn pr_recipe_requires_gh_2_103_2_or_later() {
     for version in ["2.96.0", "2.103.1", "2.103.2", "2.104.0", "3.0.0"] {
         let scenario = Scenario::new();

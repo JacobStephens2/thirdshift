@@ -190,10 +190,44 @@ This validates **all** captures before the first irreversible upload, refusing s
   body=${2:?PR body file}
   shift 2
   case "$action" in create|edit) ;; *) echo 'expected create or edit' >&2; exit 1 ;; esac
-  if [ "$body" = - ] || [ -L "$body" ] || [ ! -f "$body" ] || [ ! -O "$body" ]; then
-    printf 'refusing PR body that is not a regular file owned by this user: %s\n' "$body" >&2
+  fail_unsafe_path() {
+    printf 'refusing %s that is not a regular file owned by this user: %s\n' "$1" "$2" >&2
     exit 1
-  fi
+  }
+  check_regular_owned() {
+    local label=$1 path=$2 prefix='' remaining part link_target
+    if [ -z "$path" ] || [ "$path" = - ] || [ -L "$path" ] || [ ! -f "$path" ] || [ ! -O "$path" ]; then
+      fail_unsafe_path "$label" "$path"
+    fi
+    case "$path" in
+      /*) prefix=/; remaining=${path#/} ;;
+      *) remaining=$path ;;
+    esac
+    while [ -n "$remaining" ]; do
+      case "$remaining" in
+        */*) part=${remaining%%/*}; remaining=${remaining#*/} ;;
+        *) part=$remaining; remaining='' ;;
+      esac
+      case "$part" in
+        '' | .) continue ;;
+      esac
+      if [ "$prefix" = / ]; then
+        prefix="/$part"
+      elif [ -z "$prefix" ]; then
+        prefix=$part
+      else
+        prefix="$prefix/$part"
+      fi
+      if [ -L "$prefix" ]; then
+        link_target=$(readlink "$prefix" 2>/dev/null || true)
+        case "$(uname -s):$prefix:$link_target" in
+          Darwin:/tmp:private/tmp | Darwin:/tmp:/private/tmp | Darwin:/var:private/var | Darwin:/var:/private/var) ;;
+          *) fail_unsafe_path "$label" "$path" ;;
+        esac
+      fi
+    done
+  }
+  check_regular_owned 'PR body' "$body"
   [ "${EVIDENCE_REDACTED:-}" = yes ] || { echo 'review captures for faux/redacted data first' >&2; exit 1; }
   gh --version | awk '
     NR == 1 {
@@ -209,10 +243,7 @@ This validates **all** captures before the first irreversible upload, refusing s
     case "$capture" in
       *#*) printf 'refusing capture path containing #: %s\n' "$capture" >&2; exit 1 ;;
     esac
-    if [ -L "$capture" ] || [ ! -f "$capture" ] || [ ! -O "$capture" ]; then
-      printf 'refusing capture that is not a regular file owned by this user: %s\n' "$capture" >&2
-      exit 1
-    fi
+    check_regular_owned capture "$capture"
     filename=${capture##*/}
     case "$filename" in
       *[!A-Za-z0-9._-]* | '') printf 'refusing capture filename: %s\n' "$filename" >&2; exit 1 ;;
