@@ -202,8 +202,6 @@ let peekUrl = null;
 let pendingPeek = null;
 // Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
-// Inline rows removed before their Dismiss request settles, keyed like `dismissals`.
-const optimisticDismissals = new Map();
 function dismissalKey(form) {
   return JSON.stringify([form.elements.machine?.value ?? '', form.elements.command.value]);
 }
@@ -217,28 +215,51 @@ function showDismissal() {
   }
 }
 
+function snapshotRow(row) {
+  return {
+    row,
+    parent: row.parentElement,
+    nextSibling: row.nextSibling,
+    nextId: row.nextElementSibling?.id || null,
+    groupId: row.closest('details')?.id || null,
+    hadSelection: false
+  };
+}
+
 // A refresh landing while a Dismiss is in flight must not bring its row back.
+// Keep the server-rendered row it inserts, so a later restore shows that row.
 function hideOptimisticallyDismissedRows() {
   for (const form of document.querySelectorAll('#inbox form[data-dismiss]')) {
-    const command = dismissalKey(form);
-    const state = dismissals.get(command);
-    if (!optimisticDismissals.has(command) || !state?.pending || state.action !== form.action) continue;
-    form.closest('.command')?.remove();
+    const state = dismissals.get(dismissalKey(form));
+    if (!state?.optimistic || !state.pending || state.action !== form.action) continue;
+    const fresh = form.closest('.command');
+    if (!fresh) continue;
+    const hadSelection = state.optimistic.hadSelection;
+    state.optimistic = snapshotRow(fresh);
+    state.optimistic.hadSelection = hadSelection;
+    fresh.remove();
   }
 }
 
 function restoreOptimisticallyDismissedRow(command) {
-  const entry = optimisticDismissals.get(command);
+  const state = dismissals.get(command);
+  const entry = state?.optimistic;
   if (!entry) return;
   const { row, parent, nextSibling, nextId, groupId } = entry;
-  if (row.isConnected || document.getElementById(row.id)) return;
-  const target = parent?.isConnected ? parent
-    : document.getElementById(groupId)?.querySelector(':scope > ul.commands, :scope > .commands');
-  if (!target) return;
-  const sibling = nextSibling?.parentElement === target ? nextSibling
-    : nextId ? [...target.children].find(child => child.id === nextId) : null;
-  if (sibling) target.insertBefore(row, sibling);
-  else target.append(row);
+  if (!row.isConnected && !document.getElementById(row.id)) {
+    const target = parent?.isConnected ? parent
+      : document.getElementById(groupId)?.querySelector(':scope > ul.commands, :scope > .commands');
+    if (!target) return;
+    const sibling = nextSibling?.parentElement === target ? nextSibling
+      : nextId ? [...target.children].find(child => child.id === nextId) : null;
+    if (sibling) target.insertBefore(row, sibling);
+    else target.append(row);
+  }
+  const restored = document.getElementById(row.id);
+  if (entry.hadSelection && restored) {
+    select(restored);
+    restored.focus({ preventScroll: true });
+  }
 }
 
 function removeDismissalNotice(command) {
@@ -548,14 +569,9 @@ document.addEventListener('submit', async event => {
   };
   dismissals.set(command, state);
   if (row && !undo) {
-    optimisticDismissals.set(command, {
-      row,
-      parent: row.parentElement,
-      nextSibling: row.nextSibling,
-      nextId: row.nextElementSibling?.id || null,
-      groupId: row.closest('details')?.id || null
-    });
+    state.optimistic = snapshotRow(row);
     if (selected === row) {
+      state.optimistic.hadSelection = true;
       const nextRow = next !== row ? document.getElementById(next?.id) : null;
       select(nextRow);
       nextRow?.focus({ preventScroll: true });
@@ -570,14 +586,7 @@ document.addEventListener('submit', async event => {
     });
     if (!response.ok) throw new Error(await response.text());
     saved = true;
-    if (row && !undo) {
-      dismissalNotice(form, subject);
-      if (selected === row) {
-        const nextRow = next !== row ? document.getElementById(next?.id) : null;
-        select(nextRow);
-        nextRow?.focus({ preventScroll: true });
-      }
-    }
+    if (row && !undo) dismissalNotice(form, subject);
     if (undo) removeDismissalNotice(command);
     pendingPeek?.abort();
     pendingPeek = null;
@@ -590,7 +599,7 @@ document.addEventListener('submit', async event => {
   } finally {
     state.pending = false;
     if (!saved) restoreOptimisticallyDismissedRow(command);
-    optimisticDismissals.delete(command);
+    delete state.optimistic;
     showDismissal();
   }
 });

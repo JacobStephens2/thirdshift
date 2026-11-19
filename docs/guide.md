@@ -3341,7 +3341,9 @@ fields and open dialogs keep their keys. An inline dismissal shows a temporary
 stay while hovered, focused, saving or showing an error. Without JavaScript,
 rows retain their full Dismiss form. One click dismisses, with no confirmation
 page. A dismissed row also offers **Undo** in Command details.
-While either request is pending, its buttons show “Dismissing…” or
+Clicking Dismiss on an inline row removes that row from view immediately,
+before the save completes; if the save fails, the row returns with the error
+shown on it. While either request is pending, its buttons show “Dismissing…” or
 “Taking back dismissal…” and stay disabled, including through live updates.
 A failed request shows the error and lets you retry. Command details shows each
 button's CLI form beside it. Both posts require a session and a valid CSRF token, open
