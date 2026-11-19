@@ -274,7 +274,7 @@ pub(super) fn linked_issues(
 pub(super) fn comment(state: &mut Json, positional: &[String], flags: &Flags) {
     let at = selected_pr(state, &positional[0]);
     ensure_open(&prs(state)[at]);
-    let text = fs::read_to_string(flag(flags, "body-file").expect("--body-file")).unwrap();
+    let text = attached_body(flags);
     let pr = &mut state.at_mut("prs").items_mut()[at];
     if !pr.has("postedComments") {
         pr.set("postedComments", Array(Vec::new()));

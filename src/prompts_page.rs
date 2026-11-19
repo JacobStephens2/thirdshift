@@ -193,21 +193,27 @@ fn prompts() -> Vec<Prompt> {
             title: "Fresh",
             when: "Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch.",
             sender: Units(&[IMPLEMENT]),
-            text: prompt::fresh(&issue, BASE, BRANCH),
+            text: prompt::fresh(&issue, BASE, BRANCH, prompt::TicketScope::Standard),
         },
         Prompt {
             id: "prompt-continuation",
             title: "Continuation, with no pull request",
             when: "Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request.",
             sender: Units(&[IMPLEMENT]),
-            text: prompt::continuation(&issue, BASE, BRANCH, None),
+            text: prompt::continuation(&issue, BASE, BRANCH, None, prompt::TicketScope::Standard),
         },
         Prompt {
             id: "prompt-continuation-pr",
             title: "Continuation, with an open pull request",
             when: "Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open.",
             sender: Units(&[IMPLEMENT]),
-            text: prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+            text: prompt::continuation(
+                &issue,
+                BASE,
+                BRANCH,
+                Some(PR_URL),
+                prompt::TicketScope::Standard,
+            ),
         },
         Prompt {
             id: "prompt-code-review",
@@ -224,11 +230,100 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
         },
         Prompt {
+            id: "prompt-spec-ticket-fresh",
+            title: "Spec Ticket, fresh",
+            when: "In a Spec run, starts the implement session for a child Ticket run on a new Issue branch targeting the Spec branch. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::fresh(&issue, SPEC_BRANCH, BRANCH, prompt::TicketScope::SpecTicket),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-continuation",
+            title: "Spec Ticket, Continuation with no pull request",
+            when: "In a Spec run, starts the implement session for a child Ticket run continuing an Issue branch that has no Ticket PR yet. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::continuation(
+                &issue,
+                SPEC_BRANCH,
+                BRANCH,
+                None,
+                prompt::TicketScope::SpecTicket,
+            ),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-continuation-pr",
+            title: "Spec Ticket, Continuation with an open pull request",
+            when: "In a Spec run, starts the implement session for a child Ticket run continuing an Issue branch whose Ticket PR against the Spec branch is open. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::continuation(
+                &issue,
+                SPEC_BRANCH,
+                BRANCH,
+                Some(PR_URL),
+                prompt::TicketScope::SpecTicket,
+            ),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-security-review",
+            title: "Spec Ticket, Security review",
+            when: "In a Spec run, runs one guidance Security review for a child Ticket run before its Delivery pushes to its Ticket PR against the Spec branch. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[REVIEW]),
+            text: prompt::security_review(
+                &issue,
+                SPEC_BRANCH,
+                BRANCH,
+                prompt::TicketScope::SpecTicket,
+            ),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-conflict-repair",
+            title: "Spec Ticket, Conflict Repair",
+            when: "In a Spec run, starts a Repair session for a child Ticket run when merging the Spec branch into its Issue branch leaves conflicts. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[FINISH]),
+            text: prompt::conflict_repair(
+                &issue,
+                SPEC_BRANCH,
+                BRANCH,
+                PR_URL,
+                prompt::TicketScope::SpecTicket,
+            ),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-review-repair",
+            title: "Spec Ticket, Review Repair",
+            when: "In a Spec run, starts a Repair session for a child Ticket run when Foreign commits merged into its Issue branch change the tree. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[FINISH]),
+            text: prompt::review_repair(
+                &issue,
+                BRANCH,
+                PR_URL,
+                OWN_HEAD,
+                prompt::TicketScope::SpecTicket,
+            ),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-ci-fix-repair",
+            title: "Spec Ticket, CI-fix Repair",
+            when: "In a Spec run, starts a Repair session for a child Ticket run when CI fails on its Ticket PR's head commit. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[FINISH]),
+            text: prompt::ci_fix_repair(
+                &issue,
+                SPEC_BRANCH,
+                BRANCH,
+                PR_URL,
+                &failed,
+                prompt::TicketScope::SpecTicket,
+            ),
+        },
+        Prompt {
             id: "prompt-bug-fresh",
             title: "Bug Ticket run, fresh",
             when: "Starts the implement session on an issue labelled bug: diagnose before changing code, then implement only if reproduced. Security fixes and Base fixes keep their own flow.",
             sender: Units(&[IMPLEMENT]),
-            text: prompt::diagnosing_bugs(&issue, &prompt::fresh(&issue, BASE, BRANCH), None),
+            text: prompt::diagnosing_bugs(
+                &issue,
+                &prompt::fresh(&issue, BASE, BRANCH, prompt::TicketScope::Standard),
+                None,
+            ),
         },
         Prompt {
             id: "prompt-bug-continuation",
@@ -237,7 +332,7 @@ fn prompts() -> Vec<Prompt> {
             sender: Units(&[IMPLEMENT]),
             text: prompt::diagnosing_bugs(
                 &issue,
-                &prompt::continuation(&issue, BASE, BRANCH, None),
+                &prompt::continuation(&issue, BASE, BRANCH, None, prompt::TicketScope::Standard),
                 Some(prompt::SECURITY_REVIEW_MERGE_BASE),
             ),
         },
@@ -248,7 +343,13 @@ fn prompts() -> Vec<Prompt> {
             sender: Units(&[IMPLEMENT]),
             text: prompt::diagnosing_bugs(
                 &issue,
-                &prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+                &prompt::continuation(
+                    &issue,
+                    BASE,
+                    BRANCH,
+                    Some(PR_URL),
+                    prompt::TicketScope::Standard,
+                ),
                 Some(prompt::SECURITY_REVIEW_MERGE_BASE),
             ),
         },
@@ -326,7 +427,7 @@ fn prompts() -> Vec<Prompt> {
             title: "Security review",
             when: "When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",
             sender: Units(&[REVIEW]),
-            text: prompt::security_review(&issue, BASE, BRANCH),
+            text: prompt::security_review(&issue, BASE, BRANCH, prompt::TicketScope::Standard),
         },
         Prompt {
             id: "prompt-pull-request-security-review",
@@ -371,7 +472,13 @@ fn prompts() -> Vec<Prompt> {
             title: "Conflict Repair",
             when: "Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts.",
             sender: Units(&[FINISH]),
-            text: prompt::conflict_repair(&issue, BASE, BRANCH, PR_URL),
+            text: prompt::conflict_repair(
+                &issue,
+                BASE,
+                BRANCH,
+                PR_URL,
+                prompt::TicketScope::Standard,
+            ),
         },
         Prompt {
             id: "prompt-security-fix",
@@ -385,28 +492,54 @@ fn prompts() -> Vec<Prompt> {
             title: "Conflict Repair, on Foreign commits",
             when: "In a Ticket run that Self-merges, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",
             sender: Units(&[FINISH]),
-            text: prompt::conflict_repair(&issue, BRANCH, BRANCH, PR_URL),
+            text: prompt::conflict_repair(
+                &issue,
+                BRANCH,
+                BRANCH,
+                PR_URL,
+                prompt::TicketScope::Standard,
+            ),
         },
         Prompt {
             id: "prompt-review-repair",
             title: "Review Repair",
             when: "In a Ticket run that Self-merges, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Ticket run last knew as its own before they can be merged.",
             sender: Units(&[FINISH]),
-            text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
+            text: prompt::review_repair(
+                &issue,
+                BRANCH,
+                PR_URL,
+                OWN_HEAD,
+                prompt::TicketScope::Standard,
+            ),
         },
         Prompt {
             id: "prompt-ci-fix-repair",
             title: "CI-fix Repair",
             when: "Starts a Repair session when CI fails on the pull request's head commit, listing each failed check.",
             sender: Units(&[FINISH]),
-            text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed),
+            text: prompt::ci_fix_repair(
+                &issue,
+                BASE,
+                BRANCH,
+                PR_URL,
+                &failed,
+                prompt::TicketScope::Standard,
+            ),
         },
         Prompt {
             id: "prompt-ci-fix-repair-inherited",
             title: "CI-fix Repair, with Inherited failures",
             when: "Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix.",
             sender: Units(&[FINISH]),
-            text: prompt::ci_fix_repair(&issue, BASE, BRANCH, PR_URL, &failed_with_inherited),
+            text: prompt::ci_fix_repair(
+                &issue,
+                BASE,
+                BRANCH,
+                PR_URL,
+                &failed_with_inherited,
+                prompt::TicketScope::Standard,
+            ),
         },
         Prompt {
             id: "prompt-resume",
@@ -511,6 +644,7 @@ fn prompts() -> Vec<Prompt> {
                 BASE,
                 BRANCH,
                 PR_URL,
+                prompt::TicketScope::Standard,
             ),
         },
         Prompt {
@@ -524,6 +658,7 @@ fn prompts() -> Vec<Prompt> {
                 BRANCH,
                 PR_URL,
                 &failed_with_inherited,
+                prompt::TicketScope::Standard,
             ),
         },
         Prompt {
@@ -536,6 +671,7 @@ fn prompts() -> Vec<Prompt> {
                 BRANCH,
                 PR_URL,
                 OWN_HEAD,
+                prompt::TicketScope::Standard,
             ),
         },
         Prompt {
@@ -704,7 +840,14 @@ fn skill_used_by(skill: &str) -> String {
     match skill {
         "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
         "thirdshift-code-review" => format!("{}, a Review run, or a Code review Trial", unit_links(&[REVIEW])),
-        "thirdshift-pr" => unit_links(&[REVIEW]),
+        "thirdshift-pr" => format!(
+            "{}, or a Fix run, when publishing or updating a pull request or Visual evidence",
+            unit_links(&[IMPLEMENT, REVIEW, FINISH])
+        ),
+        "thirdshift-verify-ui" => format!(
+            "{}, or a Fix run's Repair, when rendered UI changes; also a standalone skill Step",
+            unit_links(&[IMPLEMENT, REVIEW, FINISH])
+        ),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
         }
@@ -1063,6 +1206,43 @@ mod tests {
         assert!(!fresh.contains("Merge base commit:"), "{fresh}");
     }
 
+    #[test]
+    fn spec_ticket_prompts_are_listed_on_the_prompts_page() {
+        let prompts = prompts();
+        for id in [
+            "prompt-spec-ticket-fresh",
+            "prompt-spec-ticket-continuation",
+            "prompt-spec-ticket-continuation-pr",
+            "prompt-spec-ticket-security-review",
+            "prompt-spec-ticket-conflict-repair",
+            "prompt-spec-ticket-review-repair",
+            "prompt-spec-ticket-ci-fix-repair",
+        ] {
+            let prompt = prompts
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert!(
+                prompt
+                    .text
+                    .contains("without calling `gh` or uploading attachments"),
+                "{id}: {}",
+                prompt.text
+            );
+        }
+    }
+
+    #[test]
+    fn prompts_page_tracks_repair_skill_users() {
+        for skill in ["thirdshift-verify-ui", "thirdshift-pr"] {
+            let used_by = skill_used_by(skill);
+            assert!(
+                used_by.contains(FINISH.name),
+                "{skill} misses Finish Repairs: {used_by}"
+            );
+        }
+    }
+
     /// The golden-file test: the page carries the fragment as rendered now.
     /// The crates.io package leaves `site/` out, so it skips there.
     #[test]
@@ -1107,6 +1287,13 @@ mod tests {
                 "prompt-fresh"
                     | "prompt-continuation"
                     | "prompt-continuation-pr"
+                    | "prompt-spec-ticket-fresh"
+                    | "prompt-spec-ticket-continuation"
+                    | "prompt-spec-ticket-continuation-pr"
+                    | "prompt-spec-ticket-security-review"
+                    | "prompt-spec-ticket-conflict-repair"
+                    | "prompt-spec-ticket-review-repair"
+                    | "prompt-spec-ticket-ci-fix-repair"
                     | "prompt-bug-fresh"
                     | "prompt-bug-continuation"
                     | "prompt-bug-continuation-pr"

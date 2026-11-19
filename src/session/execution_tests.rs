@@ -395,7 +395,12 @@ fn execute_review(root: &Path, harness: Harness) -> (Result<()>, PathBuf) {
     with_review_sessions(root, harness, |sessions| {
         sessions.run(
             Kind::Implementation,
-            &prompt::fresh(&issue, "main", "issue-7"),
+            &crate::prompt::fresh(
+                &issue,
+                "main",
+                "issue-7",
+                crate::prompt::TicketScope::Standard,
+            ),
         )?;
         fs::write(root.join("carried-on"), "").unwrap();
         Ok(())
@@ -667,7 +672,12 @@ fn unavailable_report_setup_warns_and_the_run_carries_on() {
             fs::set_permissions(&exclude, fs::Permissions::from_mode(0o444)).unwrap();
             let result = sessions.run(
                 Kind::Implementation,
-                &prompt::fresh(&issue, "main", "issue-7"),
+                &crate::prompt::fresh(
+                    &issue,
+                    "main",
+                    "issue-7",
+                    crate::prompt::TicketScope::Standard,
+                ),
             );
             fs::set_permissions(&exclude, original_permissions).unwrap();
             result?;

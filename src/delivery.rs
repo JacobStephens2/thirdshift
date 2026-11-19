@@ -72,6 +72,8 @@ use stage::{CommandLog, CommandRecord, Stage, Tracker};
 pub struct Delivery<'a> {
     /// Whether the opening session is followed by a guidance Security review.
     pub security_review: bool,
+    /// Whether this Delivery belongs to a child Ticket run inside a Spec run.
+    pub scope: prompt::TicketScope,
     /// What the Run hands on to every child Run, a Base fix or a Ticket's
     /// Run, whose Harness, Model and Effort its own sessions run on too.
     pub child_asks: &'a ChildAsks,
@@ -308,6 +310,7 @@ impl Delivery<'_> {
                     pull_request,
                     repair_cap: self.repair_cap,
                     protected_paths: self.protected_paths,
+                    scope: self.scope,
                     context,
                 };
                 steps(&mut outside, self.goal)
@@ -379,6 +382,7 @@ impl Delivery<'_> {
         let base = self.base;
         let goal = self.goal;
         let security_review = self.security_review;
+        let scope = self.scope;
         let repair_cap = self.repair_cap;
         let protected_paths = self.protected_paths;
         let child_asks = self.child_asks;
@@ -413,6 +417,7 @@ impl Delivery<'_> {
             |tracker, worktree, pull_request, sessions| {
                 let route = Route {
                     security_review,
+                    scope,
                     issue,
                     base,
                     branch: worktree.branch(),
@@ -430,6 +435,7 @@ impl Delivery<'_> {
                     pull_request,
                     repair_cap,
                     protected_paths,
+                    scope,
                     context,
                 };
                 route.process_steps(&mut outside, &opening, steps, checklist)
@@ -459,6 +465,7 @@ impl Delivery<'_> {
         let started = self.started;
         let base = self.base;
         let goal = self.goal;
+        let scope = self.scope;
         let repair_cap = self.repair_cap;
         let protected_paths = self.protected_paths;
         let child_asks = self.child_asks;
@@ -492,6 +499,7 @@ impl Delivery<'_> {
                         pull_request,
                         repair_cap,
                         protected_paths,
+                        scope,
                         context,
                     },
                     goal,
@@ -757,6 +765,7 @@ fn publish_steps(
         let branch = outside.worktree.branch().to_string();
         Route {
             security_review: false,
+            scope: outside.scope,
             issue: outside.issue,
             base: outside.base,
             branch: &branch,
@@ -772,6 +781,7 @@ fn publish_steps(
 /// into the Base branch `base`, to `goal`, its sessions run on `harness`.
 struct Route<'a> {
     security_review: bool,
+    scope: prompt::TicketScope,
     issue: &'a IssueUrl,
     base: &'a str,
     branch: &'a str,
@@ -843,11 +853,9 @@ impl Route<'_> {
         self.security_review
             .then(|| {
                 outside.stage(Stage::SecurityReview);
-                outside.security_review(&prompt::security_review(
-                    self.issue,
-                    self.base,
-                    self.branch,
-                ))
+                let prompt =
+                    prompt::security_review(self.issue, self.base, self.branch, self.scope);
+                outside.security_review(&prompt)
             })
             .transpose()
     }
@@ -1238,6 +1246,7 @@ struct InWorktree<'a> {
     pull_request: &'a mut PullRequest,
     repair_cap: usize,
     protected_paths: &'a [String],
+    scope: prompt::TicketScope,
 }
 
 impl Outside for InWorktree<'_> {
@@ -1336,6 +1345,7 @@ impl Outside for InWorktree<'_> {
             pull_request: self.pull_request,
             ci_watch: ci::Watch::new(self.issue),
             protected_paths: self.protected_paths,
+            scope: self.scope,
             context: self.context,
         };
         repair_loop::take_to_goal(&mut outside, self.base, goal, self.repair_cap)?;
@@ -1443,6 +1453,7 @@ struct RunOutside<'a> {
     /// Globs that hold Self-merge when a changed path matches. Empty when
     /// this Delivery has nothing to hold.
     protected_paths: &'a [String],
+    scope: prompt::TicketScope,
 }
 
 impl RunOutside<'_> {
@@ -1522,13 +1533,17 @@ impl repair_loop::Outside for RunOutside<'_> {
         let branch = self.worktree.branch();
         let prompt = match repair {
             Repair::Conflict(Upstream::BaseBranch) => {
-                prompt::conflict_repair(subject, base, branch, pr_url)
+                prompt::conflict_repair(subject, base, branch, pr_url, self.scope)
             }
             Repair::Conflict(Upstream::IssueBranch) => {
-                prompt::conflict_repair(subject, branch, branch, pr_url)
+                prompt::conflict_repair(subject, branch, branch, pr_url, self.scope)
             }
-            Repair::CiFix(failed) => prompt::ci_fix_repair(subject, base, branch, pr_url, failed),
-            Repair::Review { from } => prompt::review_repair(subject, branch, pr_url, from),
+            Repair::CiFix(failed) => {
+                prompt::ci_fix_repair(subject, base, branch, pr_url, failed, self.scope)
+            }
+            Repair::Review { from } => {
+                prompt::review_repair(subject, branch, pr_url, from, self.scope)
+            }
         };
         self.pull_request.ensure_actionable(true)?;
         let result = self.sessions.run(kind, &prompt);

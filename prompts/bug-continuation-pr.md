@@ -27,6 +27,8 @@ Push branch <branch>.
 
 Update PR <pull request URL> using the `thirdshift-pr` skill, rewriting its body to cover the whole branch, marked ready for review.
 
+Whenever your commits (or earlier branch commits when PR <pull request URL> is missing Visual evidence against refs/remotes/origin/<base>) modify rendered UI files on PR <pull request URL>, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched.
+
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 
 Include "Closes #<n>" in the PR body.

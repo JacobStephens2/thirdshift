@@ -86,7 +86,7 @@
             <p class="eyebrow">Install</p>
             <div class="install"><code>curl -fsSL https://thirdshift.app/install.sh | sh</code><button type="button" class="copy">Copy</button></div>
             <details class="install-more"><summary>Show the full command</summary><code>curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh</code></details>
-            <p class="credit">Then run <code>thirdshift setup</code> to choose your defaults. Keep the binary current with <code>thirdshift update</code>.</p>
+            <p class="credit">Then run <code>thirdshift setup</code> to choose your defaults and check the tools for pull request Visual evidence. On a terminal, Setup offers to install missing tools after saving your settings. Keep the binary current with <code>thirdshift update</code>.</p>
             <p class="credit">Maintainers can run <code>thirdshift release</code> as a Pass over green shipped changes, automatically choosing minor or patch. Pin the bump with <code>--major</code>, <code>--minor</code> or <code>--patch</code>, or supply an explicit version. A <a href="/docs/#releasing">Release run</a> prepares a temporary worktree, waits for publication and merges the bump PR. Console starts require <code>admin</code> scope.</p>
           </div>
         </div>
@@ -117,6 +117,7 @@
           <details class="reading-more fold">
             <summary>Skills and Processes in detail</summary>
             <div class="reading-content">
+              <p>UI changes use <a href="/prompts/#skill-thirdshift-verify-ui"><code>/thirdshift-verify-ui</code></a> inside those sessions: explore the running app interactively in the Worktree, capture labelled Before/After <code>.png</code> screenshots and H.264 <code>.mp4</code> walkthrough recordings, and attach them via <code>gh &gt;= 2.103.2 --attach</code> (<code>gh pr create --attach</code> / <code>gh pr edit --attach</code>), keeping media out of repository commits so Visual evidence inherits the repository's read permissions. When capture tools or the app cannot run, the explicit limitation goes under <code>## Evidence</code>; <code>thirdshift setup</code> checks <code>gh</code>, <code>ffmpeg</code>, and Playwright Chromium ahead of time. Follow-up Continuations, Fix runs, UI-touching Security reviews, and Delivery Repairs refresh stale captures on UI edits while leaving non-UI evidence untouched.</p>
             <p>Review Passes recognize reviewed and pushed heads only in comments by the GitHub account thirdshift acts as. When an upper pull request lacks Review run fixes delivered to its base, its comment says it needs updating before merge; the author updates the stack.</p>
             <p>A Review Pass skips a PR whose closing issue has an <code>in-progress</code> Claim or issue reservation. For a PR targeting an Issue branch, it also checks the base Spec's issue and names that Spec when held. When GitHub links no closing issue, it checks local closing references in the body, such as <code>Closes #7</code>, for the same holds.</p>
             <p>Review Passes (<code>review --author</code>) and Fix Passes skip <code>release-*</code> pull requests targeting <code>main</code>, leaving their version-only heads to the Release run. Explicit <code>thirdshift fix &lt;pr-url&gt; --no-merge --no-base-fix</code> still repairs those pull requests.</p>
@@ -294,7 +295,7 @@
             </article>
             <article class="unit-col ink-y" aria-labelledby="unit-3">
               <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>Step 3 · Review</h3>
-              <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review. Evidence includes actual failing-before and passing-after execution output, plus embedded screenshots or recordings for visual changes when a headless browser is available. Every image has a visible Before or After label immediately above it, naming its flow and viewport.</p>
+              <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review. Evidence includes actual failing-before and passing-after execution output, plus GitHub-attached <code>.png</code> screenshots and H.264 <code>.mp4</code> walkthrough recordings via <code>gh --attach</code> for rendered UI changes (or an explicit limitation under <code>## Evidence</code> when capture tools or the app cannot run). Every capture has a visible Before or After label immediately above it, naming its flow and viewport.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from step 3">
                 <li><span class="prefix">thirdshift: 00:26:05</span> implement: $ git status --short &amp;&amp; gh pr list --repo JacobStephens2/thirdshift --head issue-663 --state open --js…</li>
@@ -422,7 +423,7 @@
         <details class="workflow">
           <summary><span class="workflow-name">Spec run</span><span class="workflow-description">Dependent Tickets come together in one Spec PR.</span></summary>
           <div class="workflow-content">
-            <p>A <a href="/docs/#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
+            <p>A <a href="/docs/#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, with child Ticket runs verifying any UI changes locally without uploading attachments; then one Spec review inspects the whole Spec branch against the Spec and attaches unified Before and After Visual evidence to the Spec PR.</p>
           </div>
         </details>
         <details class="workflow">

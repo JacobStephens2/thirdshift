@@ -416,6 +416,7 @@ fn setup_proposes_no_model_and_checks_the_answer_standalone() {
             ("Run notifications", ""),
             ("Claude setup token", ""),
             ("Run the Console?", ""),
+            ("Install or upgrade Visual evidence tools now? [y/N]", "n"),
         ],
     );
     assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -501,6 +502,7 @@ fn setup_retries_a_refused_model_and_effort_with_the_same_preflight_check() {
             ("Run notifications", ""),
             ("Claude setup token", ""),
             ("Run the Console?", ""),
+            ("Install or upgrade Visual evidence tools now? [y/N]", "n"),
         ],
     );
     assert_eq!(result.code, Some(0), "{}", result.stderr);

@@ -280,6 +280,7 @@ fn run(
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
+        scope: crate::prompt::TicketScope::for_child(started_by.child()),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
         spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
@@ -366,6 +367,7 @@ fn start<O: Outside>(
         outside.make_claim()?;
     }
     let is_spec = !tickets.is_empty();
+    let scope = crate::prompt::TicketScope::for_child(started_by.child());
     let mut outcome = start_in_worktree(
         outside,
         issue,
@@ -373,6 +375,7 @@ fn start<O: Outside>(
         &selection,
         &base,
         asks.tickets_at_once,
+        scope,
     );
     if let Err(failed) = &outcome
         && crate::session::limits::plan_usage_paused(&failed.error).is_some()
@@ -435,13 +438,14 @@ fn start_in_worktree<O: Outside>(
     selection: &Selection,
     base: &str,
     parallel: NonZeroUsize,
+    scope: crate::prompt::TicketScope,
 ) -> Result<Reached, FailedRun> {
     let branch = selection.branch();
     let checkout = match selection {
         Selection::Fresh { .. } => Checkout::Fresh,
         Selection::Continuation { .. } => Checkout::Continuation,
     };
-    let opening = crate::implement::opening(issue, base, selection);
+    let opening = crate::implement::opening(issue, base, selection, scope);
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
@@ -529,6 +533,8 @@ struct LaunchAndGitHub<'a> {
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
+    /// Child Ticket runs in a Spec run keep UI verification local.
+    scope: crate::prompt::TicketScope,
     /// Base fixes have their own reproduction flow.
     diagnose_bugs: bool,
     /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
@@ -574,6 +580,7 @@ impl LaunchAndGitHub<'_> {
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
             security_review: self.security_review,
+            scope: self.scope,
             child_asks: self.child_asks,
             issue: self.issue,
             base,
@@ -1042,7 +1049,7 @@ mod tests {
         Call::Deliver(
             Checkout::Fresh,
             base.to_string(),
-            prompt::fresh(&seven(), base, "issue-7"),
+            prompt::fresh(&seven(), base, "issue-7", prompt::TicketScope::Standard),
         )
     }
 
@@ -1081,7 +1088,40 @@ mod tests {
                 base_branch(Some("issue-3")),
                 Call::Interrupted,
                 worktree(Checkout::Fresh, "issue-3"),
-                deliver_fresh("issue-3"),
+                Call::Deliver(
+                    Checkout::Fresh,
+                    "issue-3".to_string(),
+                    prompt::fresh(
+                        &seven(),
+                        "issue-3",
+                        "issue-7",
+                        prompt::TicketScope::SpecTicket,
+                    ),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_base_fix_child_run_keeps_the_standard_fresh_prompt() {
+        let kind = Kind::BaseFix {
+            base: "main".to_string(),
+            spec_pr: None,
+        };
+        let mut outside = Scripted::new(Script::default());
+
+        let ended = start_by(&mut outside, &asks(), StartedBy::Child(&kind));
+
+        assert!(ended.is_ok());
+        assert_eq!(
+            outside.calls,
+            [
+                Call::Started { spec_run: false },
+                Call::Select,
+                base_branch(Some("main")),
+                Call::Interrupted,
+                worktree(Checkout::Fresh, "main"),
+                deliver_fresh("main"),
             ]
         );
     }
@@ -1506,7 +1546,13 @@ mod tests {
             });
 
             let pr_url = pr_base.map(|_| PR_URL);
-            let prompt = prompt::continuation(&seven(), "main", "issue-7", pr_url);
+            let prompt = prompt::continuation(
+                &seven(),
+                "main",
+                "issue-7",
+                pr_url,
+                prompt::TicketScope::Standard,
+            );
             assert_in_turn(
                 &calls,
                 &[
