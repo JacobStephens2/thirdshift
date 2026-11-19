@@ -89,6 +89,7 @@ function morph(html) {
       }
     }
   });
+  hideOptimisticallyDismissedRows();
   // A live refresh must keep choices the person has not submitted yet.
   for (const input of current.querySelectorAll('.machine-filter select')) {
     const value = filters.get(input.name);
@@ -201,6 +202,8 @@ let peekUrl = null;
 let pendingPeek = null;
 // Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
+// Inline rows removed before their Dismiss request settles, keyed like `dismissals`.
+const optimisticDismissals = new Map();
 function dismissalKey(form) {
   return JSON.stringify([form.elements.machine?.value ?? '', form.elements.command.value]);
 }
@@ -212,6 +215,30 @@ function showDismissal() {
     form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
       ? state.message : '';
   }
+}
+
+// A refresh landing while a Dismiss is in flight must not bring its row back.
+function hideOptimisticallyDismissedRows() {
+  for (const form of document.querySelectorAll('#inbox form[data-dismiss]')) {
+    const command = dismissalKey(form);
+    const state = dismissals.get(command);
+    if (!optimisticDismissals.has(command) || !state?.pending || state.action !== form.action) continue;
+    form.closest('.command')?.remove();
+  }
+}
+
+function restoreOptimisticallyDismissedRow(command) {
+  const entry = optimisticDismissals.get(command);
+  if (!entry) return;
+  const { row, parent, nextSibling, nextId, groupId } = entry;
+  if (row.isConnected || document.getElementById(row.id)) return;
+  const target = parent?.isConnected ? parent
+    : document.getElementById(groupId)?.querySelector(':scope > ul.commands, :scope > .commands');
+  if (!target) return;
+  const sibling = nextSibling?.parentElement === target ? nextSibling
+    : nextId ? [...target.children].find(child => child.id === nextId) : null;
+  if (sibling) target.insertBefore(row, sibling);
+  else target.append(row);
 }
 
 function removeDismissalNotice(command) {
@@ -520,6 +547,21 @@ document.addEventListener('submit', async event => {
     message: undo ? 'Taking back dismissal…' : 'Dismissing…'
   };
   dismissals.set(command, state);
+  if (row && !undo) {
+    optimisticDismissals.set(command, {
+      row,
+      parent: row.parentElement,
+      nextSibling: row.nextSibling,
+      nextId: row.nextElementSibling?.id || null,
+      groupId: row.closest('details')?.id || null
+    });
+    if (selected === row) {
+      const nextRow = next !== row ? document.getElementById(next?.id) : null;
+      select(nextRow);
+      nextRow?.focus({ preventScroll: true });
+    }
+    row.remove();
+  }
   showDismissal();
   let saved = false;
   try {
@@ -547,6 +589,8 @@ document.addEventListener('submit', async event => {
       : `Could not save the dismissal: ${error.message}`;
   } finally {
     state.pending = false;
+    if (!saved) restoreOptimisticallyDismissedRow(command);
+    optimisticDismissals.delete(command);
     showDismissal();
   }
 });

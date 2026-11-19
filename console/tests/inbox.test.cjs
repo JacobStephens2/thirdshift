@@ -1252,6 +1252,63 @@ test('inline Dismiss and notice Undo keep pending and error feedback through liv
   }
 });
 
+test('inline Dismiss removes the row before the request settles and restores it on failure', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const waiting = '#inbox > [data-group="needs you"] .command';
+  const rows = page.locator(waiting);
+  const count = await rows.count();
+  const row = rows.first();
+  const command = await row.getAttribute('data-command');
+  const nextCommand = await rows.nth(1).getAttribute('data-command');
+  const secondPath = await rows.nth(1).locator(':scope > .row-head form[data-dismiss] [name="command"]').inputValue();
+  const secondOriginal = await readFile(secondPath, 'utf8');
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route(`${origin}/dismiss`, async route => {
+    await held;
+    await route.continue();
+  });
+  try {
+    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+    assert.equal(await page.locator(`${waiting}[data-command="${command}"]`).count(), 0);
+    await page.waitForFunction(next => document.querySelector('.command[aria-current="true"]')?.dataset.command === next, nextCommand);
+    // A live refresh landing while the request is held must not resurrect the row.
+    const updated = JSON.parse(secondOriginal);
+    updated.cause = 'Live refresh while Dismiss is held';
+    await replaceRecord(secondPath, JSON.stringify(updated));
+    await page.waitForFunction(() => document.body.textContent.includes('Live refresh while Dismiss is held'));
+    assert.equal(await page.locator(`${waiting}[data-command="${command}"]`).count(), 0);
+    release();
+    const notice = page.locator('#dismissal-notices > [role="status"]').filter({ hasText: 'Dismissed' });
+    await notice.waitFor();
+    await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+    assert.equal(await page.locator(`#inbox > [data-group="done"] .command[data-command="${command}"]`).count(), 1);
+    await notice.getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+    await replaceRecord(secondPath, secondOriginal);
+  }
+  // A failed save restores the row in place with the error and an enabled button.
+  const failedRow = page.locator(`${waiting}[data-command="${command}"]`);
+  await failedRow.waitFor();
+  await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please retry Dismiss' }));
+  try {
+    await failedRow.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    const form = failedRow.locator(':scope > .row-head form[data-dismiss]');
+    await form.getByText('Could not save the dismissal: Please retry Dismiss', { exact: true }).waitFor();
+    assert.equal(await failedRow.count(), 1);
+    assert.equal(await form.locator('button').isEnabled(), true);
+    assert.equal(await page.locator('#dismissal-notices form').count(), 0);
+    assert.equal(await rows.count(), count);
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('the Inbox opens with Details closed, and Dismiss works by keyboard from Details beside a clicked row', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
@@ -1309,6 +1366,7 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
         await row.waitFor();
         await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
         await row.waitFor({ state: 'detached' });
+        await notice.waitFor();
         await page.waitForFunction(() => !document.querySelector('#dismissal-notices button').disabled);
         await page.mouse.move(0, 0);
         await page.clock.fastForward(10001);
