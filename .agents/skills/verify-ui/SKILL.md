@@ -30,11 +30,11 @@ Choose proof by the change:
 | Bug fix or change to an existing interactive flow | Also a matching Before walkthrough `.mp4`. |
 | Net-new control or route | After walkthrough; omit Before video of a flow that did not exist. |
 
-Create each capture with `mktemp`, e.g. `/tmp/before-desktop.XXXXXX.png` or `/tmp/after-desktop.XXXXXX.mp4`. Write Before captures on the unpatched baseline before edits. Use `1440×900` desktop, plus `390×844` mobile when responsive behavior is affected; pair Before/After at the same viewport, state and flow. Retain those exact paths for the PR. Recover a missing Before from a temporary detached Base branch worktree (or the diagnosis Session's specified reproduction commit), boot it with independent temporary state, capture, stop its children and remove the worktree inside the same EXIT cleanup.
+Create each capture with `mktemp`, e.g. `"${TMPDIR:-/tmp}/before-desktop.XXXXXX.png"` or `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.mp4"`. Write Before captures on the unpatched baseline before edits. Use `1440×900` desktop, plus `390×844` mobile when responsive behavior is affected; pair Before/After at the same viewport, state and flow. Retain those exact paths for the PR. Recover a missing Before from a temporary detached Base branch worktree (or the diagnosis Session's specified reproduction commit), boot it with independent temporary state, capture, stop its children and remove the worktree inside the same EXIT cleanup.
 
 ## Phase 2 — Clean walkthrough pass
 
-Once exploration passes, record the chosen flow in one uninterrupted disposable Playwright script created with `mktemp` and removed by the owning subshell's EXIT trap. Use the repository's installed Playwright (resolve it from its package directory when the script lives in `/tmp`) and headless Chromium. Keep the script temporary; a separate durable regression test may be warranted at the repository's test seam.
+Once exploration passes, record the chosen flow in one uninterrupted disposable Playwright script created with `mktemp` and removed by the owning subshell's EXIT trap. Use the repository's installed Playwright (resolve it from its package directory when the script lives outside the repository, such as in `${TMPDIR:-/tmp}`) and headless Chromium. Keep the script temporary; a separate durable regression test may be warranted at the repository's test seam.
 
 Set `viewport` explicitly and match `recordVideo.size` to it: Playwright otherwise scales recordings down. For Playwright `>= 1.59`, enable native `recordVideo.showActions` cursor/click/highlight annotations:
 
@@ -56,7 +56,7 @@ Only when the target repository pins Playwright `< 1.59`, omit `showActions` and
 
 Attach listeners before navigation to collect unexpected `pageerror`, console errors, failed requests and `5xx` responses (including popups if the flow opens them). Drive the already explored steps with stable accessibility/DOM locators and assert the expected state after each action. Use brief `~300–500 ms` beats to make clicks and changes legible, with no model-thinking pauses in the recording. Name any expected failures explicitly; assert zero unexpected page errors or `5xx` responses before accepting the pass. Do not hide failures to produce a clean video.
 
-Await `context.close()` to flush the recording, then `browser.close()` in `finally`. Transcode the resulting `.webm` with `ffmpeg` into a separate `mktemp /tmp/after-desktop.XXXXXX.mp4` capture (use Before/mobile names as appropriate):
+Await `context.close()` to flush the recording, then `browser.close()` in `finally`. Transcode the resulting `.webm` with `ffmpeg` into a separate `mktemp "${TMPDIR:-/tmp}/after-desktop.XXXXXX.mp4"` capture (use Before/mobile names as appropriate):
 
 ```sh
 ffmpeg -y -i "$raw_video" -an -c:v libx264 -pix_fmt yuv420p \

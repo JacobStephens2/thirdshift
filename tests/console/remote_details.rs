@@ -13,6 +13,11 @@ fn fixture(home: &Path) -> String {
         "Remote Command output <unsafe>\n",
     )
     .unwrap();
+    fs::write(
+        dir.join("7-fixture.notification.txt"),
+        "Subject: Remote notification\n\nRemote recommendation <unsafe>\n",
+    )
+    .unwrap();
     let session = dir.join("99-20261001T120000+0000-implement.logs.jsonl");
     fs::write(&session, include_str!("../fixtures/waterfall-logs.jsonl")).unwrap();
     let mut child = parent.clone();
@@ -147,6 +152,8 @@ fn remote_command_details_render_locally_and_fetch_fresh_without_writing_content
         "implement",
         "99",
         "Remote Command output &#60;unsafe&#62;",
+        "Subject: Remote notification",
+        "Remote recommendation &#60;unsafe&#62;",
     ] {
         assert!(html.contains(text), "missing {text}: {html}");
     }

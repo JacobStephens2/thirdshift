@@ -12,6 +12,7 @@ use crate::progress;
 
 pub(crate) mod inbox;
 mod recovery;
+pub(crate) use recovery::owner_is_dead;
 pub(crate) use recovery::recover;
 
 pub struct Reservation {

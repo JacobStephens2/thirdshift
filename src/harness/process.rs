@@ -14,6 +14,9 @@ pub(super) fn output(
     input: Option<&str>,
 ) -> Result<Output> {
     let command = invocation.command();
+    if let Some(tmp) = crate::scratch::session_temp()? {
+        command.env("TMPDIR", tmp);
+    }
     command.envs(adapter.environment().iter().copied());
     adapter.prepare(command);
     process::output(
@@ -36,6 +39,9 @@ pub(crate) fn streaming<T: Send + 'static>(
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
     let command = invocation.command();
+    if let Some(tmp) = crate::scratch::session_temp()? {
+        command.env("TMPDIR", tmp);
+    }
     command.envs(adapter.environment().iter().copied());
     adapter.prepare(command);
     process::session::mark(invocation.command());

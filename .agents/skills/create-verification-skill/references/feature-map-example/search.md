@@ -34,7 +34,7 @@ Preconditions:
 - **Clear query.** Choose `Clear search`. Run `control-notes browser click --role button --name "Clear search"`. The searchbox is empty and the `Recent notes` region replaces the result list.
 - **CLI match.** Search from the terminal. Run `control-notes cli -- notes search "quarterly" --format json`. Exit code `0` and stdout contain one object whose title is `Quarterly plan`.
 - **CLI miss.** Search for an absent value. Run `control-notes cli -- notes search "volcano" --format json`. Exit code `0` and stdout are `[]`.
-- **Proof.** Capture the populated result state to `/tmp/after-desktop.XXXXXX.png` and an H.264 `+faststart` (`<= 8 MB`) `/tmp/after-desktop.XXXXXX.mp4` walkthrough showing Notes, the query, and `Quarterly plan`.
+- **Proof.** Capture the populated result state to `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.png"` and an H.264 `+faststart` (`<= 8 MB`) `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.mp4"` walkthrough showing Notes, the query, and `Quarterly plan`.
 
 ## Gotchas
 

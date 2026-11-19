@@ -21,7 +21,7 @@ npm run docs:check --prefix site
 ```sh
 (
   set -eu
-  state_dir=$(mktemp -d /tmp/verify-site-state.XXXXXX)
+  state_dir=$(mktemp -d "${TMPDIR:-/tmp}/verify-site-state.XXXXXX")
   server_pid=''
   cleanup() {
     if [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null; then
@@ -75,11 +75,11 @@ Follow `verify-ui` (Factory: `thirdshift-verify-ui`) for the two-phase verificat
 
 ## Evidence
 
-Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Defer transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
+Create proof paths outside `$state_dir` via `mktemp` (for example `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.png"` and `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.mp4"`) so `Cleanup` preserves them. Defer transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
 
 ## Cleanup
 
-The single `trap cleanup EXIT` handler stops and waits for `$server_pid` (and any CLI browser daemon), closes Playwright contexts/browser in `finally`, removes `$state_dir` and temporary scripts, leaves `$shot` and `$video` intact at their `/tmp` `mktemp` paths, and verifies zero server or browser child processes remain after exit (`kill -0 "$server_pid"` fails).
+The single `trap cleanup EXIT` handler stops and waits for `$server_pid` (and any CLI browser daemon), closes Playwright contexts/browser in `finally`, removes `$state_dir` and temporary scripts, leaves `$shot` and `$video` intact at their `mktemp` paths, and verifies zero server or browser child processes remain after exit (`kill -0 "$server_pid"` fails).
 
 ## Helpers
 

@@ -35,7 +35,7 @@ pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Departure, Group, InboxItem, NeedsYouKind, RowOrder};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};
-pub(super) use selection::Observation;
+pub(super) use selection::{Observation, Selection};
 
 pub(super) struct Snapshot {
     pub(super) unavailable_accounts: BTreeSet<String>,
@@ -306,11 +306,11 @@ fn command_trees(
         .collect()
 }
 
-/// The Command log `show` and the Console may read for a Process's Steps.
-/// An Other-account log is read only when its canonical path stays under the
+/// A file `show` and the Console may read for Command details.
+/// An Other-account file is read only when its canonical path stays under the
 /// accepted log directory, and that canonical path is what is opened. The
 /// serving account passes no directory and reads `path` as given.
-pub(super) fn steps_command_log(path: &Path, accepted: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn detail_file(path: &Path, accepted: Option<&Path>) -> Option<PathBuf> {
     let Some(root) = accepted else {
         return Some(path.to_path_buf());
     };

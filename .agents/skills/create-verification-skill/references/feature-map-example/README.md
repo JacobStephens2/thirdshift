@@ -5,7 +5,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Start inside one `( ... )` subshell with `trap ... EXIT` registered before launching the server or browser daemon.
-- Create an isolated data directory with `mktemp -d /tmp/notes-state.XXXXXX` (`NOTES_DATA_DIR`) and bind loopback on port `0` (`127.0.0.1:0`), reading the actual `ORIGIN` from readiness output.
+- Create an isolated data directory with `mktemp -d "${TMPDIR:-/tmp}/notes-state.XXXXXX"` (`NOTES_DATA_DIR`) and bind loopback on port `0` (`127.0.0.1:0`), reading the actual `ORIGIN` from readiness output.
 - Seed notes titled `Quarterly plan` and `Grocery list`; load optional faux credentials only from `~/.config/thirdshift/verify-env/<owner>/<repo>.env` if the flow requires auth.
 - Put `control-notes` and the `notes` CLI on `PATH`, and run `control-notes doctor` before driving.
 - Drive only the instance started by this verification run.
@@ -21,7 +21,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Proof and skip reporting
 
-- Capture the user action and resulting state: `mktemp /tmp/after-desktop.XXXXXX.png` and H.264 `yuv420p` `+faststart` (`<= 8 MB`) `.mp4` walkthroughs (`mktemp /tmp/after-desktop.XXXXXX.mp4`).
+- Capture the user action and resulting state: `mktemp "${TMPDIR:-/tmp}/after-desktop.XXXXXX.png"` and H.264 `yuv420p` `+faststart` (`<= 8 MB`) `.mp4` walkthroughs (`mktemp "${TMPDIR:-/tmp}/after-desktop.XXXXXX.mp4"`).
 - UI proof pairs an ARIA snapshot with a screenshot or walkthrough showing app identity and faux data.
 - CLI proof includes the command, stdout, stderr, and exit code.
 - Mutation proof includes a read-only second view of the stored value.

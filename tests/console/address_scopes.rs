@@ -320,6 +320,11 @@ fn read_only_session_refuses_security_details_and_log_streams() {
     security["session_log"] = json!(trace);
     security["security_findings"] = json!([{"title": "private finding marker", "severity": "high", "url": "https://github.com/acme/widgets/security/advisories/GHSA-test"}]);
     write_record(home.path(), 2, &security);
+    fs::write(
+        trace.parent().unwrap().join("2-fixture.notification.txt"),
+        "Subject: Security notification\n\nprivate notification marker\n",
+    )
+    .unwrap();
     api::cli(
         home.path(),
         &["console", "scopes", "--scopes", "read", "--json"],
@@ -344,6 +349,7 @@ fn read_only_session_refuses_security_details_and_log_streams() {
         "/security".to_owned(),
         "/?page=security".into(),
         "/peek?command=secure-fixture".into(),
+        "/api/v1/peek?command=secure-fixture".into(),
         "/waterfall?command=secure-fixture".into(),
         "/spans?command=secure-fixture".into(),
         "/log?command=secure-fixture&session=security-audit".into(),
@@ -357,6 +363,10 @@ fn read_only_session_refuses_security_details_and_log_streams() {
     for route in ["/", "/history"] {
         let page = get(&console, route, &session).text().unwrap();
         assert!(!page.contains("private finding marker"), "{route}: {page}");
+        assert!(
+            !page.contains("private notification marker"),
+            "{route}: {page}"
+        );
     }
 }
 

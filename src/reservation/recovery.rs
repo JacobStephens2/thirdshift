@@ -243,6 +243,17 @@ trait Processes {
 
 struct Native;
 
+/// The same conservative local proof used to release origin reservations.
+pub(crate) fn owner_is_dead(host: Option<String>, process: u32, started: String) -> bool {
+    Owner {
+        host,
+        launch: None,
+        process: Some(process),
+        started: Some(started),
+    }
+    .orphaned(&Native)
+}
+
 impl Processes for Native {
     fn host(&self) -> Option<String> {
         crate::host::name()

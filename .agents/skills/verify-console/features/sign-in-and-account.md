@@ -27,7 +27,7 @@ Preconditions:
 - **Sign in with faux credentials.** Fill label `Email` (`owner@example.test`) and label `Password` (`browser test password`), then click button `Sign in`. Browser navigates to `${origin}/` and renders the Inbox for `acme/widgets`.
 - **Verify Console log.** Click `Console log` in `nav[aria-label="Pages"]` (or press `g` then `c`). `${origin}/console-log` renders `<h1>Console log</h1>` and `ul.log-list li` includes the sign-in account event for `owner@example.test`.
 - **Verify Account and sign out.** Click `Account` in `nav[aria-label="Pages"]`. Page heading `Account` displays `owner@example.test`; click `Sign out this browser`. Browser redirects back to `${origin}/sign-in`, and revisiting `${origin}/` or `${origin}/console-log` redirects to `/sign-in` again.
-- **Proof.** Capture `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4` showing Sign in -> Inbox -> Console log -> Account -> Sign out using only faux seeded data (never capture real `~/.thirdshift/console-accounts.json` or non-faux passwords).
+- **Proof.** Capture `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.png"` and `"${TMPDIR:-/tmp}/after-desktop.XXXXXX.mp4"` showing Sign in -> Inbox -> Console log -> Account -> Sign out using only faux seeded data (never capture real `~/.thirdshift/console-accounts.json` or non-faux passwords).
 
 ## Gotchas
 

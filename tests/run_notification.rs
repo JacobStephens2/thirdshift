@@ -101,6 +101,20 @@ fn a_run_without_email_saves_its_notification_beside_its_command_log() {
     assert_contains(&saved, PR_URL);
     assert_contains(&saved, path.to_str().unwrap());
     assert_contains(&saved, "\nSession models:\n");
+
+    let details = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(details.code, Some(0), "{}", details.stderr);
+    let details: serde_json::Value = serde_json::from_str(&details.stdout).unwrap();
+    let (subject, body) = saved
+        .strip_prefix("Subject: ")
+        .unwrap()
+        .split_once("\n\n")
+        .unwrap();
+    assert_eq!(details["command"]["notification"]["subject"], subject);
+    assert_eq!(details["command"]["notification"]["body"], body);
+    let shown = scenario.run(&["show", "widgets#7"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert_contains(&shown.stdout, &saved);
 }
 
 #[test]
