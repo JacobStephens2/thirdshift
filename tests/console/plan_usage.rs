@@ -155,6 +155,43 @@ fn harness_summary(page: &str) -> &str {
 }
 
 #[test]
+fn muse_read_failures_are_visible_in_the_summary_details_cli_and_api() {
+    let home = tempfile::tempdir().unwrap();
+    configure_with(home.path(), "[harness]\ndefault = \"muse\"\n");
+    fs::create_dir_all(fixture_bin(home.path())).unwrap();
+    support::write_executable(
+        &fixture_bin(home.path()).join("muse"),
+        "#!/bin/sh\nexit 0\n",
+    );
+    saved(
+        home.path(),
+        json!({"muse": {
+            "read_at": rfc3339(0), "read_error": "muse serve refused <login> & usage"
+        }}),
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+
+    let html = console.get("/plan-usage?local=true").text().unwrap();
+    let escaped = "usage read failed: muse serve refused &#60;login&#62; &#38; usage";
+    assert!(harness_summary(&html).contains(escaped), "{html}");
+    let detail = html.split("class=\"plan-usage-login\"").nth(1).unwrap();
+    assert!(detail.contains(escaped), "{detail}");
+    assert!(!detail.contains("nothing observed yet"), "{detail}");
+    assert!(!html.contains("<login>"), "{html}");
+    parity(
+        &console,
+        home.path(),
+        "/api/v1/plan-usage?local=true",
+        &["plan-usage", "--local", "--json"],
+    );
+    let text = thirdshift(home.path(), &["plan-usage", "--local"]);
+    assert!(
+        String::from_utf8_lossy(&text.stdout)
+            .contains("usage read failed: muse serve refused <login> & usage")
+    );
+}
+
+#[test]
 fn inbox_plan_usage_deadlines_use_local_minutes_and_escape_window_names() {
     let scenario = support::Scenario::new();
     let home = scenario.path("home");

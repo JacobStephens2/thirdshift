@@ -1,6 +1,6 @@
 //! Official non-billed reads of a Harness's Plan usage and account, run on
 //! demand: `codex app-server`'s `account/rateLimits/read`, `muse serve`'s
-//! `usage/read` and `account/read`, and `claude auth status --json`. None
+//! `usage/refresh` and `account/read`, and `claude auth status --json`. None
 //! starts a model turn, scrapes a web endpoint or reads a private token.
 
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ pub const WINDOWED: [Harness; 2] = [Harness::Codex, Harness::Muse];
 /// state under the snapshot's lock.
 pub enum Reading {
     Codex(Result<Value>, Option<bool>),
-    Muse(Option<BTreeMap<i64, Value>>),
+    Muse(Result<BTreeMap<i64, Value>>),
     Claude(Option<Value>),
 }
 
@@ -43,7 +43,7 @@ pub fn read(harness: Harness) -> Option<Reading> {
             Ok(result) => Reading::Codex(Ok(result), None),
             Err(error) => Reading::Codex(Err(error), codex_signed_in()),
         }),
-        Harness::Muse => Some(Reading::Muse(muse().ok())),
+        Harness::Muse => Some(Reading::Muse(muse())),
         Harness::Claude => Some(Reading::Claude(claude().ok())),
         Harness::Agy | Harness::Grok | Harness::OpenCode | Harness::Kimi => None,
     }
@@ -57,9 +57,21 @@ impl Reading {
         match self {
             Self::Codex(Ok(result), _) => take_codex(state, &result, now),
             Self::Codex(Err(_), signed) => signed_in(state, signed),
-            Self::Muse(Some(responses)) => take_muse(state, &responses, now),
+            Self::Muse(responses) => {
+                state.read_error = responses
+                    .and_then(|responses| take_muse(state, &responses, now))
+                    .err()
+                    .map(|error| {
+                        error
+                            .to_string()
+                            .chars()
+                            .filter(|character| !character.is_control())
+                            .take(256)
+                            .collect()
+                    });
+            }
             Self::Claude(Some(status)) => take_claude(state, &status),
-            Self::Muse(None) | Self::Claude(None) => {}
+            Self::Claude(None) => {}
         }
     }
 }
@@ -208,27 +220,50 @@ fn take_codex(state: &mut State, result: &Value, now: DateTime<Utc>) {
 }
 
 fn muse() -> Result<BTreeMap<i64, Value>> {
+    // `muse schema generate-ts --out DIR --experimental` (1.4.24):
+    // `usage/read` only returns this host's last observation. A fresh
+    // serve host needs `usage/refresh` to fetch one without a model call.
     rpc(
         "muse",
         &["serve"],
         &[
-            json!({"method": "initialize", "id": 0, "params": {
+            json!({"jsonrpc": "2.0", "method": "initialize", "id": 0, "params": {
                 "clientInfo": client(), "capabilities": {"experimentalApi": true}
             }}),
-            json!({"method": "initialized"}),
-            json!({"method": "usage/read", "id": 1}),
-            json!({"method": "account/read", "id": 2}),
+            json!({"jsonrpc": "2.0", "method": "initialized"}),
+            json!({"jsonrpc": "2.0", "method": "usage/refresh", "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "account/read", "id": 2}),
         ],
         &[1, 2],
     )
 }
 
-fn take_muse(state: &mut State, responses: &BTreeMap<i64, Value>, now: DateTime<Utc>) {
-    let usage = responses
-        .get(&1)
-        .map(|response| &response["result"]["usage"])
-        .filter(|usage| usage.is_object());
-    if let Some(usage) = usage {
+fn muse_usage(response: Option<&Value>) -> Result<&Value> {
+    let response = response.context("muse serve gave no usage answer")?;
+    if !response["error"].is_null() {
+        bail!(
+            "{}",
+            text(&response["error"]["message"])
+                .unwrap_or_else(|| "muse serve refused the usage read".into())
+        );
+    }
+    let usage = &response["result"]["usage"];
+    if !["window", "weekly"]
+        .iter()
+        .any(|name| from_percent(&usage[name]["usedPercent"]).is_some())
+    {
+        bail!("muse serve returned no usage data");
+    }
+    Ok(usage)
+}
+
+fn take_muse(
+    state: &mut State,
+    responses: &BTreeMap<i64, Value>,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let usage = muse_usage(responses.get(&1));
+    if let Ok(usage) = usage.as_ref() {
         let mut windows = Vec::new();
         for name in ["window", "weekly"] {
             let reported = &usage[name];
@@ -289,13 +324,16 @@ fn take_muse(state: &mut State, responses: &BTreeMap<i64, Value>, now: DateTime<
         if account.is_object() {
             let saved = state.account.get_or_insert_default();
             saved.label = text(&account["label"]).or(saved.label.take());
-            saved.signed_in = account["credentialRequired"]
-                .as_bool()
-                .map(|required| !required)
-                .or_else(|| muse_state_signed_in(&account["state"]))
+            saved.signed_in = muse_state_signed_in(&account["state"])
+                .or_else(|| {
+                    account["credentialRequired"]
+                        .as_bool()
+                        .map(|required| !required)
+                })
                 .or(saved.signed_in);
         }
     }
+    usage.map(|_| ())
 }
 
 /// What Muse's account `state` says about signing in, when it says
@@ -310,7 +348,8 @@ fn muse_state_signed_in(state: &Value) -> Option<bool> {
         "signedout" | "loggedout" | "unauthenticated" | "credentialrequired" | "none" => {
             Some(false)
         }
-        "signedin" | "loggedin" | "authenticated" | "ready" => Some(true),
+        "signedin" | "loggedin" | "authenticated" | "ready" | "envkey" | "apikey"
+        | "accountlogin" => Some(true),
         _ => None,
     }
 }
@@ -361,7 +400,7 @@ fn output_within(cli: &str, args: &[&str]) -> Result<Vec<u8>> {
     bytes.with_context(|| format!("{cli} did not answer in time"))
 }
 
-/// Send JSON-RPC `requests`, one per line without the `jsonrpc` member, to
+/// Send JSON-RPC `requests`, one per line with the caller's envelope, to
 /// `cli args` on stdin, and collect the responses whose ids are in `wanted`
 /// until they have all come, the server ends or the timeout passes.
 fn rpc(
@@ -473,7 +512,7 @@ mod tests {
                 json!({"id": 2, "result": {"state": "ready", "label": "me", "credentialRequired": false}}),
             ),
         ]);
-        take_muse(&mut state, &responses, now);
+        take_muse(&mut state, &responses, now).unwrap();
         assert_eq!(state.windows.len(), 2);
         assert_eq!(state.windows[0].used_percent, Some(30.0));
         let account = state.account.clone().unwrap();
@@ -487,7 +526,7 @@ mod tests {
         );
         state.observed_at = Some(now);
         state.windows.clear();
-        take_muse(&mut state, &responses, now);
+        take_muse(&mut state, &responses, now).unwrap();
         assert!(state.windows.is_empty());
     }
 
@@ -516,7 +555,8 @@ mod tests {
                 json!({"id": 2, "result": {"state": "signed_out", "label": "me"}}),
             )]),
             Utc::now(),
-        );
+        )
+        .unwrap_err();
         assert_eq!(state.account.unwrap().signed_in, Some(false));
     }
 }

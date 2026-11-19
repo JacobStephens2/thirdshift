@@ -409,6 +409,12 @@ pub(super) fn write_state(
         }
         writeln!(f)?;
     }
+    if let Some(error) = &state.read_error {
+        if state.observed_at.is_none() {
+            return write!(f, "  usage read failed: {error}");
+        }
+        writeln!(f, "  usage read failed: {error}")?;
+    }
     match (state.observed_at, &state.source) {
         (Some(at), Some(source)) => write!(f, "  observed {} by {source}", local(at)),
         (Some(at), None) => write!(f, "  observed {}", local(at)),

@@ -165,7 +165,7 @@ fn terminal_usage_limits_record_a_cooldown_on_every_subscription_harness() {
 /// A fake `codex app-server` and `muse serve` answering one JSON-RPC
 /// request per line, and a `claude auth status --json`, each counting its
 /// reads in `reads.<cli>`.
-fn readable_fakes(scenario: &Scenario) {
+fn readable_fakes(scenario: &Scenario, muse_used: u64) {
     let reads = scenario.path("reads");
     let codex = json!({"id": 1, "result": {
         "accountId": "acct-7", "planType": "pro", "ordinaryUsageAllowed": true,
@@ -185,15 +185,25 @@ fn readable_fakes(scenario: &Scenario) {
         ),
     );
     let usage = json!({"id": 1, "result": {"usage": {"tier": "pro", "observedAtMs": 1_700_000_000_000_i64,
-        "window": {"usedPercent": 30, "resetsAtMs": RESET * 1000, "windowDurationMins": 300},
+        "window": {"usedPercent": muse_used, "resetsAtMs": RESET * 1000, "windowDurationMins": 300},
         "weekly": {"usedPercent": 64, "resetsAtMs": RESET * 1000}}}});
-    let account = json!({"id": 2, "result": {"state": "ready", "label": "muse-me", "credentialRequired": false}});
+    let account = json!({"id": 2, "result": {"state": "accountLogin", "label": "muse-me", "credentialRequired": true}});
     scripted(
         scenario,
         "muse",
         &format!(
             "[ \"$1\" = serve ] || exit 2\necho read >> '{reads}.muse'\n\
-             while read -r line; do\n  case \"$line\" in\n    *usage/read*) echo '{usage}' ;;\n    *account/read*) echo '{account}' ;;\n  esac\ndone\n",
+             while read -r line; do\n\
+               case \"$line\" in\n\
+                 *'\"jsonrpc\":\"2.0\"'*) ;;\n\
+                 *) echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{{\"code\":-32600,\"message\":\"missing or invalid jsonrpc member\"}}}}'; exit 0 ;;\n\
+               esac\n\
+               case \"$line\" in\n\
+                 *usage/read*) echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}' ;;\n\
+                 *usage/refresh*) echo '{usage}' ;;\n\
+                 *account/read*) echo '{account}' ;;\n\
+               esac\n\
+             done\n",
             reads = reads.display()
         ),
     );
@@ -216,9 +226,79 @@ fn reads(scenario: &Scenario, cli: &str) -> usize {
 }
 
 #[test]
+fn muse_failed_and_empty_reads_are_visible_and_preserve_saved_limits() {
+    for (answer, message) in [
+        (
+            json!({"error": {"code": -32081, "message": "usage/refresh needs a Meta-account login on this host"}}),
+            "usage/refresh needs a Meta-account login on this host",
+        ),
+        (json!({"result": {}}), "muse serve returned no usage data"),
+        (
+            json!({"result": {"usage": {}}}),
+            "muse serve returned no usage data",
+        ),
+    ] {
+        for saved in [false, true] {
+            let scenario = Scenario::new();
+            scenario.user_config_is("[harness]\ndefault = \"muse\"\n");
+            uninstalled(&scenario, "claude");
+            uninstalled(&scenario, "codex");
+            if saved {
+                scenario.plan_usage_is(json!({"muse": {
+                    "observed_at": "2026-01-01T00:00:00Z", "source": "session",
+                    "windows": [{"name": "window", "used_percent": 103.0,
+                        "resets_at": "2096-10-02T07:06:40Z"}],
+                    "cooldown": {"since": "2026-01-01T00:00:00Z", "until": "2096-10-02T07:06:40Z"}
+                }}));
+            }
+            let mut answer = answer.clone();
+            answer["jsonrpc"] = json!("2.0");
+            answer["id"] = json!(1);
+            scripted(
+                &scenario,
+                "muse",
+                &format!(
+                    "while read -r line; do\ncase \"$line\" in\n\
+                 *usage/*) echo '{answer}' ;;\n\
+                 *account/read*) echo '{{\"id\":2,\"result\":{{\"state\":\"accountLogin\",\"credentialRequired\":true}}}}' ;;\n\
+                 esac\ndone\n"
+                ),
+            );
+
+            let view = plan_usage(&scenario, &[]);
+            let muse = row(&view, "muse");
+            assert_eq!(muse["read_error"], message, "{muse:#}");
+            assert_eq!(muse["account"]["signed_in"], true);
+            if saved {
+                assert_eq!(window(muse, "window")["used_percent"], json!(103.0));
+                assert_eq!(muse["cooldown"]["until"], "2096-10-02T07:06:40Z");
+                assert_eq!(muse["observed_at"], "2026-01-01T00:00:00Z");
+            } else {
+                assert!(muse["observed_at"].is_null());
+            }
+            let output = scenario.run(&["plan-usage"]);
+            assert_eq!(output.code, Some(0), "{}", output.stderr);
+            assert!(
+                output
+                    .stdout
+                    .contains(&format!("usage read failed: {message}")),
+                "{}",
+                output.stdout
+            );
+            assert!(
+                !output.stdout.contains("nothing observed yet"),
+                "{}",
+                output.stdout
+            );
+        }
+    }
+}
+
+#[test]
 fn plan_usage_reads_codex_muse_and_claude_on_demand_and_reuses_them_for_a_minute() {
     let scenario = Scenario::new();
-    readable_fakes(&scenario);
+    scenario.plan_usage_is(json!({"muse": {"read_error": "previous read failed"}}));
+    readable_fakes(&scenario, 30);
 
     let view = plan_usage(&scenario, &[]);
     assert_eq!(harnesses(&view), ["claude", "codex", "muse"], "{view:#}");
@@ -238,9 +318,14 @@ fn plan_usage_reads_codex_muse_and_claude_on_demand_and_reuses_them_for_a_minute
     assert_eq!(window(codex, "primary")["used_percent"], json!(87.0));
     assert_eq!(window(codex, "primary")["duration_minutes"], json!(10080));
     let muse = row(&view, "muse");
+    assert!(muse["read_error"].is_null(), "{muse:#}");
     assert_eq!(muse["source"], "muse serve");
     assert_eq!(muse["account"]["plan"], "pro");
     assert_eq!(muse["account"]["label"], "muse-me");
+    assert_eq!(muse["account"]["signed_in"], true);
+    assert_eq!(window(muse, "window")["used_percent"], json!(30.0));
+    assert_eq!(window(muse, "window")["duration_minutes"], json!(300));
+    assert_eq!(window(muse, "window")["resets_at"], "2096-10-02T07:06:40Z");
     assert_eq!(window(muse, "weekly")["used_percent"], json!(64.0));
     assert_eq!(muse["observed_at"], "2023-11-14T22:13:20Z");
     for cli in ["codex", "muse", "claude"] {
@@ -279,6 +364,38 @@ fn plan_usage_reads_codex_muse_and_claude_on_demand_and_reuses_them_for_a_minute
     plan_usage(&scenario, &[]);
     for cli in ["codex", "muse", "claude"] {
         assert_eq!(reads(&scenario, cli), 2, "{cli}");
+    }
+}
+
+#[test]
+fn muse_fresh_usage_at_or_above_100_routes_away_before_a_session_starts() {
+    for used in [100, 103] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[harness]\nroutes = [\"muse\", \"grok\"]\n");
+        readable_fakes(&scenario, used);
+        scenario.agent_does(OPENS_PR);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("muse is in cooldown"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario
+                .grok_calls()
+                .iter()
+                .filter(|call| call["prompt"].is_string())
+                .count(),
+            1
+        );
+        let view = plan_usage(&scenario, &[]);
+        let muse = row(&view, "muse");
+        assert_eq!(window(muse, "window")["used_percent"], json!(used as f64));
+        assert_eq!(muse["routes"][0]["availability"], "cooldown");
+        assert_eq!(muse["cooldown"]["until"], "2096-10-02T07:06:40Z");
     }
 }
 

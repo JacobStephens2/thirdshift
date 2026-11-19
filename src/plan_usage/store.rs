@@ -86,6 +86,9 @@ pub struct State {
     /// When thirdshift last ran the Harness's non-billed reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_at: Option<DateTime<Utc>>,
+    /// Why the latest non-billed usage read failed; saved observations stay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_error: Option<String>,
 }
 
 impl State {
