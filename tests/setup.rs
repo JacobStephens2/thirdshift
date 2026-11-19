@@ -1717,104 +1717,105 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn serve_local_npm_registry(
-    tarball: Vec<u8>,
-) -> (
-    u16,
-    std::sync::Arc<std::sync::atomic::AtomicBool>,
-    std::thread::JoinHandle<()>,
-) {
-    use sha2::{Digest, Sha512};
-    use std::io::Write;
-    use std::net::TcpListener;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_stop = Arc::clone(&stop);
-    let integrity = format!("sha512-{}", base64_encode(&Sha512::digest(&tarball)));
-    let metadata = serde_json::json!({
-        "name": "playwright",
-        "dist-tags": { "latest": "0.0.1" },
-        "versions": {
-            "0.0.1": {
-                "name": "playwright",
-                "version": "0.0.1",
-                "bin": { "playwright": "cli.js" },
-                "dist": {
-                    "tarball": format!("http://127.0.0.1:{port}/playwright-0.0.1.tgz"),
-                    "integrity": integrity,
-                }
-            }
-        }
-    })
-    .to_string();
-    let handle = std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            if thread_stop.load(Ordering::Acquire) {
-                break;
-            }
-            let Ok(mut stream) = stream else {
-                break;
-            };
-            let mut buffer = [0_u8; 4096];
-            let read = stream.read(&mut buffer).unwrap_or(0);
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            let path = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .unwrap_or("/");
-            let (status, content_type, body): (&str, &str, &[u8]) = if path == "/playwright" {
-                ("200 OK", "application/json", metadata.as_bytes())
-            } else if path == "/playwright-0.0.1.tgz" {
-                ("200 OK", "application/octet-stream", &tarball)
-            } else {
-                ("404 Not Found", "text/plain", b"not found")
-            };
-            let header = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = stream.write_all(header.as_bytes());
-            let _ = stream.write_all(body);
-        }
-    });
-    (port, stop, handle)
+struct LocalHttpServer {
+    port: u16,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
-fn serve_404_npm_registry() -> (
-    u16,
-    std::sync::Arc<std::sync::atomic::AtomicBool>,
-    std::thread::JoinHandle<()>,
-) {
-    use std::io::Write;
-    use std::net::TcpListener;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+impl LocalHttpServer {
+    fn start(
+        respond: impl Fn(&str, u16) -> (&'static str, &'static str, Vec<u8>) + Send + 'static,
+    ) -> Self {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_stop = Arc::clone(&stop);
-    let handle = std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            if thread_stop.load(Ordering::Acquire) {
-                break;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if thread_stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let Ok(mut stream) = stream else {
+                    break;
+                };
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let (status, content_type, body) = respond(path, port);
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
             }
-            let Ok(mut stream) = stream else {
-                break;
-            };
-            let mut buffer = [0_u8; 1024];
-            let _ = stream.read(&mut buffer);
-            let _ = stream.write_all(
-                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
+        });
+        Self {
+            port,
+            stop,
+            handle: Some(handle),
         }
-    });
-    (port, stop, handle)
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for LocalHttpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_local_npm_registry(tarball: Vec<u8>) -> LocalHttpServer {
+    use sha2::{Digest, Sha512};
+
+    let integrity = format!("sha512-{}", base64_encode(&Sha512::digest(&tarball)));
+    LocalHttpServer::start(move |path, port| {
+        if path == "/playwright" {
+            let metadata = serde_json::json!({
+                "name": "playwright",
+                "dist-tags": { "latest": "0.0.1" },
+                "versions": {
+                    "0.0.1": {
+                        "name": "playwright",
+                        "version": "0.0.1",
+                        "bin": { "playwright": "cli.js" },
+                        "dist": {
+                            "tarball": format!("http://127.0.0.1:{port}/playwright-0.0.1.tgz"),
+                            "integrity": integrity,
+                        }
+                    }
+                }
+            })
+            .to_string();
+            ("200 OK", "application/json", metadata.into_bytes())
+        } else if path == "/playwright-0.0.1.tgz" {
+            ("200 OK", "application/octet-stream", tarball.clone())
+        } else {
+            ("404 Not Found", "text/plain", b"not found".to_vec())
+        }
+    })
+}
+
+fn serve_404_npm_registry() -> LocalHttpServer {
+    LocalHttpServer::start(|_, _| ("404 Not Found", "text/plain", Vec::new()))
 }
 
 #[test]
@@ -1936,8 +1937,10 @@ fn visual_evidence_installer_ignores_working_directory_npmrc_and_local_playwrigh
             .status()
             .unwrap();
         assert!(tar_status.success());
-        let (evil_port, evil_stop, evil_handle) = serve_local_npm_registry(fs::read(&tgz).unwrap());
-        let (safe_port, safe_stop, safe_handle) = serve_404_npm_registry();
+        let evil_server = serve_local_npm_registry(fs::read(&tgz).unwrap());
+        let safe_server = serve_404_npm_registry();
+        let evil_port = evil_server.port();
+        let safe_port = safe_server.port();
 
         fs::write(
             scenario.path("home/.npmrc"),
@@ -1962,12 +1965,7 @@ fn visual_evidence_installer_ignores_working_directory_npmrc_and_local_playwrigh
         keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
         let result = scenario.run_terminal(&["setup"], &[], &keys);
 
-        evil_stop.store(true, std::sync::atomic::Ordering::Release);
-        let _ = std::net::TcpStream::connect(("127.0.0.1", evil_port));
-        let _ = evil_handle.join();
-        safe_stop.store(true, std::sync::atomic::Ordering::Release);
-        let _ = std::net::TcpStream::connect(("127.0.0.1", safe_port));
-        let _ = safe_handle.join();
+        drop((evil_server, safe_server));
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert!(
@@ -1987,7 +1985,8 @@ fn visual_evidence_installer_ignores_working_directory_npmrc_and_local_playwrigh
                 "#!/bin/sh\nexit 0\n",
             );
         }
-        let (safe_port, safe_stop, safe_handle) = serve_404_npm_registry();
+        let safe_server = serve_404_npm_registry();
+        let safe_port = safe_server.port();
         fs::write(
             scenario.path("home/.npmrc"),
             format!("registry=http://127.0.0.1:{safe_port}/\nfetch-retries=0\n"),
@@ -2014,9 +2013,7 @@ fn visual_evidence_installer_ignores_working_directory_npmrc_and_local_playwrigh
         keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
         let result = scenario.run_terminal(&["setup"], &[], &keys);
 
-        safe_stop.store(true, std::sync::atomic::Ordering::Release);
-        let _ = std::net::TcpStream::connect(("127.0.0.1", safe_port));
-        let _ = safe_handle.join();
+        drop(safe_server);
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert!(

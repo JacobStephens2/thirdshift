@@ -177,7 +177,7 @@ For changes to rendered HTML, CSS, templates, frontend routes or interactive UI 
 
 #### Publish the captures
 
-Use `thirdshift-verify-ui` (Day shift: `verify-ui`) for exploration and capture rules. Publish only reviewed faux/redacted proof captures, using GitHub attachments so images and native video players inherit repository read permissions (ADR 0034). Keep captures outside git.
+Publish only reviewed faux/redacted proof captures, using GitHub attachments so images and native video players inherit repository read permissions (ADR 0034). Keep captures outside git.
 
 Write the final PR body to a `mktemp` temporary file. Place a bold visible flow-and-viewport label immediately above **each** attachment paragraph, including Before or After. Reference the exact absolute capture path in that paragraph: `![After login at desktop 1440×900](/tmp/after-desktop.A1b2C3.png)` for PNG; use the same standalone image-style paragraph for `.mp4`. The CLI turns that video paragraph into a bare uploaded URL so GitHub renders its native player. `gh --attach` rewrites these local references to uploaded URLs in place; without a body reference it appends media at the end, away from its label. Preserve previously uploaded attachment paragraphs when updating unrelated body text.
 

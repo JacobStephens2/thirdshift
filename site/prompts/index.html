@@ -2222,7 +2222,7 @@ For changes to rendered HTML, CSS, templates, frontend routes or interactive UI 
 
 #### Publish the captures
 
-Use `thirdshift-verify-ui` (Day shift: `verify-ui`) for exploration and capture rules. Publish only reviewed faux/redacted proof captures, using GitHub attachments so images and native video players inherit repository read permissions (ADR 0034). Keep captures outside git.
+Publish only reviewed faux/redacted proof captures, using GitHub attachments so images and native video players inherit repository read permissions (ADR 0034). Keep captures outside git.
 
 Write the final PR body to a `mktemp` temporary file. Place a bold visible flow-and-viewport label immediately above **each** attachment paragraph, including Before or After. Reference the exact absolute capture path in that paragraph: `![After login at desktop 1440×900](/tmp/after-desktop.A1b2C3.png)` for PNG; use the same standalone image-style paragraph for `.mp4`. The CLI turns that video paragraph into a bare uploaded URL so GitHub renders its native player. `gh --attach` rewrites these local references to uploaded URLs in place; without a body reference it appends media at the end, away from its label. Preserve previously uploaded attachment paragraphs when updating unrelated body text.
 
@@ -8350,7 +8350,7 @@ ffmpeg -y -i "$raw_video" -an -c:v libx264 -pix_fmt yuv420p \
 test -s "$capture" &amp;&amp; test "$(wc -c &lt; "$capture")" -le 8388608
 ```
 
-Target `5–25 s` of deliberate actions. If the output exceeds `8 MB` (`8,388,608` bytes), shorten the flow or lower bitrate and encode again; upload only a checked file. Review the finished screenshots/video for the claimed state, legibility and faux/redacted data. Keep the paired capture paths and flow/viewport labels for the PR skill, which validates and publishes GitHub attachments.
+Target `5–25 s` of deliberate actions. If the output exceeds `8 MB` (`8,388,608` bytes), shorten the flow or lower bitrate and encode again; upload only a checked file. Review the finished screenshots/video for the claimed state, legibility and faux/redacted data. Keep the paired capture paths and flow/viewport labels for the `thirdshift-pr` skill, which validates and publishes GitHub attachments.
 
 ## Completion
 

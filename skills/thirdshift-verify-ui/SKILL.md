@@ -64,7 +64,7 @@ ffmpeg -y -i "$raw_video" -an -c:v libx264 -pix_fmt yuv420p \
 test -s "$capture" && test "$(wc -c < "$capture")" -le 8388608
 ```
 
-Target `5–25 s` of deliberate actions. If the output exceeds `8 MB` (`8,388,608` bytes), shorten the flow or lower bitrate and encode again; upload only a checked file. Review the finished screenshots/video for the claimed state, legibility and faux/redacted data. Keep the paired capture paths and flow/viewport labels for the PR skill, which validates and publishes GitHub attachments.
+Target `5–25 s` of deliberate actions. If the output exceeds `8 MB` (`8,388,608` bytes), shorten the flow or lower bitrate and encode again; upload only a checked file. Review the finished screenshots/video for the claimed state, legibility and faux/redacted data. Keep the paired capture paths and flow/viewport labels for the `thirdshift-pr` skill, which validates and publishes GitHub attachments.
 
 ## Completion
 

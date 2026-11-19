@@ -402,3 +402,56 @@ fn pr_recipe_publishes_all_png_and_mp4_captures_with_visible_labels() {
         2
     );
 }
+
+#[test]
+fn day_shift_ui_verification_skills_are_mirrored_for_claude_and_free_of_factory_references() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for skill in [
+        "verify-ui",
+        "create-verification-skill",
+        "maintain-verification-skill",
+        "verify-console",
+        "verify-site",
+    ] {
+        let claude_link = root.join(".claude/skills").join(skill);
+        let target = fs::read_link(&claude_link)
+            .unwrap_or_else(|error| panic!("{}: {error}", claude_link.display()));
+        assert_eq!(
+            target,
+            PathBuf::from(format!("../../.agents/skills/{skill}")),
+            "{}",
+            claude_link.display()
+        );
+        assert!(
+            claude_link.join("SKILL.md").is_file(),
+            "broken link: {}",
+            claude_link.display()
+        );
+    }
+
+    for path in [
+        "skills/thirdshift-pr/SKILL.md",
+        "skills/thirdshift-verify-ui/SKILL.md",
+    ] {
+        let text = fs::read_to_string(root.join(path)).unwrap();
+        assert!(!text.contains("Day shift:"), "{path} leaks Day shift name");
+    }
+    for path in [
+        ".agents/skills/pr/SKILL.md",
+        ".agents/skills/verify-ui/SKILL.md",
+    ] {
+        let text = fs::read_to_string(root.join(path)).unwrap();
+        for factory_only in [
+            "thirdshift-verify-ui",
+            "Built-in processes",
+            "Experiment Arm",
+            "wastes a Resume",
+            "for the PR skill",
+        ] {
+            assert!(
+                !text.contains(factory_only),
+                "{path} retains Factory text: {factory_only}"
+            );
+        }
+    }
+}

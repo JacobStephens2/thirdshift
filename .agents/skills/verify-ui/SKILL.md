@@ -5,7 +5,7 @@ description: "Verify rendered HTML, CSS, templates, frontend routes or interacti
 
 # Verify UI
 
-Use shell/CLI browser tools across all seven Harnesses (`claude`, `codex`, `agy`, `grok`, `muse`, `opencode`, `kimi`); no MCP configuration is needed. This skill composes inside implementation, diagnosis and PR sessions. It can also run as a standalone skill Step in a Custom process or Experiment Arm; it adds no cold Step to Built-in processes. Follow the calling Session's publication permissions: local verification alone never authorizes a push or upload.
+Use shell/CLI browser tools; no MCP configuration is needed. Invoke this before editing UI code and again before opening or updating a pull request; local verification alone never authorizes a push or upload.
 
 ## Discover and boot
 
@@ -15,7 +15,7 @@ Optional host-only faux/sandbox test credentials live at `~/.config/thirdshift/v
 
 Each browser command owns its entire lifetime inside one `( ... )` subshell with a `trap ... EXIT`: create isolated app/database/profile state with `mktemp -d`, bind the target application to loopback on an OS-assigned ephemeral port (`0`), and read the actual port from its readiness output. Wait for readiness with a bounded poll. Avoid a probe-then-rebind free-port race. If the app cannot bind `0`, use the repository's documented equivalent that keeps the port reserved until startup.
 
-Register cleanup before starting the application or browser daemon. Track their exact child PIDs/job handles; stop and wait for both on success, assertion failure and interruption. For a server wrapper that forks, own and terminate its process group or use the repository's supervisor to reap every descendant. Close Playwright contexts and browser in `finally`; stop any CLI browser daemon explicitly too. Remove temporary scripts/state on exit, but keep proof captures outside that state at their original `mktemp` paths. No child process may outlive the command or await a later turn: that wastes a Resume.
+Register cleanup before starting the application or browser daemon. Track their exact child PIDs/job handles; stop and wait for both on success, assertion failure and interruption. For a server wrapper that forks, own and terminate its process group or use the repository's supervisor to reap every descendant. Close Playwright contexts and browser in `finally`; stop any CLI browser daemon explicitly too. Remove temporary scripts/state on exit, but keep proof captures outside that state at their original `mktemp` paths. No server or browser child process may outlive the command.
 
 ## Phase 1 — Interactive exploration
 
@@ -64,7 +64,7 @@ ffmpeg -y -i "$raw_video" -an -c:v libx264 -pix_fmt yuv420p \
 test -s "$capture" && test "$(wc -c < "$capture")" -le 8388608
 ```
 
-Target `5–25 s` of deliberate actions. If the output exceeds `8 MB` (`8,388,608` bytes), shorten the flow or lower bitrate and encode again; upload only a checked file. Review the finished screenshots/video for the claimed state, legibility and faux/redacted data. Keep the paired capture paths and flow/viewport labels for the PR skill, which validates and publishes GitHub attachments.
+Target `5–25 s` of deliberate actions. If the output exceeds `8 MB` (`8,388,608` bytes), shorten the flow or lower bitrate and encode again; upload only a checked file. Review the finished screenshots/video for the claimed state, legibility and faux/redacted data. Keep the paired capture paths and flow/viewport labels for the `pr` skill, which validates and publishes GitHub attachments.
 
 ## Completion
 
