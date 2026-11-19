@@ -42,6 +42,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Resolve Ubuntu package hosts
         run: bash scripts/release-dns.sh
+      - name: Use public Ubuntu mirrors
+        run: |
+          printf '%s\tpriority:%s\n' \
+            'https://archive.ubuntu.com/ubuntu/' 1 \
+            'https://security.ubuntu.com/ubuntu/' 2 \
+            | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -69,6 +75,12 @@ jobs:
       - name: Resolve Ubuntu package hosts
         working-directory: .
         run: bash scripts/release-dns.sh
+      - name: Use public Ubuntu mirrors
+        run: |
+          printf '%s\tpriority:%s\n' \
+            'https://archive.ubuntu.com/ubuntu/' 1 \
+            'https://security.ubuntu.com/ubuntu/' 2 \
+            | sudo tee /etc/apt/apt-mirrors.txt
       - uses: actions/setup-node@v6
         with:
           node-version: 24
