@@ -61,14 +61,7 @@ impl Reading {
                 state.read_error = responses
                     .and_then(|responses| take_muse(state, &responses, now))
                     .err()
-                    .map(|error| {
-                        error
-                            .to_string()
-                            .chars()
-                            .filter(|character| !character.is_control())
-                            .take(256)
-                            .collect()
-                    });
+                    .map(|error| super::store::one_line_read_error(&error.to_string()));
             }
             Self::Claude(Some(status)) => take_claude(state, &status),
             Self::Claude(None) => {}

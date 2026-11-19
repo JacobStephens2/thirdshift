@@ -413,6 +413,7 @@ pub(super) fn write_state(
         writeln!(f)?;
     }
     if let Some(error) = &state.read_error {
+        let error = super::store::one_line_read_error(error);
         write!(f, "  usage read failed: {error}")?;
         if let Some(machine) = read_error_on {
             write!(f, " (on {machine})")?;
@@ -460,8 +461,15 @@ pub(crate) const EMPTY: &str = "No Plan usage to show: no configured subscriptio
 mod tests {
     use super::*;
     use crate::plan_usage::observation::Window;
+    use crate::plan_usage::read::Reading;
     use crate::plan_usage::store::{Account, Cooldown};
     use chrono::TimeDelta;
+    use serde_json::json;
+
+    fn separates_a_line(text: &str) -> bool {
+        text.chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+    }
 
     fn config(text: &str) -> UserConfig {
         let home = std::path::Path::new("/home/me");
@@ -551,6 +559,49 @@ mod tests {
         assert_eq!(
             view.harnesses[1].routes[0].availability,
             Availability::Cooldown
+        );
+    }
+
+    #[test]
+    fn a_muse_read_error_cannot_forge_another_plan_usage_line() {
+        let now = Utc::now();
+        let mut state = State::default();
+        Reading::Muse(Ok(BTreeMap::from([(
+            1,
+            json!({"id": 1, "error": {"message": "denied\u{2028}forged: available"}}),
+        )])))
+        .apply(&mut state, now);
+        let stored = state.read_error.clone().expect("the read error is kept");
+        let peer: State = serde_json::from_value(json!({
+            "read_error": "peer\u{2028}forged: available"
+        }))
+        .unwrap();
+        let peer_error = peer.read_error.clone().expect("a peer error is kept");
+        let view = View::of(
+            &config("[harness]\ndefault = \"muse\"\n"),
+            BTreeMap::from([("muse".into(), state)]),
+            |_| true,
+            now,
+        );
+        let text = view.to_string();
+        assert!(stored.contains("forged: available"), "{stored:?}");
+        assert!(peer_error.contains("forged: available"), "{peer_error:?}");
+        assert!(!separates_a_line(&stored), "{stored:?}");
+        assert!(!separates_a_line(&peer_error), "{peer_error:?}");
+        assert!(
+            !text
+                .chars()
+                .any(|character| matches!(character, '\u{2028}' | '\u{2029}')),
+            "{text:?}"
+        );
+        let error_lines: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("usage read failed"))
+            .collect();
+        assert_eq!(
+            error_lines,
+            ["  usage read failed: denied\u{240A}forged: available"],
+            "{text:?}"
         );
     }
 
