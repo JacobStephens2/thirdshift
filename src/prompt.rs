@@ -1128,7 +1128,7 @@ fn security_review_prompt(
          Merge base commit: `{SECURITY_REVIEW_MERGE_BASE}`.\n\
          Classify introduced findings against this pinned merge base: run each proof-of-concept on HEAD and the untouched merge base; a test that also fails there is pre-existing. Never include pre-existing vulnerability details, titles, fingerprints, tests or private-record links in the pull request or final message, and do not fix those here.\n\
          Private report file: `{SECURITY_REVIEW_REPORT_FILE}`.\n\
-         Write a JSON array to that file, even when empty ([]). Each entry is an old finding with exactly these fields: fingerprint (stable across reviews and audits, no newlines or backticks), title (one line), description (the private write-up and evidence), proof_of_concept (test: full test text, command: exact command run at both commits, head_exit_code: positive failing exit code, merge_base_exit_code: positive failing exit code, notes: reproduction evidence and scoring rationale, severity: critical/high/medium/low/informational scored with the skill's likelihood-and-impact rubric, fix_size: single/spec judged from whether one session can hold the fix). All text fields are nonempty. Do not commit or copy this report into the worktree. {SECURITY_REVIEW_RECORDING} Fixing old findings belongs to a separate Security run.\n\
+         Write a JSON array to that file, even when empty ([]). Each entry is an old finding with exactly this shape (severity and fix_size belong inside proof_of_concept, never at the finding's top level): [{{\"fingerprint\":\"<stable id, no newlines or backticks>\",\"title\":\"<one line>\",\"description\":\"<private write-up and evidence>\",\"proof_of_concept\":{{\"test\":\"<full test text>\",\"command\":\"<exact command run at both commits>\",\"head_exit_code\":1,\"merge_base_exit_code\":1,\"notes\":\"<reproduction evidence and scoring rationale>\",\"severity\":\"high\",\"fix_size\":\"single\"}}}}]. fingerprint is stable across reviews and audits; head_exit_code and merge_base_exit_code are positive failing exit codes; severity is critical/high/medium/low/informational scored with the skill's likelihood-and-impact rubric; fix_size is single/spec judged from whether one session can hold the fix. All text fields are nonempty. Do not commit or copy this report into the worktree. {SECURITY_REVIEW_RECORDING} Fixing old findings belongs to a separate Security run.\n\
          {publication}\n\
          If refused, incomplete, or missing a prerequisite, do not claim completion. Still write the private report, even when empty. End your final message with exactly:\n\
          Security review: incomplete: <one-line reason>\n\
@@ -1974,6 +1974,28 @@ mod tests {
             prompt.contains("draft"),
             "security_review must preserve draft state when running before Delivery readiness: {prompt}"
         );
+    }
+
+    #[test]
+    fn security_review_prompt_shows_severity_and_fix_size_inside_proof_of_concept() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        for prompt in [
+            security_review(&issue, "main", "issue-7", TicketScope::Standard),
+            local_security_review(&issue, "main", "issue-7"),
+        ] {
+            assert!(
+                prompt.contains(r#""proof_of_concept":{"test":"#),
+                "prompt must show the full nested report shape: {prompt}"
+            );
+            assert!(
+                prompt.contains(r#""severity":"high","fix_size":"single""#),
+                "prompt must place severity/fix_size inside proof_of_concept: {prompt}"
+            );
+            assert!(
+                prompt.contains("never at the finding's top level"),
+                "prompt must forbid the top-level shape: {prompt}"
+            );
+        }
     }
 
     #[test]
