@@ -13,27 +13,45 @@ use crate::{prompt, worktree::Worktree};
 /// Continuation prompt, and for a fresh Issue branch the Continuation prompt
 /// it starts again with if Plan usage moves it to another route after it
 /// made commits, saying nothing of why.
-pub fn opening(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> Opening {
+pub fn opening(
+    issue: &IssueUrl,
+    base: &str,
+    selection: &crate::branch::Selection,
+    scope: prompt::TicketScope,
+) -> Opening {
     let continuation = match selection {
-        crate::branch::Selection::Fresh { .. } => {
-            Some(prompt::continuation(issue, base, selection.branch(), None))
-        }
+        crate::branch::Selection::Fresh { .. } => Some(prompt::continuation(
+            issue,
+            base,
+            selection.branch(),
+            None,
+            scope,
+        )),
         crate::branch::Selection::Continuation { .. } => None,
     };
     Opening {
         session: OpeningSession::Implementation,
-        prompt: prompt(issue, base, selection),
+        prompt: prompt(issue, base, selection, scope),
         continuation,
     }
 }
 
-fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> String {
+fn prompt(
+    issue: &IssueUrl,
+    base: &str,
+    selection: &crate::branch::Selection,
+    scope: prompt::TicketScope,
+) -> String {
     let branch = selection.branch();
     match selection {
-        crate::branch::Selection::Fresh { .. } => prompt::fresh(issue, base, branch),
-        crate::branch::Selection::Continuation { pr, .. } => {
-            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str()))
-        }
+        crate::branch::Selection::Fresh { .. } => prompt::fresh(issue, base, branch, scope),
+        crate::branch::Selection::Continuation { pr, .. } => prompt::continuation(
+            issue,
+            base,
+            branch,
+            pr.as_ref().map(|pr| pr.url.as_str()),
+            scope,
+        ),
     }
 }
 

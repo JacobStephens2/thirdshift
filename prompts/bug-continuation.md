@@ -27,6 +27,8 @@ Push branch <branch>.
 
 Create a pull request against <base> using the `thirdshift-pr` skill, marked ready for review.
 
+Whenever the branch modifies rendered UI files against refs/remotes/origin/<base>, run interactive UI verification with the `thirdshift-verify-ui` skill and attach unified `Before` and `After` Visual evidence covering the whole branch via `gh pr create --attach` using the `thirdshift-pr` skill.
+
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 
 Include "Closes #<n>" in the PR body.
