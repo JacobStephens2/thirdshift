@@ -204,22 +204,27 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       const box = await copy.boundingBox();
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      // Opened, the Fleet machines list still fits a long machine name.
+      await page.locator('#fleet-machines > summary').click();
+      await page.locator('#fleet-machines li').filter({ hasText: 'remote-workstation-with-a-long-name' }).waitFor();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
   await page.goto(caller.origin);
   await ready.getByRole('button', { name: 'Copy', exact: true }).waitFor();
   cli(homes[1], ['console', 'token', 'revoke', 'caller']);
-  await page.locator('[data-reachability="refused"]').waitFor();
+  // The folded Fleet machines list still follows each machine's reachability.
+  await page.locator('[data-reachability="refused"]').waitFor({ state: 'attached' });
   assert.equal(await remoteRows.count(), 2, 'refused keeps the last good rows');
   remote.process.kill();
   await remote.exited;
-  await page.locator('[data-reachability="unreachable"]').waitFor();
+  await page.locator('[data-reachability="unreachable"]').waitFor({ state: 'attached' });
   await remoteRows.first().locator('.machine-tag').waitFor();
   await waitUntil(() => remoteRows.evaluateAll(rows => rows.every(row => row.classList.contains('stale'))), 'last good rows turn grey');
   assert.deepEqual(await files(homes[0]), before, 'remote answers stay in memory');
 });
 
-test('Fleet makes no requests without a page and a slow or old machine cannot block a good one', async t => {
+test('Fleet makes no requests without a page, a slow or old machine cannot block a good one, and the machines list starts folded', async t => {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-idle-'));
   const root = join(home, '.thirdshift');
   await mkdir(root);
@@ -264,11 +269,40 @@ test('Fleet makes no requests without a page and a slow or old machine cannot bl
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.goto(origin);
-  await page.locator('.fleet-machines li').filter({ hasText: /^good · ok/ }).waitFor();
+  const fold = page.locator('#fleet-machines');
+  const summary = fold.locator('summary');
+  const machineLines = fold.locator('.fleet-machines li');
+  const isOpen = () => fold.evaluate(node => node.open);
+  const good = machineLines.filter({ hasText: /^good · ok/ });
+  await good.waitFor({ state: 'attached' });
+  // Checked first: the slow machine's read fails after three seconds.
+  assert.equal(await machineLines.filter({ hasText: /^slow/ }).count(), 0, 'good answer arrives before the slow timeout');
+  assert.equal(await isOpen(), false, 'the Fleet machines list starts folded, and a live update keeps it folded');
+  assert.equal(await good.isVisible(), false);
+  assert.match(await summary.textContent(), /^Fleet machines\s*\d+$/);
+  await summary.click();
+  await good.waitFor();
   await page.locator('[data-reachability="needs update"]').waitFor();
   assert.match(await page.locator('.active-runs strong').textContent(), /^3 active runs/);
-  assert.match(await page.locator('.fleet-machines li').filter({ hasText: /^good/ }).textContent(), /3 active/);
-  assert.equal(await page.locator('.fleet-machines li').filter({ hasText: /^slow/ }).count(), 0, 'good answer arrives before the slow timeout');
+  assert.match(await good.textContent(), /3 active/);
+  document.active_runs = 4;
+  await good.filter({ hasText: /4 active/ }).waitFor();
+  assert.equal(await isOpen(), true, 'a live update keeps the opened list open');
+  await summary.focus();
+  await page.keyboard.press('Space');
+  await good.waitFor({ state: 'hidden' });
+  await page.keyboard.press('Enter');
+  await good.waitFor();
+  await page.reload();
+  assert.equal(await isOpen(), false, 'each page load starts folded');
+  const phone = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  await phone.goto(origin);
+  const local = phone.locator('#fleet-machines .fleet-machines li').first();
+  assert.equal(await local.isVisible(), false, 'folded without JavaScript');
+  await phone.locator('#fleet-machines summary').click();
+  await local.waitFor();
+  assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await phone.close();
   await page.close();
   await new Promise(resolve => setTimeout(resolve, 400));
   const stopped = requests;

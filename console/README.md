@@ -343,6 +343,12 @@ whether that section is open or hidden: a Spec run's Tickets, and the Spec run
 or Ticket run a Pass dispatched, are part of that one. The live update refreshes
 it as Commands start and end.
 
+Above that total, every Inbox folder lists this machine and its Fleet machines,
+each with its reachability, age, active runs and any error, under **Fleet
+machines** and their count. The list is folded closed on each page load. Open it
+to read it; live updates refresh its lines while keeping your open or closed
+state. The control also works by keyboard and without JavaScript.
+
 When no Commands are live on this machine, the Inbox explains that above its
 sections. It points to pull requests in Ready for review, and offers the last recorded skipped Pass reasons from Activity logs
 under **Last recorded skipped Passes**, and when each Pass last fired under
