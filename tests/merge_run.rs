@@ -472,6 +472,85 @@ fn missing_ci_after_a_base_update_holds_self_merge() {
 }
 
 #[test]
+fn missing_ci_after_two_base_updates_holds_self_merge() {
+    let scenario = Scenario::new();
+    advance_base_at_review_decision(&scenario, None);
+    let mut state = scenario.gh_state();
+    state["on_review_decision"]["times"] = 2.into();
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn missing_fresh_ci_after_rewritten_base_holds_self_merge() {
+    let scenario = Scenario::new();
+    scenario.origin_git(&["config", "receive.denyNonFastForwards", "false"]);
+    let mut state = scenario.gh_state();
+    state["on_review_decision"] = serde_json::json!({
+        "times": 2,
+        "script": r#"
+other="$(mktemp -d)"
+git clone -q -b main https://github.com/acme/widgets.git "$other"
+if [ "$(git -C "$other" log -1 --format=%s)" = 'First Base update' ]; then
+    git -C "$other" reset -q --hard HEAD^
+    git -C "$other" commit --allow-empty -q -m 'Replacement Base update'
+    git -C "$other" push -q --force origin main
+else
+    git -C "$other" commit --allow-empty -q -m 'First Base update'
+    git -C "$other" push -q origin main
+fi
+rm -rf "$other"
+"#,
+    });
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert_eq!(scenario.gh_state()["on_review_decision"]["times"], 0);
+    assert!(
+        !sha_of(&scenario, "main", "Replacement Base update").is_empty(),
+        "{}",
+        result.stderr,
+    );
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "OPEN",
+        "{}",
+        result.stderr
+    );
+
+    scenario.agent_does("");
+    let continuation = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert!(
+        continuation.stderr.contains("CI has not passed"),
+        "{}",
+        continuation.stderr,
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "OPEN",
+        "{}",
+        continuation.stderr
+    );
+}
+
+#[test]
 fn a_merge_queue_keeps_the_existing_self_merge_path_when_base_moves_at_the_gate() {
     let scenario = Scenario::new();
     advance_base_at_review_decision(&scenario, Some("main"));

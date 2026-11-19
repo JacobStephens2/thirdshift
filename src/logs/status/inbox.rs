@@ -7,6 +7,7 @@ use super::{age, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
+use crate::logs::github::PullRequestChecks;
 use crate::logs::pass_starts::PassStart;
 use crate::logs::reading::{Command, Entry, Group, Health, IdlePass, Observation, Snapshot};
 
@@ -208,13 +209,7 @@ impl Row {
         self.target_pr = None;
     }
 
-    fn present_ready(
-        &mut self,
-        title: Option<&str>,
-        ci: Option<crate::github::InboxCi>,
-        mergeable: Option<crate::github::InboxMergeable>,
-        stale_ci: Option<String>,
-    ) {
+    fn present_ready(&mut self, title: Option<&str>, checks: &PullRequestChecks) {
         if self.pull_request.is_empty() {
             return;
         }
@@ -229,10 +224,10 @@ impl Row {
             .filter(|title| !title.trim().is_empty())
             .unwrap_or("(title unavailable)")
             .into();
-        self.ci = Some(ci.unwrap_or_default());
-        self.merge_conflict = mergeable == Some(crate::github::InboxMergeable::Conflicting);
-        self.stale_ci = stale_ci;
-        self.fix_command = if self.ci == Some(crate::github::InboxCi::Red) || self.merge_conflict {
+        self.ci = Some(checks.ci());
+        self.merge_conflict = checks.has_merge_conflict();
+        self.stale_ci = checks.stale_ci.clone();
+        self.fix_command = if checks.needs_fix() {
             pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
         } else {
             None
@@ -466,9 +461,8 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         waiting_for: Vec<String>,
         resume_command: Option<String>,
         process_name: Option<String>,
-        github_ci: Option<crate::github::InboxCi>,
-        github_mergeable: Option<crate::github::InboxMergeable>,
-        github_stale_ci: Option<String>,
+        #[serde(flatten)]
+        github_checks: PullRequestChecks,
         #[serde(default)]
         children: Vec<serde_json::Value>,
         #[serde(default)]
@@ -692,12 +686,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .find_map(|child| child.ticket_progress);
     }
     if ready {
-        row.present_ready(
-            ready_title,
-            facts.github_ci,
-            facts.github_mergeable,
-            facts.github_stale_ci,
-        );
+        row.present_ready(ready_title, &facts.github_checks);
     } else if group == Some(Group::NeedsYou) {
         row.present_needs_you_target(&facts.kind, &facts.repository);
     }
@@ -956,12 +945,7 @@ pub(super) fn from_read(
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)
                             .and_then(|pr| pr.title.as_deref());
-                        row.present_ready(
-                            title,
-                            item.github.ci,
-                            item.github.mergeable,
-                            item.github.stale_ci.clone(),
-                        );
+                        row.present_ready(title, &item.github.checks);
                     }
                     // Needs you may replace the subject with its pull request
                     // after `present` checked the recorded issue link.

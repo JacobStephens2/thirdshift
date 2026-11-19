@@ -122,6 +122,15 @@ struct OriginCommit {
     commit: String,
 }
 
+impl OriginCommit {
+    fn merge_message(&self, branch: &str) -> String {
+        format!(
+            "Merge remote-tracking branch '{}' into {branch}",
+            self.upstream
+        )
+    }
+}
+
 /// A read-only observation of Foreign commits. Its facts share one origin
 /// sample and one local head. It can be consumed once, by the Worktree that
 /// produced it, while that local head is unchanged.
@@ -470,7 +479,7 @@ impl Worktree {
     }
 
     /// Fetch Base again and compare it to the exact watched head. For heads
-    /// without checks, identify the older heads combined with the current Base.
+    /// without checks, identify the older heads combined with Base.
     pub(crate) fn relationship_to_base(
         &self,
         base: &str,
@@ -483,7 +492,7 @@ impl Worktree {
                 return Ok(BaseRelationship::Behind);
             }
             if check_branch_point {
-                let older_heads = operation.heads_merged_with_base(head, &origin.commit)?;
+                let older_heads = operation.heads_merged_with_base(head, &origin, &self.branch)?;
                 if !older_heads.is_empty() {
                     return Ok(BaseRelationship::Merged(older_heads));
                 }

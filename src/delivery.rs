@@ -1743,29 +1743,37 @@ impl repair_loop::Outside for RunOutside<'_> {
         self.check_closing_issues()?;
         self.pull_request.merge(&watched.commit, || {
             use crate::worktree::BaseRelationship;
-            let relationship =
-                self.worktree.relationship_to_base(self.base, &watched.commit, !watched.ci_passed)?;
+            use repair_loop::WatchedCi;
+            let relationship = self.worktree.relationship_to_base(
+                self.base,
+                &watched.commit,
+                watched.ci == WatchedCi::Absent,
+            )?;
             let github = GitHub::new();
+            let missing_ci = || crate::failed_run::MergeHold {
+                reason: format!(
+                    "CI has not passed on {} after merging in {}; the PR stays ready for review",
+                    ci::short(&watched.commit),
+                    self.base,
+                ),
+            };
             match relationship {
-                BaseRelationship::Current => Ok(true),
+                BaseRelationship::Current if watched.ci != WatchedCi::MissingAfterBaseUpdate => {
+                    Ok(true)
+                }
                 _ if github.base_has_merge_queue(self.issue, self.base)? => Ok(true),
                 BaseRelationship::Behind => Ok(false),
+                BaseRelationship::Current => Err(missing_ci().into()),
                 BaseRelationship::Merged(older_heads) => {
                     for head in older_heads {
                         if !github.checks_on(self.issue, &head)?.is_empty() {
-                            return Err(crate::failed_run::MergeHold {
-                                reason: format!(
-                                    "CI has not passed on {} after merging in {}; the PR stays ready for review",
-                                    ci::short(&watched.commit),
-                                    self.base,
-                                ),
-                            }
-                            .into());
+                            return Err(missing_ci().into());
                         }
                     }
                     // The repository had no checks on either side of the update.
                     Ok(!matches!(
-                        self.worktree.relationship_to_base(self.base, &watched.commit, false)?,
+                        self.worktree
+                            .relationship_to_base(self.base, &watched.commit, false)?,
                         BaseRelationship::Behind
                     ))
                 }

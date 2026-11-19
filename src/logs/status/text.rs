@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::logs::command_record::{CommandRecord, Issue};
+use crate::logs::github::PullRequestChecks;
 use crate::logs::reading::{CurrentStage, Departure, Group, Health, NeedsYouKind};
 
 pub(super) struct Row {
@@ -22,9 +23,8 @@ struct Metadata {
     landing: bool,
     stopping: bool,
     count: usize,
-    github_ci: Option<crate::github::InboxCi>,
-    github_mergeable: Option<crate::github::InboxMergeable>,
-    github_stale_ci: Option<String>,
+    #[serde(flatten)]
+    github_checks: PullRequestChecks,
     #[serde(flatten)]
     departure: Option<Departure>,
     dismissal: Option<crate::logs::dismiss::DismissalView>,
@@ -216,11 +216,11 @@ impl Row {
         self.command
             .print(state, "", tags.then_some(meta.machine.as_str()));
         if self.group == Group::ReadyForReview {
-            println!("  {}", meta.github_ci.unwrap_or_default().label());
-            if meta.github_mergeable == Some(crate::github::InboxMergeable::Conflicting) {
+            println!("  {}", meta.github_checks.ci().label());
+            if meta.github_checks.has_merge_conflict() {
                 println!("  Merge conflict");
             }
-            if let Some(note) = &meta.github_stale_ci {
+            if let Some(note) = &meta.github_checks.stale_ci {
                 println!("  {note}");
             }
         }

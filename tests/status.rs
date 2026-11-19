@@ -3669,6 +3669,170 @@ fn graphql_response_stops_following_batches_and_warns_while_fresh() {
 }
 
 #[test]
+fn inbox_comparison_leaves_the_rest_reserve_for_the_factory() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    let advisory = "https://github.com/acme/widgets/security/advisories/GHSA-last";
+    security_record(&scenario, 8, &[advisory], true);
+
+    let head = "a".repeat(40);
+    let base = "b".repeat(40);
+    let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["headRefOid"] = serde_json::json!(head);
+    gh["prs"][0]["baseRef"] = serde_json::json!({"target": {"oid": base}});
+    gh["prs"][0]["commits"] = serde_json::json!({
+        "nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]
+    });
+    gh["comparisons"] = serde_json::json!({
+        (format!("repos/acme/widgets/compare/{head}...{base}?per_page=1")):
+            {"merge_base_commit": {"sha": base}}
+    });
+    gh["advisories"] = serde_json::json!([
+        {"html_url": advisory, "state": "draft", "severity": null}
+    ]);
+    gh["rate_limits"] = serde_json::json!({
+        "graphql": {"remaining": 4999, "reset": reset},
+        "core": {"remaining": 500, "reset": reset}
+    });
+    scenario.write_gh_state(&gh);
+
+    fs::create_dir(scenario.path("bin/real")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
+    support::write_executable(
+        &scenario.path("bin/gh"),
+        r#"#!/bin/bash
+set -eu
+real="$(dirname "$0")/real/gh"
+marker="${FAKE_GH_STATE}.comparison-spent-request"
+if [[ "${1:-}" == api && "${2:-}" == */compare/* ]]; then
+    "$real" "$@"
+    touch "$marker"
+elif [[ "${1:-}" == api && "${2:-}" == rate_limit && -e "$marker" ]]; then
+    reset=$(($(date +%s) + 3600))
+    printf '{"resources":{"core":{"remaining":499,"reset":%s},"graphql":{"remaining":4999,"reset":%s}}}\n' "$reset" "$reset"
+else
+    exec "$real" "$@"
+fi
+"#,
+    );
+
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let calls = scenario.gh_calls();
+    assert!(
+        scenario
+            .path("gh-state.json.comparison-spent-request")
+            .exists(),
+        "the scenario never spent the comparison request: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .flatten()
+            .any(|arg| arg.contains("/security-advisories?")),
+        "the Inbox started the advisory list with 499 REST requests: {calls:?}"
+    );
+}
+
+#[test]
+fn first_comparison_leaves_the_reserve_after_a_cold_identity_read() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+
+    let head = "a".repeat(40);
+    let base = "b".repeat(40);
+    let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["headRefOid"] = serde_json::json!(head);
+    gh["prs"][0]["baseRef"] = serde_json::json!({"target": {"oid": base}});
+    gh["prs"][0]["commits"] = serde_json::json!({
+        "nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]
+    });
+    gh["comparisons"] = serde_json::json!({
+        (format!("repos/acme/widgets/compare/{head}...{base}?per_page=1")):
+            {"merge_base_commit": {"sha": base}}
+    });
+    let rates = |remaining| {
+        serde_json::json!({
+            "graphql": {"remaining": 4999, "reset": reset},
+            "core": {"remaining": remaining, "reset": reset}
+        })
+    };
+    gh["rate_limits"] = rates(500);
+    gh["next_rate_limits"] = rates(499);
+    scenario.write_gh_state(&gh);
+
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let calls = scenario.gh_calls();
+    assert!(
+        !calls.iter().flatten().any(|arg| arg.contains("/compare/")),
+        "the Inbox started a comparison after the reserve was reached: {calls:?}"
+    );
+}
+
+#[test]
+fn inbox_stops_comparisons_when_the_rest_quota_probe_fails() {
+    let scenario = Scenario::new();
+    for number in [7, 8] {
+        ready_record_with_pr(&scenario, number, &hours_ago(48), Some(u64::from(number)));
+        github_pr_is(&scenario, u64::from(number), "OPEN", None, None);
+    }
+    let [head, base] = ['a', 'b'].map(|ch| ch.to_string().repeat(40));
+    let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+    let mut gh = scenario.gh_state();
+    for pr in gh["prs"].as_array_mut().unwrap() {
+        pr["headRefOid"] = serde_json::json!(head);
+        pr["baseRef"] = serde_json::json!({"target": {"oid": base}});
+        pr["commits"] = serde_json::json!({
+            "nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]
+        });
+    }
+    gh["comparisons"] = serde_json::json!({
+        (format!("repos/acme/widgets/compare/{head}...{base}?per_page=1")):
+            {"merge_base_commit": {"sha": base}}
+    });
+    gh["rate_limits"] = serde_json::json!({
+        "graphql": {"remaining": 4999, "reset": reset},
+        "core": {"remaining": 500, "reset": reset}
+    });
+    scenario.write_gh_state(&gh);
+    fs::create_dir(scenario.path("bin/real")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
+    support::write_executable(
+        &scenario.path("bin/gh"),
+        r#"#!/bin/bash
+set -eu
+real="$(dirname "$0")/real/gh"
+marker="${FAKE_GH_STATE}.comparison-spent-request"
+if [[ "${1:-}" == api && "${2:-}" == */compare/* ]]; then
+    "$real" "$@"
+    touch "$marker"
+elif [[ "${1:-}" == api && "${2:-}" == rate_limit && -e "$marker" ]]; then
+    printf 'HTTP 503: quota probe unavailable\n' >&2
+    exit 1
+else
+    exec "$real" "$@"
+fi
+"#,
+    );
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let comparisons: Vec<_> = scenario
+        .gh_calls()
+        .into_iter()
+        .filter(|call| {
+            call.first().is_some_and(|arg| arg == "api")
+                && call.get(1).is_some_and(|arg| arg.contains("/compare/"))
+        })
+        .collect();
+    assert_eq!(comparisons.len(), 1, "{comparisons:?}");
+}
+
+#[test]
 fn failed_base_comparison_preserves_the_last_stale_ci_answer() {
     let scenario = Scenario::new();
     ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
@@ -3730,6 +3894,43 @@ fn failed_base_comparison_preserves_the_last_stale_ci_answer() {
         deferred["commands"][0]["github_stale_ci"],
         before["commands"][0]["github_stale_ci"]
     );
+}
+
+#[test]
+fn failed_stale_ci_comparison_keeps_current_mergeability() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+
+    let [head, new_base] = ['a', 'b'].map(|ch| ch.to_string().repeat(40));
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["headRefOid"] = serde_json::json!(head);
+    gh["prs"][0]["baseRef"] = serde_json::json!({"target": {"oid": head}});
+    gh["prs"][0]["mergeable"] = "MERGEABLE".into();
+    gh["prs"][0]["commits"] = serde_json::json!({
+        "nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]
+    });
+    scenario.write_gh_state(&gh);
+
+    let status = || {
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        serde_json::from_str::<Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(status()["commands"][0]["github_mergeable"], "mergeable");
+
+    age_cache_file(&scenario, 600);
+    gh["prs"][0]["baseRef"]["target"]["oid"] = serde_json::json!(new_base);
+    gh["prs"][0]["mergeable"] = "CONFLICTING".into();
+    gh["failing"] = serde_json::json!([format!(
+        "api repos/acme/widgets/compare/{head}...{new_base}?per_page=1"
+    )]);
+    gh["failing_stderr"] = "HTTP 401: Bad credentials".into();
+    scenario.write_gh_state(&gh);
+
+    let after = status();
+    assert!(after["github_failure"].as_str().unwrap().contains("401"));
+    assert_eq!(after["commands"][0]["github_mergeable"], "conflicting");
 }
 
 #[test]

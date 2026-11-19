@@ -123,6 +123,7 @@ pub(super) fn take_to_goal(
         outside,
         base,
         goal,
+        base_with_green_ci: None,
         budgets: Budgets {
             repair_cap,
             ..Budgets::default()
@@ -255,7 +256,14 @@ enum Round {
 
 pub(super) struct WatchedHead {
     pub commit: String,
-    pub ci_passed: bool,
+    pub ci: WatchedCi,
+}
+
+#[derive(PartialEq, Eq)]
+pub(super) enum WatchedCi {
+    Green,
+    Absent,
+    MissingAfterBaseUpdate,
 }
 
 /// Keeps the PR mergeable and its CI green, within the Delivery's budgets.
@@ -263,6 +271,7 @@ struct RepairLoop<'a, O> {
     outside: &'a mut O,
     base: &'a str,
     goal: Goal,
+    base_with_green_ci: Option<String>,
     budgets: Budgets,
 }
 
@@ -345,9 +354,23 @@ impl<O: Outside> RepairLoop<'_, O> {
                     issue_move_counted = true;
                 }
                 Ci::Absent | Ci::Passed => {
+                    // Remember observed green CI even if a later force-push
+                    // removes its Base from the current Base history.
+                    let watched_ci = if matches!(ci, Ci::Passed) {
+                        self.base_with_green_ci = Some(base_commit);
+                        WatchedCi::Green
+                    } else if self
+                        .base_with_green_ci
+                        .as_ref()
+                        .is_some_and(|checked_base| checked_base != &base_commit)
+                    {
+                        WatchedCi::MissingAfterBaseUpdate
+                    } else {
+                        WatchedCi::Absent
+                    };
                     let watched = WatchedHead {
                         commit: head,
-                        ci_passed: matches!(ci, Ci::Passed),
+                        ci: watched_ci,
                     };
                     if self.outside.base_branch_moved()? {
                         // Green CI on a head that merges cleanly is enough

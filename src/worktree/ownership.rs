@@ -683,30 +683,47 @@ impl<'a> Operation<'a> {
         self.succeeds(&["merge-base", "--is-ancestor", ancestor, head])
     }
 
-    pub(super) fn heads_merged_with_base(&self, head: &str, base: &str) -> Result<Vec<String>> {
+    pub(super) fn heads_merged_with_base(
+        &self,
+        head: &str,
+        base: &OriginCommit,
+        branch: &str,
+    ) -> Result<Vec<String>> {
         use std::collections::{BTreeSet, HashMap};
+        let base_merge_message = base.merge_message(branch);
+        let base = base.commit.as_str();
         let history = self.run(&[
-            "rev-list",
+            "log",
             "--reverse",
             "--topo-order",
-            "--parents",
+            "--no-show-signature",
+            "--no-notes",
+            "--no-decorate",
+            "--format=%H %P%x00%s",
             &format!("{base}..{head}"),
         ])?;
-        // Visit parents before their children. Commits outside the range
-        // belong to Base's history. An in-range parent without Base was
-        // combined with it here, regardless of the merge's parent order.
+        // Visit parents before children. An unseen parent belongs to Base's
+        // history. Include earlier Base updates so several unchecked updates
+        // cannot hide an original head that had checks.
         let mut contains_base = HashMap::from([(base, true)]);
         let mut combined = BTreeSet::new();
         for line in history.lines() {
-            let mut parents = line.split_ascii_whitespace();
-            let Some(commit) = parents.next() else {
-                continue;
-            };
+            let (commits, subject) = line.split_once('\0').context("missing commit subject")?;
+            let mut parents = commits.split_ascii_whitespace();
+            let commit = parents.next().context("missing commit ID")?;
             let current = parents
                 .clone()
                 .any(|parent| contains_base.get(parent) == Some(&true));
-            if current {
+            let brought_in_older_base = parents
+                .clone()
+                .any(|parent| !contains_base.contains_key(parent));
+            if current || brought_in_older_base {
                 combined.extend(parents.filter(|parent| contains_base.get(parent) == Some(&false)));
+            } else if subject == base_merge_message && parents.clone().nth(1).is_some() {
+                // A rewritten Base can remove an earlier Delivery merge's
+                // Base parent from its history. The first parent is the head
+                // Delivery combined with that earlier Base tip.
+                combined.extend(parents.take(1));
             }
             contains_base.insert(commit, current);
         }
@@ -722,10 +739,7 @@ impl<'a> Operation<'a> {
     /// Merge the exact sampled commit, preserving the readable upstream label
     /// and allowing a merge even when the repository config demands ff-only.
     pub(super) fn merge(&self, origin: OriginCommit, branch: &str) -> Result<Merge> {
-        let message = format!(
-            "Merge remote-tracking branch '{}' into {branch}",
-            origin.upstream
-        );
+        let message = origin.merge_message(branch);
         match self.run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit]) {
             Ok(_) => Ok(Merge::Clean {
                 commit: origin.commit,

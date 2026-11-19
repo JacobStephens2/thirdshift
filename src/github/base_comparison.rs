@@ -43,32 +43,44 @@ impl BaseComparison {
 }
 
 impl GitHub {
-    /// Refresh the comparison, returning false when a quota wait deferred it.
+    /// Refresh the comparison independently of the other pull request facts.
     pub(crate) fn refresh_inbox_base(
         &self,
         url: &str,
         pull: &mut PullRequestState,
         previous: Option<&InboxState>,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let Some(comparison) = pull.base_comparison.as_mut() else {
-            return Ok(true);
+            return Ok(());
         };
         if comparison.first_parent_behind.is_some() {
-            return Ok(true);
+            return Ok(());
         }
-        if let Some(InboxState::PullRequest(previous)) = previous
-            && let Some(previous) = previous.base_comparison.as_ref()
+        let previous = match previous {
+            Some(InboxState::PullRequest(previous)) => previous.base_comparison.as_ref(),
+            _ => None,
+        }
+        .filter(|previous| {
+            previous.branch == comparison.branch
+                && previous.head == comparison.head
+                && previous.first_parent_behind.is_some()
+        });
+        if let Some(previous) = previous
             && previous.base == comparison.base
-            && previous.head == comparison.head
-            && previous.first_parent_behind.is_some()
         {
             comparison.first_parent_behind = previous.first_parent_behind;
-            return Ok(true);
+            return Ok(());
         }
         let (owner, repo, _) = split_pull_request_url(url).context("invalid Inbox PR URL")?;
-        let repo = format!("{owner}/{repo}");
-        comparison.first_parent_behind = self.first_parent_behind(&repo, comparison)?;
-        Ok(comparison.first_parent_behind.is_some())
+        let count = self.first_parent_behind(&format!("{owner}/{repo}"), comparison);
+        if let Ok(Some(count)) = count {
+            comparison.first_parent_behind = Some(count);
+        } else if let Some(previous) = previous {
+            // Until GitHub can compare the newer Base tip, keep the warning
+            // for this same head and Base branch at the last observed tip.
+            *comparison = previous.clone();
+        }
+        count.map(drop)
     }
 
     fn comparison_page(&self, path: &str) -> Result<Option<Value>> {
@@ -77,7 +89,13 @@ impl GitHub {
         {
             return Ok(None);
         }
-        self.gh_json(&["api", path]).map(Some)
+        let page = self.gh_json(&["api", path]);
+        // Record the balance for the next Inbox read, including one that
+        // does not itself compare commits.
+        let quotas = self.inbox_quotas();
+        let page = page?;
+        quotas?;
+        Ok(Some(page))
     }
 
     fn first_parent_behind(&self, repo: &str, tips: &BaseComparison) -> Result<Option<usize>> {

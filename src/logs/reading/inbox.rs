@@ -188,11 +188,9 @@ impl InboxItem<'_> {
     /// Offer the Fix run only for a pull request still waiting for review
     /// whose latest kept facts show work for Delivery to repair.
     pub(in crate::logs) fn fix_command(&self) -> Option<String> {
-        (self.group == Group::ReadyForReview
-            && (self.github.ci == Some(crate::github::InboxCi::Red)
-                || self.github.mergeable == Some(crate::github::InboxMergeable::Conflicting)))
-        .then(|| record_pull_request(&self.command).map(|url| format!("thirdshift fix {url}")))
-        .flatten()
+        (self.group == Group::ReadyForReview && self.github.checks.needs_fix())
+            .then(|| record_pull_request(&self.command).map(|url| format!("thirdshift fix {url}")))
+            .flatten()
     }
 
     pub(in crate::logs) fn cause(&self) -> Option<&str> {
