@@ -3627,6 +3627,12 @@ ends, the next Pass can take the PR. The owning host automatically releases a
 reservation on proof that its process died. Reservations no host can test still
 need the Day shift; no timer expires another Command&#39;s reservation.
 Failed hold observations stop admission.
+For a PR targeting an Issue branch (<code>issue-&lt;n&gt;</code> or <code>issue-&lt;n&gt;-branch-&lt;k&gt;</code> for
+k ≥ 2), the Pass also checks the base Spec&#39;s issue for either hold and names
+the Spec in its skip line. GitHub supplies no closing-issue links for PRs into
+non-default bases. When the linked list is empty, the Pass checks local issue
+references after closing keywords in the PR body, such as <code>Closes #7</code>,
+<code>Fixes #7</code> or <code>Resolves #7</code>, for the same holds.
 This guard is checked again after reserving the PR, before inspecting its
 worktree. It does not lock out a Delivery started afterwards; captured-head
 checks still protect Review publication. Explicit <code>review &lt;PR URL&gt;</code> keeps its
