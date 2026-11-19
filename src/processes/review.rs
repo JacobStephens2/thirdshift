@@ -283,9 +283,22 @@ impl ReviewProcess {
             }
             let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             notification.built_with(&command.choice);
+            let run_name = if self.built_in {
+                "Review run"
+            } else {
+                "Process"
+            };
             let git = Git::new(checkout.path());
-            skills::exclude(&git, "/.thirdshift-review-input.md")?;
+            let closing_issues =
+                crate::delivery::ClosingIssues::new(pr.clone(), run_started, run_name);
+            let guard = Guard {
+                github: &github,
+                pr,
+                closing_issues: &closing_issues,
+            };
             let input = github.review_input(pr, &snapshot)?;
+            guard.check_known_issues(&input.closing_issues)?;
+            skills::exclude(&git, "/.thirdshift-review-input.md")?;
             // The checked-out branch chooses this path. A symlink here would
             // send the packet write outside the worktree.
             write_review_input(
@@ -310,13 +323,13 @@ impl ReviewProcess {
                 let reviewed = findings.is_some();
                 let before_each = || {
                     if reviewed && mode == Mode::Address {
-                        compatible(&github, pr, &snapshot).map(|_| ())
+                        guard.compatible(&snapshot).map(|_| ())
                     } else {
-                        unchanged(&github, pr, &snapshot)
+                        guard.unchanged(&snapshot)
                     }
                 };
                 if mode == Mode::Address && matches!(step.kind, StepKind::Delivery) {
-                    compatible(&github, pr, &snapshot)?;
+                    guard.compatible(&snapshot)?;
                 } else if security_review || !matches!(step.kind, StepKind::SecurityReview) {
                     before_each()?;
                 }
@@ -410,7 +423,9 @@ impl ReviewProcess {
                                 },
                             );
                             last_log = log;
-                            let mut message = result?
+                            let message = result?;
+                            guard.check_issues()?;
+                            let mut message = message
                                 .filter(|text| !text.trim().is_empty())
                                 .context("session left no final report")?;
                             if reviewing {
@@ -426,14 +441,18 @@ impl ReviewProcess {
                             }
                             message
                         }
-                        StepKind::Command(text) => run_command(
-                            checkout.path(),
-                            text,
-                            &results,
-                            &results.join(format!("{}.txt", step.name)),
-                            Some(CommandInput::PullRequest(&pr.url)),
-                            None,
-                        )?,
+                        StepKind::Command(text) => {
+                            let output = run_command(
+                                checkout.path(),
+                                text,
+                                &results,
+                                &results.join(format!("{}.txt", step.name)),
+                                Some(CommandInput::PullRequest(&pr.url)),
+                                None,
+                            )?;
+                            guard.check_issues()?;
+                            output
+                        }
                         StepKind::SecurityReview => {
                             if !security_review {
                                 "Security review skipped: not requested".to_string()
@@ -462,6 +481,17 @@ impl ReviewProcess {
                                     },
                                 );
                                 last_log = log.clone();
+                                let review = match review {
+                                    Err(error)
+                                        if crate::delivery::ClosingIssues::is_untrusted_edit(
+                                            &error,
+                                        ) =>
+                                    {
+                                        return Err(error);
+                                    }
+                                    other => other,
+                                };
+                                guard.check_issues()?;
                                 let outcome = crate::security::review::Outcome::of(review, log);
                                 let entry = outcome.entry();
                                 security_outcomes.push(outcome);
@@ -490,8 +520,7 @@ impl ReviewProcess {
                                     config.review.commands_for(&repo),
                                 );
                                 let logs = session::Logs::of_process_review(&repo, index + 1);
-                                let before_validation =
-                                    || compatible(&github, pr, &snapshot).map(|_| ());
+                                let before_validation = || guard.compatible(&snapshot).map(|_| ());
                                 // Captured before the session. It can read and
                                 // then remove the report, and Delivery posts
                                 // its final message. A prompt not to copy the
@@ -514,7 +543,9 @@ impl ReviewProcess {
                                     },
                                 );
                                 last_log = log;
-                                let validation = result?
+                                let validation = result?;
+                                guard.check_issues()?;
+                                let validation = validation
                                     .filter(|text| !text.trim().is_empty())
                                     .context("validation session left no final report")?;
                                 ensure!(
@@ -544,13 +575,14 @@ impl ReviewProcess {
                                 mode,
                                 merge: goal == Goal::Merged,
                                 input: &input,
+                                guard,
                             }.run(findings, self.file.limits.repair_cap, |kind, failed, expected| {
                                 let text = prompt::pull_request_ci_fix_repair(
                                     pr, &expected.base, &expected.branch, failed,
                                     config.review.commands_for(&repo),
                                 );
                                 let logs = session::Logs::of_process_review(&repo, index + 1);
-                                let before_repair = || unchanged(&github, pr, expected);
+                                let before_repair = || guard.unchanged(expected);
                                 let private_reports = crate::security::review::private_report_material(&repo);
                                 let (result, log) = session::Sessions::checked_within(
                                     &logs, checkout.path(), &step.choice, None, None,
@@ -558,9 +590,11 @@ impl ReviewProcess {
                                     |sessions| sessions.run_to_final_message(session::Purpose::Ordinary, kind, &text),
                                 );
                                 last_log = log;
-                                let entry = result?.filter(|text| !text.trim().is_empty())
+                                let entry = result?;
+                                guard.check_issues()?;
+                                let entry = entry
+                                    .filter(|text| !text.trim().is_empty())
                                     .context("CI-fix Repair left no final report")?;
-                                unchanged(&github, pr, expected)?;
                                 let current_private_reports = crate::security::review::private_report_material(&repo);
                                 Ok(withhold_private(entry,
                                     &[&earlier_private_reports, &private_reports, &current_private_reports],
@@ -585,6 +619,7 @@ impl ReviewProcess {
                                 match (self_merge::SelfMerge {
                                     pr,
                                     snapshot: &snapshot,
+                                    closing_issues: &closing_issues,
                                     choice: &step.choice,
                                     logs: &logs,
                                     retry: &retry,
@@ -764,38 +799,54 @@ pub(crate) fn write_review_input(path: &Path, markdown: &str) -> Result<()> {
     Ok(())
 }
 
-fn unchanged(github: &GitHub, pr: &PullRequestUrl, snapshot: &ReviewPullRequest) -> Result<()> {
-    let current = compatible(github, pr, snapshot)?;
-    ensure!(
-        current.head == snapshot.head,
-        "pull request changed during Review run: head moved; expected {}, actual {}",
-        snapshot.head,
-        current.head,
-    );
-    Ok(())
+#[derive(Clone, Copy)]
+pub(super) struct Guard<'a> {
+    github: &'a GitHub,
+    pr: &'a PullRequestUrl,
+    closing_issues: &'a crate::delivery::ClosingIssues,
 }
 
-/// Delivery may report a moved head and the Base branch tip may advance,
-/// but never publish to changed branch names or an ineligible pull request.
-fn compatible(
-    github: &GitHub,
-    pr: &PullRequestUrl,
-    snapshot: &ReviewPullRequest,
-) -> Result<ReviewPullRequest> {
-    let current = github.review_pull_request(pr)?;
-    ensure!(
-        current.base == snapshot.base,
-        "pull request changed during Review run: base branch moved; expected {}, actual {}",
-        snapshot.base,
-        current.base,
-    );
-    ensure!(
-        current.branch == snapshot.branch,
-        "pull request changed during Review run: branch renamed; expected {}, actual {}",
-        snapshot.branch,
-        current.branch,
-    );
-    Ok(current)
+impl Guard<'_> {
+    pub(super) fn check_issues(&self) -> Result<()> {
+        self.closing_issues.check(self.github)
+    }
+
+    pub(super) fn check_known_issues(&self, issues: &[crate::issue::IssueUrl]) -> Result<()> {
+        self.closing_issues.check_known(issues)
+    }
+
+    /// Ensure PR metadata, head commit, and linked closing issues are intact.
+    pub(super) fn unchanged(&self, snapshot: &ReviewPullRequest) -> Result<()> {
+        let current = self.compatible(snapshot)?;
+        ensure!(
+            current.head == snapshot.head,
+            "pull request changed during Review run: head moved; expected {}, actual {}",
+            snapshot.head,
+            current.head,
+        );
+        Ok(())
+    }
+
+    /// Delivery may report a moved head and the Base branch tip may advance,
+    /// but never publish to changed branch names, an ineligible pull request,
+    /// or after an untrusted closing-issue edit.
+    pub(super) fn compatible(&self, snapshot: &ReviewPullRequest) -> Result<ReviewPullRequest> {
+        let current = self.github.review_pull_request(self.pr)?;
+        ensure!(
+            current.base == snapshot.base,
+            "pull request changed during Review run: base branch moved; expected {}, actual {}",
+            snapshot.base,
+            current.base,
+        );
+        ensure!(
+            current.branch == snapshot.branch,
+            "pull request changed during Review run: branch renamed; expected {}, actual {}",
+            snapshot.branch,
+            current.branch,
+        );
+        self.check_issues()?;
+        Ok(current)
+    }
 }
 
 fn unchanged_checkout(git: &Git, snapshot: &ReviewPullRequest) -> Result<()> {
