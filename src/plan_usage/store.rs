@@ -86,6 +86,31 @@ pub struct State {
     /// When thirdshift last ran the Harness's non-billed reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_at: Option<DateTime<Utc>>,
+    /// Why the latest non-billed usage read failed; saved observations stay.
+    /// A control character or Unicode line separator is stored as a visible
+    /// symbol, so the message cannot start another Plan usage line.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_read_error"
+    )]
+    pub read_error: Option<String>,
+}
+
+fn deserialize_read_error<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.map(|text| one_line_read_error(&text)))
+}
+
+/// One stored read failure. [`crate::cronjobs::report_line`] makes characters
+/// that would split a terminal line visible, then the field keeps 256 of them.
+pub(super) fn one_line_read_error(text: &str) -> String {
+    crate::cronjobs::report_line(text)
+        .chars()
+        .take(256)
+        .collect()
 }
 
 impl State {
