@@ -147,6 +147,8 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
     releaseRefresh();
     await page.unrouteAll({ behavior: 'wait' });
   }
+  // Wait for the owning machine's dismissed row, beyond optimistic removal.
+  await remoteRows.locator('form[action="/dismiss/undo"]').waitFor({ state: 'attached' });
   await undo.click();
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   // Verify Undo survived a reload before starting a fresh notification baseline.
@@ -154,8 +156,9 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
   await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
-  // The enabled observer establishes its baseline through a real Inbox read.
+  // Establish the restored two-row baseline through a real Inbox read.
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:notification-count'))?.count === 2);
+  assert.equal(await page.evaluate(() => notices.length), 0, 'restoring the baseline does not notify');
   const remotePath = join(homes[1], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const added = JSON.parse(await readFile(remotePath, 'utf8'));
   added.tickets[1].state = 'merged';
