@@ -295,6 +295,26 @@ fn muse_failed_and_empty_reads_are_visible_and_preserve_saved_limits() {
 }
 
 #[test]
+fn muse_keyless_gateway_remains_available_without_login() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\ndefault = \"muse\"\n");
+    scripted(
+        &scenario,
+        "muse",
+        r#"while read -r line; do
+case "$line" in
+  *usage/refresh*) echo '{"id":1,"error":{"message":"usage/refresh needs a Meta-account login on this host"}}' ;;
+  *account/read*) echo '{"id":2,"result":{"state":"loggedOut","credentialRequired":false}}' ;;
+esac
+done"#,
+    );
+    let view = plan_usage(&scenario, &[]);
+    let muse = row(&view, "muse");
+    assert_eq!(muse["account"]["signed_in"], true, "{muse:#}");
+    assert_eq!(muse["routes"][0]["availability"], "available", "{muse:#}");
+}
+
+#[test]
 fn plan_usage_reads_codex_muse_and_claude_on_demand_and_reuses_them_for_a_minute() {
     let scenario = Scenario::new();
     scenario.plan_usage_is(json!({"muse": {"read_error": "previous read failed"}}));

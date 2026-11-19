@@ -324,13 +324,13 @@ fn take_muse(
         if account.is_object() {
             let saved = state.account.get_or_insert_default();
             saved.label = text(&account["label"]).or(saved.label.take());
-            saved.signed_in = muse_state_signed_in(&account["state"])
-                .or_else(|| {
-                    account["credentialRequired"]
-                        .as_bool()
-                        .map(|required| !required)
-                })
-                .or(saved.signed_in);
+            saved.signed_in = match account["credentialRequired"].as_bool() {
+                // Keyless gateways need no login even with a loggedOut lane.
+                Some(false) => Some(true),
+                required => muse_state_signed_in(&account["state"])
+                    .or(required.map(|required| !required))
+                    .or(saved.signed_in),
+            };
         }
     }
     usage.map(|_| ())
