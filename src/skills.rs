@@ -419,13 +419,17 @@ pub fn remove_written() {
 /// Where the Command wrote the Factory skills out, writing them now if it
 /// has not yet.
 pub(crate) fn written_out() -> Result<PathBuf> {
+    crate::scratch::session_temp()?;
     let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(dir) = &*written {
         return Ok(dir.path().to_owned());
     }
-    let dir = tempfile::Builder::new()
-        .prefix("thirdshift-skills-")
-        .tempdir()?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("thirdshift-skills-");
+    let dir = match crate::scratch::skills_directory() {
+        Some(root) => builder.tempdir_in(root)?,
+        None => builder.tempdir()?,
+    };
     SKILLS
         .extract(dir.path())
         .context("could not write the Factory skills")?;

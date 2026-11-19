@@ -25,6 +25,9 @@ mod fleet;
 #[path = "console/remote_details.rs"]
 mod remote_details;
 
+#[path = "console/notifications.rs"]
+mod notifications;
+
 #[path = "console/resources.rs"]
 mod resources;
 

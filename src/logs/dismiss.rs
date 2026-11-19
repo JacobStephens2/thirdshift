@@ -413,6 +413,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         dismissal.get_or_insert_with(|| row.view(None));
         file.rows.push(row);
         write(record, &file)?;
+        crate::scratch::dismiss(record)?;
     }
     activity_write(
         &config,

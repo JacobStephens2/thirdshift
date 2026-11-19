@@ -129,6 +129,11 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 Every Console page's tab title names the serving host. The Inbox keeps its Needs you count beside the host, including through live updates.
 
+Open Command details to read a saved [Run notification](#run-notifications),
+including its subject and full body, locally or across the Fleet. The same text
+is available with `thirdshift show <command>` and in its JSON/API view, whether
+or not email is enabled. Security notifications require the `security` scope.
+
 Lanes and Stages show each run's recorded issue title, falling back to its pull-request title from the kept GitHub answer (or its recorded PR title). With neither title, a Custom process keeps its Process label; other runs show `(title unavailable)`. A recorded pull request links to GitHub beside the issue link, labelled with its title when available or `PR #N` otherwise.
 
 ### Other local accounts
@@ -1159,7 +1164,7 @@ When a Harness session ends normally, fails or is stopped, thirdshift stops its 
 
 On Linux without a user manager, cleanup is best effort: each session carries a unique `THIRDSHIFT_SESSION` environment marker, and thirdshift finds processes belonging to the same OS user with that exact marker. It sends SIGTERM, waits the existing ten-second grace period, then sends SIGKILL to survivors. A process that clears its environment can escape this fallback. Parallel sessions have different markers and scopes. Cleanup logs a count when it kills survivors; a sweep failure logs a warning and leaves the Command's outcome unchanged. This cleans up work from the current session, not processes older versions already leaked.
 
-File cleanup removes thirdshift's own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Other files an agent creates as your user stay. For example, one Ticket run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
+File cleanup removes thirdshift's own worktree, local Issue branch and Command scratch, including the extracted Factory skills and session `mktemp` files. Paused Commands and failures with Recovery retain scratch until successful continuation or Dismissal; see [Logs](#logs). The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Files an agent creates outside Command scratch, such as a downloaded JDK in `~/.local/jdk/`, stay:
 
 - **Install the target repository's toolchains up front** (language runtimes, package managers, test tools), so the agents don't download their own on every Ticket run.
 - **For UI work, install the headless browser dependencies**, e.g. `libgbm1` on Ubuntu server, which headless Chromium needs. Without it, agents can't take screenshots to check a UI change and fall back to reading the code.
@@ -3208,6 +3213,16 @@ Setup validates the Credentials before asking questions on a terminal. For email
 
 #### Run notifications
 
+Email can be turned off while monitoring the Console: Command details shows the
+saved Run notification's subject and full body below its facts, including across
+the Fleet. `thirdshift show <command>` prints the same text; `show --json` and
+`GET /api/v1/peek?command=<command>` return `command.notification` as
+`{ "subject": "…", "body": "…" }`, or `null` when none is available. Security
+details, including their notification, require the `security` scope in the
+Console and its API. Live Commands, skipped Passes and dispatched children can
+have no saved notification. Missing, unreadable, malformed or oversized files
+(over 4 MiB) leave the rest of Command details available.
+
 A Command that waited for primary GitHub quota includes one line, `Waited <duration> for the GitHub quota (<resource>)`, totaling its waits and its child Ticket runs' waits. A Command that never waited has no such line; secondary-limit retries add none.
 
 `--email` (or `email`) asks a Ticket run for a **Run notification**: one email, sent when the Ticket run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to the matching `email.to_by_repo` entry, falling back to `email.to`. With `email.always = true` in the [User config](#user-config), a Ticket run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Ticket run; an address after `--email` still wins over both configured recipients. Giving a flag twice, or any two of `--email`, `--email-unless-merged` and `--no-email`, is an argument error.
@@ -3314,6 +3329,30 @@ Console.
 
 ### Logs
 
+Each Command owns a private directory under `~/.thirdshift/scratch/`. All its
+sessions and child Ticket runs use a `TMPDIR` inside it, and its Factory skills
+are extracted there too. Sessions use `mktemp`; explicit temporary path templates
+use `$TMPDIR`. Sandboxed sessions each see only their own temporary subdirectory;
+sealed and Trial sandboxes expose it as `/sandbox/tmp`, backed by Command scratch,
+so mounting temporary storage does not expose the host home.
+Command logs, Session traces and recorded artifacts stay in their documented
+locations rather than disposable scratch.
+
+Normal completion and interruption remove scratch. A Paused Command or a failed
+Command with a Recovery command keeps it for inspection, including after an
+interruption that leaves Recovery. A successful continuation or Dismissal removes
+the retained directory; unrelated Commands leave it alone. Undoing a Dismissal
+cannot restore deleted scratch files.
+
+At startup, each Command removes orphaned scratch only on the owning host's
+proof that its process is gone, using the same process clocks as reservation
+recovery. Live owners, other hosts and uncertain process probes are kept.
+Startup also removes legacy `thirdshift-skills-*` directories in the system
+temporary directory older than two days, only when owned by the current user
+and containing only known Factory skill paths and `LICENSE`, without symlinks
+or extra user files. Removals are logged. Repository `.agents/skills` and files
+sessions write outside their scratch directory are outside this cleanup.
+
 Export a Command's whole **Trace** for another tool with:
 
 ```sh
@@ -3374,7 +3413,7 @@ each with its compiled-in file's hash. A run with no Process file has no hash.
 Older records can omit these fields. Status, the Console,
 the Activity log and Run notifications keep their existing run-type names.
 
-When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. These files are not included in `thirdshift logs` or the Console's log inventory.
+When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. Read the saved subject and body in Console Command details (also across the Fleet), `thirdshift show <command>` or its JSON/API view. These files remain outside `thirdshift logs` and the Console's log inventory.
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.logs.jsonl`.
 
@@ -4422,7 +4461,7 @@ When triaging an existing issue labelled `security-finding`, the Run notificatio
 
 The Command record, Activity log, `status` and Run notification name it a **Triage run**. A Report or explicitly named issue always takes a Command slot, even above the Command limit; unattended Triage Passes honour that limit. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
-Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
+Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes the throwaway worktree and a private Command scratch subdirectory writable. Scratch files and a private Harness home stay in that subdirectory. The home holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
 
 ## Scoring runs
 
@@ -4596,7 +4635,7 @@ more than 1,000 closures in one second fail visibly without advancing the window
 Your operating system can schedule it weekly, for example:
 
 ```cron
-0 3 * * 1 /usr/local/bin/thirdshift score >> /tmp/thirdshift-cron.log 2>&1
+0 3 * * 1 /usr/local/bin/thirdshift score >> ~/.thirdshift/cron.log 2>&1
 ```
 
 ## Building from source

@@ -1,4 +1,4 @@
-//! Triage's opt-in host reads, with writes confined to its throwaway worktree.
+//! Triage's opt-in host reads, with writes confined to its worktree and scratch.
 //! A read-only mount still allows `connect` to a host Unix socket, so each
 //! launch also loads a seccomp filter that refuses those sockets.
 
@@ -59,8 +59,18 @@ fn prepare_around(
         ]
         .map(OsString::from),
     );
-    let tmp = worktree.join(".thirdshift-tmp");
-    std::fs::create_dir(&tmp)?;
+    let tmp = if let Some(tmp) = crate::scratch::sandbox_temp()? {
+        argv.extend([
+            OsString::from("--bind"),
+            tmp.as_os_str().to_owned(),
+            tmp.as_os_str().to_owned(),
+        ]);
+        tmp
+    } else {
+        let tmp = worktree.join(".thirdshift-tmp");
+        std::fs::create_dir(&tmp)?;
+        tmp
+    };
     let mut launch = Launch {
         argv,
         env: Vec::new(),
@@ -213,7 +223,7 @@ fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harn
 
 /// Refuse Unix-domain sockets. The read-only bind does not stop `connect` to
 /// a host service (a session bus, systemd, or a container engine) that then
-/// writes outside the worktree. TCP and connected stream socketpairs stay
+/// writes outside the worktree and scratch. TCP and connected stream socketpairs stay
 /// available for runtimes. Datagram pairs are refused because their endpoints
 /// can reconnect to host sockets. `io_uring_setup` is refused as well: a ring
 /// can issue the blocked calls from a worker this filter does not see.

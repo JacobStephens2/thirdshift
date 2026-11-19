@@ -231,6 +231,8 @@ impl Output {
 /// Invalid requests are CLI failures. An accepted Trial returns exactly one
 /// JSON line, including when its session fails; progress stays on stderr.
 pub fn run(path: &Path) -> Result<String> {
+    #[cfg(not(test))]
+    crate::scratch::begin_trial()?;
     // Raise this Trial's own `oom_score_adj` first, so a system-wide
     // out-of-memory kill takes the Trial before the factory. The scope
     // wrapper raises itself too, which old Arm builds inherit.

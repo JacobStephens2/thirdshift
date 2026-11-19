@@ -31,6 +31,7 @@ pub(super) struct Peek {
     pub resume_command: Option<String>,
     pub fix_command: Option<String>,
     pub output: Option<String>,
+    pub notification: Option<String>,
     pub log_url: String,
     pub waterfall_url: String,
     pub owning_console: Option<String>,
@@ -159,7 +160,15 @@ impl Peek {
         peek
     }
 
-    fn from_details(command: String, value: Value) -> Self {
+    fn from_details(command: String, mut value: Value) -> Self {
+        let notification = value
+            .as_object_mut()
+            .and_then(|fields| fields.remove("notification"))
+            .and_then(|value| {
+                serde_json::from_value::<crate::logs::status::inspect::SavedNotification>(value)
+                    .ok()
+            })
+            .map(|notification| notification.text());
         let issue = serde_json::from_value::<crate::logs::Issue>(value["issue"].clone()).ok();
         let name = value["name"]
             .as_str()
@@ -203,6 +212,7 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
+            notification,
             output: None,
             log_url: crate::logs::status::inspect::url("/log", &command, None),
             waterfall_url: crate::logs::status::inspect::url("/waterfall", &command, None),
@@ -664,6 +674,20 @@ mod tests {
         Peek::remote("acme/widgets#7".into(), value, None, &remote)
             .render()
             .unwrap()
+    }
+
+    #[test]
+    fn remote_notification_renders_only_the_received_text() {
+        let html = remote_details(json!({
+            "command_log": "/unavailable/remote.log",
+            "notification": {"subject": "Remote <subject>", "body": "Advice\nhttps://github.com/acme/widgets/issues/7\n<script>unsafe()</script>\n"}
+        }));
+        assert!(html.contains("Subject: Remote &#60;subject&#62;"), "{html}");
+        assert!(html.contains("Advice\n<a href="), "{html}");
+        assert!(!html.contains("<script>unsafe()</script>"), "{html}");
+        assert_eq!(html.matches("aria-label=\"Run notification\"").count(), 1);
+        let absent = remote_details(json!({"notification": null}));
+        assert!(!absent.contains("aria-label=\"Run notification\""));
     }
 
     fn heading(html: &str) -> &str {

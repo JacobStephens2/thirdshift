@@ -135,6 +135,40 @@ fn foreign_process_names_and_accounts_survive_across_console_views() {
 }
 
 #[test]
+fn foreign_notifications_stay_inside_the_accepted_log_directory() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    record(&home, 7, Some("failed"), 0);
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let notification = dir.join("7-fixture.notification.txt");
+    fs::write(
+        &notification,
+        "Subject: Foreign result\n\nReadable recommendation\n",
+    )
+    .unwrap();
+    machine.setting("readable");
+    let read = || {
+        let output = machine.run(&["show", "widgets#7", "--json"]);
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["command"]["notification"].clone()
+    };
+    assert_eq!(read()["body"], "Readable recommendation\n");
+    fs::set_permissions(&notification, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(read().is_null());
+    fs::remove_file(&notification).unwrap();
+    let outside = home.join("private.txt");
+    fs::write(&outside, "Subject: Outside\n\nMust not be exposed\n").unwrap();
+    symlink(&outside, &notification).unwrap();
+    assert!(read().is_null());
+    fs::remove_file(&notification).unwrap();
+    let inside = dir.join("saved.txt");
+    fs::write(&inside, "Subject: Inside\n\nSafe recommendation\n").unwrap();
+    symlink(&inside, &notification).unwrap();
+    assert_eq!(read()["body"], "Safe recommendation\n");
+}
+
+#[test]
 fn unreadable_foreign_session_traces_leave_waterfall_available() {
     use std::os::unix::fs::PermissionsExt;
     let machine = Machine::new();

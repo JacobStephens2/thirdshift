@@ -19,4 +19,5 @@
   <p><a href="{{ log_url }}">Full Command log</a> · <a href="{{ waterfall_url }}">Waterfall</a>{% match owning_console %}{% when Some with (url) %} · <a href="{{ url }}">Open the owning Console</a>{% when None %}{% endmatch %}{% match experiment_url %}{% when Some with (url) %} · <a href="{{ url }}">Experiment</a>{% when None %}{% endmatch %}</p>
   {% if !logs.is_empty() %}<details class="peek-traces" data-fact="session traces"><summary>Session traces <span class="count">{{ logs.len() }}</span></summary>{% for log in logs %}<p class="peek-trace"><a href="{{ log.url }}" title="{{ log.name }}"><span>Session trace:</span> <span class="tail"><bdi>{{ log.name }}</bdi></span></a></p>{% endfor %}</details>{% endif %}
   <dl class="peek-facts">{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
+  {% match notification %}{% when Some with (notification) %}<section class="peek-notification" aria-label="Run notification"><h3>Run notification</h3><pre>{{ notification|linkify_verbatim }}</pre></section>{% when None %}{% endmatch %}
 </section>

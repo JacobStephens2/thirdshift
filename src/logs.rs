@@ -32,6 +32,7 @@ pub(crate) use reading::catalog;
 pub(crate) use reading::run_for_pull_request;
 mod recording;
 mod run_metrics;
+pub(crate) mod scratch;
 pub(crate) mod session;
 pub(crate) mod session_signals;
 pub(crate) mod spans;
@@ -330,6 +331,8 @@ const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 /// shows them, so a skipped pass may print nothing. A child Run prints no
 /// such line, and takes the stamp it was given.
 pub fn begin(begin: Begin) {
+    #[cfg(not(test))]
+    let child = matches!(begin, Begin::ChildRun(..));
     crate::github::quota::command::begin();
     static SAMPLER: Once = Once::new();
     SAMPLER.call_once(|| {
@@ -348,6 +351,10 @@ pub fn begin(begin: Begin) {
     }
     record.begin(begin);
     drop(record);
+    #[cfg(not(test))]
+    if let Err(error) = crate::scratch::begin(child) {
+        crate::progress::warn(&error, format_args!("could not prepare Command scratch"));
+    }
     attach_quota_budget();
 }
 
@@ -364,6 +371,7 @@ fn attach_quota_budget() {
 
 /// Give a child Run its exact parent, independently of second-resolution stamps.
 pub fn inherit_record(command: &mut std::process::Command) {
+    crate::scratch::inherit(command);
     if let Some(path) = record().record_path() {
         command.env(PARENT_RECORD, path);
     } else {

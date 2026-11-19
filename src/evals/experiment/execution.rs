@@ -600,6 +600,7 @@ impl<'a> Execution<'a> {
             }
             launched
         } else {
+            crate::scratch::session_temp()?;
             let path = path
                 .to_str()
                 .context("Trial request path is not valid Unicode")?;
@@ -611,6 +612,9 @@ impl<'a> Execution<'a> {
                 caps,
             )?
         };
+        if arm.runner.is_none() {
+            crate::scratch::inherit(launched.command());
+        }
         launched
             .command()
             .env(limits::SIGNAL_ENV, self.signal)
@@ -653,6 +657,11 @@ impl<'a> Execution<'a> {
             ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
             ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
         ];
+        if crate::sandbox::disabled()
+            && let Some(tmp) = crate::scratch::sandbox_temp()?
+        {
+            environment.push(("TMPDIR".into(), text(&tmp, "runner TMPDIR")?));
+        }
         for (name, relative) in crate::harness::PRIVATE_HOME_XDG {
             environment.push((
                 name.to_string(),

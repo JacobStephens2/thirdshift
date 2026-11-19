@@ -415,7 +415,10 @@ exec "{git}" "$@"
     } else {
         "exit 1\n".to_string()
     };
-    scenario.agent_does(&format!("if [ \"$HOLD_READY_READ\" = 1 ]; then exit 1; fi\ntouch \"$TMPDIR/winner-started\"\nwhile [ -d \"$TMPDIR\" ] && [ ! -f \"$TMPDIR/finish-winner\" ]; do sleep 0.02; done\n{ending}"));
+    // Coordination belongs to the fixture, independently of each Session's TMPDIR.
+    let race_directory = scenario.path("tmp");
+    let race_directory = race_directory.to_str().unwrap();
+    scenario.agent_does(&format!("if [ \"$HOLD_READY_READ\" = 1 ]; then exit 1; fi\ntouch \"$PICKUP_RACE_DIR/winner-started\"\nwhile [ -d \"$PICKUP_RACE_DIR\" ] && [ ! -f \"$PICKUP_RACE_DIR/finish-winner\" ]; do sleep 0.02; done\n{ending}"));
 
     if active_history {
         // Preserve the old listing, then preserve the candidate response
@@ -459,7 +462,15 @@ exec "$(dirname "$0")/real/gh" "$@"
     };
     let stale = scenario.run_until(
         &["pickup"],
-        &[[("HOLD_READY_READ", "1")].as_slice(), &resend_env(&resend)].concat(),
+        &[
+            [
+                ("HOLD_READY_READ", "1"),
+                ("PICKUP_RACE_DIR", race_directory),
+            ]
+            .as_slice(),
+            &resend_env(&resend),
+        ]
+        .concat(),
         started,
     );
     let other_home = scenario.path("other-home");
@@ -467,7 +478,10 @@ exec "$(dirname "$0")/real/gh" "$@"
         scenario.run_from_until(
             &scenario.path("machine-2/widgets"),
             &["pickup"],
-            &[("HOME", other_home.to_str().unwrap())],
+            &[
+                ("HOME", other_home.to_str().unwrap()),
+                ("PICKUP_RACE_DIR", race_directory),
+            ],
             "tmp/winner-started",
         )
     });

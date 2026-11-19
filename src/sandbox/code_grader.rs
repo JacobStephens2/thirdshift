@@ -238,7 +238,12 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
     // bwrap writes it; the check's stdout and stderr cannot claim startup.
     let status = (!disabled()).then(tempfile::tempfile).transpose()?;
     let mut invocation = if disabled() {
-        crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?
+        let mut launched =
+            crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?;
+        if let Some(tmp) = crate::scratch::sandbox_temp()? {
+            launched.command().env("TMPDIR", tmp);
+        }
+        launched
     } else {
         if find_bwrap().is_none() {
             return Err(anyhow::Error::new(Unavailable {
@@ -271,6 +276,7 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
             ])?;
         }
         let mut environment = Environment::default();
+        super::temporary_into(&mut binds, &mut environment)?;
         toolchains_into(&config::home()?, &mut binds, &mut environment);
         environment.set_str("HOME", "/sandbox/home");
         let environment = environment.finish(&[]);
