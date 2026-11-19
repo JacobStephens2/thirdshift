@@ -91,6 +91,7 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
             (NOTIFY, ""),
             ("Claude setup token", ""),
             ("Run the Console?", ""),
+            ("Install or upgrade Visual evidence tools now? [y/N]", "n"),
         ],
     );
 
