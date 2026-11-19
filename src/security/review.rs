@@ -111,21 +111,19 @@ fn run_in<'a>(
     {
         return review;
     }
-    let findings: Vec<OldFinding> = serde_json::from_slice(&fs::read(report)?)?;
-    if let Ok(review) = &review
-        && findings.len() != review.pre_existing_count
-    {
-        bail!("Security review's private report does not match its final count");
-    }
-    // Validate the entire report before creating any record. Malformed report
-    // diagnostics are never passed into the public outcome.
-    let findings = findings
-        .into_iter()
-        .map(|finding| {
-            let reproduction = finding.reproduction()?;
-            Ok((finding, reproduction))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Validate the entire report before creating any record. Report errors
+    // become a public-safe InvalidReport naming only the offending field and
+    // finding index, never field values, so the real cause reaches the
+    // outcome and Command log instead of the generic final-line message.
+    let findings = match load_report(&report, &review) {
+        Ok(findings) => findings,
+        Err(error) => {
+            if let Some(invalid) = error.downcast_ref::<InvalidReport>() {
+                progress::step(format!("{invalid}"));
+            }
+            return Err(error);
+        }
+    };
     if local_output.is_none() && !findings.is_empty() {
         let github = GitHub::new();
         let repo = issue.repo_slug();
@@ -180,31 +178,35 @@ struct ProofOfConcept {
 impl OldFinding {
     fn reproduction(&self) -> Result<Reproduction> {
         let proof = &self.proof_of_concept;
-        if [
-            &self.fingerprint,
-            &self.title,
-            &self.description,
-            &proof.test,
-            &proof.command,
-            &proof.notes,
-        ]
-        .iter()
-        .any(|text| text.trim().is_empty())
-            || self.fingerprint.contains(['\r', '\n', '`'])
-            || self.title.contains(['\r', '\n'])
-            || proof.head_exit_code <= 0
-            || proof.merge_base_exit_code <= 0
-        {
-            bail!(
-                "Security review's private report lacks a valid old finding and failing proof-of-concept runs"
-            );
+        for (field, text) in [
+            ("fingerprint", &self.fingerprint),
+            ("title", &self.title),
+            ("description", &self.description),
+            ("test", &proof.test),
+            ("command", &proof.command),
+            ("notes", &proof.notes),
+        ] {
+            if text.trim().is_empty() {
+                bail!("has an empty `{field}` field");
+            }
         }
-        let severity = Severity::parse(&proof.severity)
-            .context("Security review's private report has an invalid reproduced severity")?;
+        if self.fingerprint.contains(['\r', '\n', '`']) {
+            bail!("has a `fingerprint` with a newline or backtick");
+        }
+        if self.title.contains(['\r', '\n']) {
+            bail!("has a `title` with a newline");
+        }
+        if proof.head_exit_code <= 0 {
+            bail!("has a non-positive `head_exit_code`");
+        }
+        if proof.merge_base_exit_code <= 0 {
+            bail!("has a non-positive `merge_base_exit_code`");
+        }
+        let severity = Severity::parse(&proof.severity).context("has an invalid `severity`")?;
         let size = match proof.fix_size.as_str() {
             "single" => FixSize::Single,
             "spec" => FixSize::Spec,
-            _ => bail!("Security review's private report has an invalid reproduced fix size"),
+            _ => bail!("has an invalid `fix_size`"),
         };
         Ok(Reproduction {
             outcome: ReproductionOutcome::Reproduced { severity, size },
@@ -215,6 +217,230 @@ impl OldFinding {
             test: proof.test.clone(),
         })
     }
+}
+
+/// A private report that fails to parse or validate. Its message is
+/// public-safe: it names the report, the offending field and the 1-based
+/// finding index, never any field value.
+#[derive(Debug)]
+struct InvalidReport(String);
+
+impl fmt::Display for InvalidReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InvalidReport {}
+
+fn invalid_report(detail: impl fmt::Display) -> anyhow::Error {
+    InvalidReport(format!(
+        "Security review's private report is invalid: {detail}"
+    ))
+    .into()
+}
+
+const TOP_LEVEL_FIELDS: [&str; 4] = ["fingerprint", "title", "description", "proof_of_concept"];
+const PROOF_OF_CONCEPT_FIELDS: [&str; 7] = [
+    "test",
+    "command",
+    "head_exit_code",
+    "merge_base_exit_code",
+    "notes",
+    "severity",
+    "fix_size",
+];
+
+/// Map a field name reported by serde back to its static schema identifier
+/// so untrusted JSON keys from the private report never enter `InvalidReport`.
+fn known_schema_field(name: &str) -> Option<&'static str> {
+    TOP_LEVEL_FIELDS
+        .iter()
+        .chain(PROOF_OF_CONCEPT_FIELDS.iter())
+        .copied()
+        .find(|&field| field == name)
+}
+
+/// The static schema field name in a serde unknown/missing-field error,
+/// rejecting arbitrary JSON keys from the private report.
+fn serde_field_name(error: &serde_json::Error) -> Option<&'static str> {
+    let message = error.to_string();
+    let raw = if let Some(rest) = message.strip_prefix("unknown field `") {
+        rest.split_once("`, expected ")
+            .or_else(|| rest.split_once("`, there are no fields"))
+            .map(|(name, _)| name)
+    } else if let Some(rest) = message.strip_prefix("missing field `") {
+        rest.split_once('`').map(|(name, _)| name)
+    } else {
+        None
+    }?;
+    known_schema_field(raw)
+}
+
+/// Whether the finding object carries `field` at its top level, where a
+/// nested missing-field error would otherwise misstate a misplaced field.
+fn has_top_level_field(element: &[u8], field: &str) -> bool {
+    serde_json::from_slice::<serde_json::Value>(element)
+        .ok()
+        .and_then(|value| value.as_object().map(|object| object.contains_key(field)))
+        .unwrap_or(false)
+}
+
+/// The known schema field whose JSON type does not match `OldFinding` /
+/// `ProofOfConcept`, ignoring arbitrary unknown keys. Names only, never values.
+fn type_mismatch_field(element: &[u8]) -> Option<&'static str> {
+    let value: serde_json::Value = serde_json::from_slice(element).ok()?;
+    let object = value.as_object()?;
+    for field in TOP_LEVEL_FIELDS {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        if field == "proof_of_concept" {
+            let Some(proof) = value.as_object() else {
+                return Some("proof_of_concept");
+            };
+            for proof_field in PROOF_OF_CONCEPT_FIELDS {
+                let Some(proof_value) = proof.get(proof_field) else {
+                    continue;
+                };
+                let mismatch = if matches!(proof_field, "head_exit_code" | "merge_base_exit_code") {
+                    proof_value
+                        .as_i64()
+                        .is_none_or(|code| i32::try_from(code).is_err())
+                } else {
+                    !proof_value.is_string()
+                };
+                if mismatch {
+                    return Some(proof_field);
+                }
+            }
+        } else if !value.is_string() {
+            return Some(field);
+        }
+    }
+    None
+}
+
+/// Split a JSON array's top-level elements in document order, respecting
+/// strings and nesting, so the first offending field in document order is
+/// the one named. Returns `None` when the text is not a JSON array.
+fn split_array_elements(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    let bytes = text.as_bytes();
+    if bytes.first() != Some(&b'[') || bytes.last() != Some(&b']') {
+        return None;
+    }
+    let inner = &bytes[1..bytes.len() - 1];
+    if inner.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Some(Vec::new());
+    }
+    let mut elements = Vec::new();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut start = 0usize;
+    for (offset, &byte) in inner.iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.checked_sub(1)?,
+            b',' if depth == 0 => {
+                elements.push(&inner[start..offset]);
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    if in_string || depth != 0 {
+        return None;
+    }
+    elements.push(&inner[start..]);
+    Some(elements)
+}
+
+/// Parse the private report, naming the first offending field and finding.
+/// The struct definitions above remain the single schema source.
+fn parse_report(bytes: &[u8]) -> Result<Vec<OldFinding>> {
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| invalid_report("invalid JSON"))?;
+    if !value.is_array() {
+        return Err(invalid_report("expected a JSON array of findings"));
+    }
+    let Some(elements) = split_array_elements(bytes) else {
+        return Err(invalid_report("expected a JSON array of findings"));
+    };
+    let mut findings = Vec::with_capacity(elements.len());
+    for (position, element) in elements.iter().enumerate() {
+        let index = position + 1;
+        if !element.iter().any(|byte| !byte.is_ascii_whitespace())
+            || serde_json::from_slice::<serde_json::Value>(element)
+                .map(|value| !value.is_object())
+                .unwrap_or(true)
+        {
+            return Err(invalid_report(format!("finding {index} is not an object")));
+        }
+        let finding: OldFinding = serde_json::from_slice(element).map_err(|error| {
+            let message = error.to_string();
+            if message.starts_with("unknown field") {
+                match serde_field_name(&error) {
+                    Some(field) => {
+                        invalid_report(format!("unknown field `{field}` at finding {index}"))
+                    }
+                    None => invalid_report(format!("unknown field at finding {index}")),
+                }
+            } else if let Some(field) = serde_field_name(&error) {
+                // A field present at the top level but missing inside
+                // proof_of_concept is misplaced, not missing.
+                if has_top_level_field(element, field) {
+                    invalid_report(format!("unknown field `{field}` at finding {index}"))
+                } else {
+                    invalid_report(format!("missing field `{field}` at finding {index}"))
+                }
+            } else if let Some(field) = type_mismatch_field(element) {
+                invalid_report(format!(
+                    "invalid type for field `{field}` at finding {index}"
+                ))
+            } else {
+                invalid_report(format!("invalid field type at finding {index}"))
+            }
+        })?;
+        findings.push(finding);
+    }
+    Ok(findings)
+}
+
+fn load_report(report: &Path, review: &Result<Review>) -> Result<Vec<(OldFinding, Reproduction)>> {
+    let bytes = fs::read(report).map_err(|_| invalid_report("the report file cannot be read"))?;
+    let findings = parse_report(&bytes)?;
+    if let Ok(review) = review
+        && findings.len() != review.pre_existing_count
+    {
+        return Err(invalid_report(format!(
+            "it has {} entries but the final line reports {}",
+            findings.len(),
+            review.pre_existing_count
+        )));
+    }
+    findings
+        .into_iter()
+        .enumerate()
+        .map(|(position, finding)| {
+            let reproduction = finding
+                .reproduction()
+                .map_err(|error| invalid_report(format!("finding {} {:#}", position + 1, error)))?;
+            Ok((finding, reproduction))
+        })
+        .collect()
 }
 
 const MAX_REPORT_BYTES: u64 = 1024 * 1024;
@@ -369,6 +595,8 @@ impl Outcome {
             Err(error) => {
                 if let Some(refusal) = error.downcast_ref::<SafeguardRefusal>() {
                     Ended::Incomplete(format!("Security review refused: {refusal}"))
+                } else if let Some(invalid) = error.downcast_ref::<InvalidReport>() {
+                    Ended::Incomplete(format!("{invalid}"))
                 } else if let Some(incomplete) = error.downcast_ref::<Incomplete>() {
                     Ended::Incomplete(format!("Security review incomplete: {incomplete}"))
                 } else if let Some(failure) = error.downcast_ref::<SessionFailure>()
