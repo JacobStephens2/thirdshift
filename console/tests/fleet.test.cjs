@@ -129,14 +129,33 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   assert.equal(await page.locator('.command').count(), 1, 'local machine filter');
   await page.goto(caller.origin);
   await remoteRows.first().waitFor();
-  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
-  await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
-  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  let releaseRefresh;
+  const refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
+  const holdRefresh = async route => {
+    const request = route.request();
+    if (new URL(request.url()).pathname === '/' && request.method() === 'GET' && !request.isNavigationRequest() && !request.redirectedFrom()) await refreshGate;
+    await route.continue();
+  };
+  await page.route(`${caller.origin}/**`, holdRefresh);
+  const undo = page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true });
+  try {
+    await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
+    await undo.waitFor();
+    assert.equal(await undo.isDisabled(), true, 'Undo waits for the Dismiss refresh before accepting another action');
+  } finally {
+    releaseRefresh();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+  await undo.click();
+  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  // Verify Undo survived a reload before starting a fresh notification baseline.
+  await page.reload();
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
   await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
   // The enabled observer establishes its baseline through a real Inbox read.
-  await page.waitForFunction(() => localStorage.getItem('thirdshift:console:notification-count'));
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:notification-count'))?.count === 2);
   const remotePath = join(homes[1], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const added = JSON.parse(await readFile(remotePath, 'utf8'));
   added.tickets[1].state = 'merged';
