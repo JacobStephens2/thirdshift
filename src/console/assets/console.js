@@ -287,6 +287,7 @@ function dismissalNotice(form, subject) {
   undo.append(button, status);
   notices.append(notice);
   notice.append(`Dismissed ${subject} · `, undo);
+  showDismissal();
   // Keep Undo reachable while someone is using it, saving it, or retrying it.
   function expire() {
     if (!notice.isConnected) return;
