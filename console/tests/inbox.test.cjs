@@ -3098,7 +3098,7 @@ test('the active-run total follows live trees, stays visible and fits every Them
     assert.equal(await total.locator('strong').textContent(), '2 active runs');
     // Hidden sections and every built-in Theme keep the total readable on a phone.
     await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
-    await page.waitForFunction(() => document.querySelectorAll('#inbox > details:not([hidden])').length === 0);
+    await page.waitForFunction(() => document.querySelectorAll('#inbox > details.group:not([hidden])').length === 0);
     for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
       for (const mode of ['light', 'dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
