@@ -246,31 +246,30 @@ fn merges_a_base_branch_that_moved_again_during_the_conflict_repair() {
     );
 }
 
-/// While thirdshift waits for CI on each of the next `times` new head commits,
-/// someone else pushes `file` with `content` to main. The script goes inside
-/// single quotes, so it must not contain one.
-fn base_moves_during_ci(times: usize, file: &str, content: &str) -> String {
-    format!(
-        "gh fake on-ci-read {times} '{}'\n",
-        base_moves_on(file, content)
-    )
-}
-
 /// The agent opens the PR with green CI on its commit, and main moves while
 /// that CI is read.
 fn green_ci_while_the_base_branch_moves() -> String {
+    let push = base_moves_on("other.txt", "other");
+    let on_check = format!(
+        r#"
+gh fake checks "$FAKE_CI_SHA" '[{{"name":"test","conclusion":"success"}}]'
+moved="$(dirname "$FAKE_GH_STATE")/base-moved"
+if [ ! -f "$moved" ]; then
+    {push}
+    touch "$moved"
+fi
+"#
+    );
     format!(
-        "{AGENT_OPENS_PR}\
-         gh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\": \"test\", \"conclusion\": \"success\"}}]'\n\
-         {}",
-        base_moves_during_ci(1, "other.txt", "other")
+        "{AGENT_OPENS_PR}\ngh fake on-ci-read 2 '{}'\n",
+        on_check.replace('\'', r"'\''")
     )
 }
 
 #[test]
 fn a_merge_run_merges_a_base_branch_that_moved_while_ci_passed() {
     let scenario = Scenario::new();
-    // Green CI on the agent's commit; the merge commit after it has none.
+    // Both the original head and its replacement need their own green result.
     scenario.agent_does(&green_ci_while_the_base_branch_moves());
 
     let result = scenario.run(&[&scenario.issue_url(7), "merge"]);

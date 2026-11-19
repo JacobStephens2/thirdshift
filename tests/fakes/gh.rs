@@ -2721,7 +2721,7 @@ fn inbox_states(state: &Json, query: &str) {
                             ("state", pr.at("state").clone()),
                             ("mergedAt", at("mergedAt")),
                             ("closedAt", at("closedAt")),
-                            ("baseRefName", pr.at("base").clone()),
+                            ("baseRefName", at("base")),
                             ("baseRef", at("baseRef")),
                             ("headRefOid", at("headRefOid")),
                             (

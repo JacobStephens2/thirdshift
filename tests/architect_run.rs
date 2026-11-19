@@ -1078,21 +1078,7 @@ fn base_fix_reaches_each_tickets_run_of_the_dispatched_spec_run() {
     // under it, which would have it merged in again instead. The Base
     // fix issue is the next after the Tickets, #11.
     let scenario = spec_plan("");
-    let mut gh = scenario.gh_state();
-    gh["on_ci_read"] = serde_json::json!({
-        "times": 20,
-        "seen": [],
-        "script": format!(
-            r#"
-case "$(git show -s --format=%s "$FAKE_CI_SHA")" in
-  "Merge remote-tracking branch 'origin/issue-8' into issue-9")
-    gh fake checks "$FAKE_CI_SHA" '{GREEN}'
-    ;;
-esac
-"#
-        ),
-    });
-    scenario.write_gh_state(&gh);
+    scenario.checks_pass_after_merging_base("issue-9", "issue-8");
     scenario.agent_does_for(
         9,
         &format!(
