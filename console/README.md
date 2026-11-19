@@ -314,10 +314,12 @@ snapshot through live updates.
 
 Dismiss is always visible on the row in Needs you and Ready for review,
 beside Copy where available. `d` dismisses the selected row and selects the next
-one, without opening Command details. An inline dismissal shows a temporary
+one, without opening Command details. Clicking Dismiss on an inline row
+removes that row from view immediately, before the save completes; if the
+save fails, the row returns with the error shown on it. An inline dismissal shows a temporary
 `Dismissed <subject> · Undo` notice; Undo restores that Command's row. Notices
 stay while hovered, focused, saving or showing an error. Command details also
-keeps Dismiss and Undo. Both immediately
+keeps Dismiss and Undo. In Command details, both immediately
 show “Dismissing…” or
 “Taking back dismissal…” while the request is pending. The button stays disabled
 through live updates to prevent duplicate submissions. A failed request shows
