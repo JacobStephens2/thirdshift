@@ -226,16 +226,21 @@ impl Router {
     }
 
     /// Whether every route of this kind is unavailable by this machine's
-    /// saved Plan usage, as a Step finds it before starting: the routes
-    /// [`Router::allowed`] gives for `current`. None in unit tests, which
-    /// read no snapshot.
+    /// Plan usage, as a Step finds it before starting: the routes
+    /// [`Router::allowed`] gives for `current`. Refresh a lone route's
+    /// stale snapshot here, since it did not go through [`Router::pick`].
     pub fn exhaustion(&self, security: bool, current: Harness) -> Option<super::Exhaustion> {
         if cfg!(test) {
             return None;
         }
-        let saved = Store::machine().and_then(|store| store.read()).ok()?;
+        let routes = self.allowed(security, current);
+        let store = Store::machine().ok()?;
+        if let [route] = routes.as_slice() {
+            let _ = super::refresh_for_routing(&store, &[route.harness]);
+        }
+        let saved = store.read().ok()?;
         super::exhaustion::judge(
-            &self.allowed(security, current),
+            &routes,
             &self.routing,
             &saved,
             Harness::installed,

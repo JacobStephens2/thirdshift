@@ -192,6 +192,121 @@ fn muse_read_failures_are_visible_in_the_summary_details_cli_and_api() {
 }
 
 #[test]
+fn muse_summary_shows_the_age_of_saved_windows_after_a_failed_read() {
+    let home = tempfile::tempdir().unwrap();
+    configure_with(home.path(), "[harness]\ndefault = \"muse\"\n");
+    saved(
+        home.path(),
+        json!({"muse": {
+            "read_at": rfc3339(0), "observed_at": rfc3339(-1),
+            "windows": [{"name": "window", "used_percent": 30.0}],
+            "read_error": "temporary read failure"
+        }}),
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/plan-usage?local=true").text().unwrap();
+    let muse = harness_summary(&html)
+        .split_once("data-harness=\"muse\"")
+        .unwrap()
+        .1
+        .split("</li>")
+        .next()
+        .unwrap();
+    assert!(muse.contains("30% used"), "{muse}");
+    assert!(
+        muse.contains("usage read failed: temporary read failure"),
+        "{muse}"
+    );
+    assert!(muse.contains("Observed <time"), "{muse}");
+}
+
+#[test]
+fn fleet_plan_usage_keeps_the_latest_muse_read_error_for_a_shared_login() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    for home in [local_home.path(), remote_home.path()] {
+        configure_with(home, "[harness]\ndefault = \"muse\"\n");
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let local = Console::start(binary, local_home.path());
+    let remote = Console::start(binary, remote_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    assert!(
+        super::fleet::add(local_home.path(), "remote", &remote.address, &token)
+            .status
+            .success()
+    );
+    saved(
+        local_home.path(),
+        json!({"muse": {
+            "read_at": rfc3339(0), "read_error": "muse fixture read refused",
+            "account": {"label": "shared-muse", "signed_in": true}
+        }}),
+    );
+    saved(
+        remote_home.path(),
+        json!({"muse": {
+            "read_at": (chrono::Utc::now() - chrono::TimeDelta::seconds(15)).to_rfc3339(),
+            "observed_at": rfc3339(-1), "source": "muse serve",
+            "account": {"label": "shared-muse", "signed_in": true},
+            "windows": [{"name": "window", "used_percent": 30.0}]
+        }}),
+    );
+    let expected = "usage read failed: muse fixture read refused";
+    let one_machine = local.get("/plan-usage?local=true").text().unwrap();
+    assert!(one_machine.contains(expected), "{one_machine}");
+    let fleet = local.get("/plan-usage").text().unwrap();
+    assert!(fleet.contains("30% used"), "{fleet}");
+    let local_name = hostname(&local);
+    assert!(
+        fleet.contains(&format!("{expected} on {local_name}")),
+        "{fleet}"
+    );
+    let cli = thirdshift(local_home.path(), &["plan-usage"]);
+    let text = String::from_utf8_lossy(&cli.stdout);
+    assert!(
+        text.contains(&format!("{expected} (on {local_name})")),
+        "{text}"
+    );
+    let view = api::json(local.get("/api/v1/plan-usage"));
+    let login = &view["harnesses"][0];
+    assert_eq!(login["observed_on"], "remote", "{login:#}");
+    assert_eq!(login["read_error_on"], local_name, "{login:#}");
+}
+
+#[test]
+fn an_attempted_muse_read_failure_is_visible_without_a_configured_route() {
+    let home = tempfile::tempdir().unwrap();
+    configure_with(home.path(), "[harness]\ndefault = \"codex\"\n");
+    fs::create_dir_all(fixture_bin(home.path())).unwrap();
+    support::write_executable(
+        &fixture_bin(home.path()).join("muse"),
+        r#"#!/bin/sh
+while read -r line; do
+  case "$line" in
+    *usage/refresh*) echo '{"jsonrpc":"2.0","id":1,"error":{"code":-32081,"message":"fixture: Meta-account login required"}}' ;;
+    *account/read*) echo '{"jsonrpc":"2.0","id":2,"result":{"state":"loggedOut","credentialRequired":true}}' ;;
+  esac
+done"#,
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/plan-usage?local=true").text().unwrap();
+    let required = "usage read failed: fixture: Meta-account login required";
+    let muse = harness_summary(&html)
+        .split("data-harness=\"muse\"")
+        .nth(1)
+        .unwrap()
+        .split("</li>")
+        .next()
+        .unwrap();
+    assert!(muse.contains(required), "{muse}");
+    assert!(!muse.contains("nothing observed yet"), "{muse}");
+    let cli = thirdshift(home.path(), &["plan-usage", "--local"]);
+    let text = String::from_utf8_lossy(&cli.stdout);
+    assert!(text.contains(required), "{text}");
+}
+
+#[test]
 fn inbox_plan_usage_deadlines_use_local_minutes_and_escape_window_names() {
     let scenario = support::Scenario::new();
     let home = scenario.path("home");

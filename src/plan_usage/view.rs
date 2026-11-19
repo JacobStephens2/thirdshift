@@ -280,7 +280,9 @@ impl View {
             };
             let signed_in = state.account.as_ref().and_then(|account| account.signed_in);
             let installed = installed(harness);
-            if state.observed() || (installed && signed_in == Some(true)) {
+            if state.observed()
+                || (installed && (signed_in == Some(true) || state.read_error.is_some()))
+            {
                 rows.push(Row {
                     harness,
                     installed,
@@ -339,6 +341,7 @@ pub(super) fn write_state(
     state: &State,
     installed: bool,
     now: DateTime<Utc>,
+    read_error_on: Option<&str>,
 ) -> fmt::Result {
     if let Some(account) = &state.account {
         let mut parts = Vec::new();
@@ -410,10 +413,14 @@ pub(super) fn write_state(
         writeln!(f)?;
     }
     if let Some(error) = &state.read_error {
-        if state.observed_at.is_none() {
-            return write!(f, "  usage read failed: {error}");
+        write!(f, "  usage read failed: {error}")?;
+        if let Some(machine) = read_error_on {
+            write!(f, " (on {machine})")?;
         }
-        writeln!(f, "  usage read failed: {error}")?;
+        if state.observed_at.is_none() {
+            return Ok(());
+        }
+        writeln!(f)?;
     }
     match (state.observed_at, &state.source) {
         (Some(at), Some(source)) => write!(f, "  observed {} by {source}", local(at)),
@@ -440,7 +447,7 @@ impl fmt::Display for View {
             for route in &row.routes {
                 writeln!(f, "  route: {route}")?;
             }
-            write_state(f, &row.state, row.installed, self.now)?;
+            write_state(f, &row.state, row.installed, self.now, None)?;
         }
         Ok(())
     }

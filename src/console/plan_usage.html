@@ -14,7 +14,8 @@
 {% if login.state.ordinary_usage_allowed == Some(false) %}<span>Included usage not allowed</span>{% endif %}
 {% if login.state.spend_control_reached == Some(true) %}<span>Spend control reached</span>{% endif %}
 {% if entry.limited %}<span class="plan-usage-limited">Routes limited</span>{% endif %}
-<span class="empty">{% if let Some(error) = login.state.read_error %}usage read failed: {{ error }}{% else if let Some(at) = login.state.observed_at %}Observed <time datetime="{{ at.to_rfc3339() }}">{{ self.age(at) }}</time>{% else if !login.installed %}CLI not on PATH{% else %}nothing observed yet{% endif %}</span>
+{% if let Some(at) = login.state.observed_at %}<span class="empty">Observed <time datetime="{{ at.to_rfc3339() }}">{{ self.age(at) }}</time></span>{% else if login.state.read_error.is_none() %}<span class="empty">{% if !login.installed %}CLI not on PATH{% else %}nothing observed yet{% endif %}</span>{% endif %}
+{% if let Some(error) = login.state.read_error %}<span class="empty">usage read failed: {{ error }}</span>{% endif %}
 </div>{% endfor %}</div></li>{% endfor %}</ul></section>
 <p>How much of each subscription Harness's allowance is used: its Plan windows, utilization, reset times and cooldowns, with each User config route to it and whether that route could take a session now. {% if selector.chosen.is_none() %}A login shared by several machines shows once, with the freshest observation and every machine using it; a Harness that names no account shows on each machine. A machine that cannot be reached shows the view this Console last read from it, and one that reports outward the view it last pushed, both read-only with their age. {% endif %}Factory sessions route on each machine's own Plan usage alone. Reload to see changes.</p>
 {% if selector.fleet || !selector.others.is_empty() || !selector.is(selector.local) %}<form class="metrics-filters" method="get" action="/plan-usage" aria-label="Plan usage machines">
@@ -34,7 +35,7 @@
 {% if login.state.ordinary_usage_allowed == Some(false) %}<dt>Included usage</dt><dd>not allowed</dd>{% endif %}
 {% if login.state.spend_control_reached == Some(true) %}<dt>Spend control</dt><dd>reached</dd>{% endif %}
 {% if let Some(cooldown) = login.state.cooldown %}<dt>Cooldown</dt><dd>{% if self.ahead(cooldown.until) %}until{% else %}revalidating since{% endif %} <time datetime="{{ cooldown.until.to_rfc3339() }}">{{ self.local_time(cooldown.until) }}</time>{% if let Some(window) = cooldown.window %} · {{ window }} window{% endif %}{% if let Some(overage) = cooldown.overage %} · overage {{ overage }}{% endif %}{% if let Some(minutes) = cooldown.backoff_minutes %} · no reset reported, backoff {{ minutes }} minutes{% endif %}</dd>{% endif %}
-{% if let Some(error) = login.state.read_error %}<dt>Latest read</dt><dd>usage read failed: {{ error }}</dd>{% endif %}
+{% if let Some(error) = login.state.read_error %}<dt>Latest read</dt><dd>usage read failed: {{ error }}{% if login.machines.len() > 1 %}{% if let Some(machine) = login.read_error_on %} on {{ machine }}{% endif %}{% endif %}</dd>{% endif %}
 {% if login.state.observed_at.is_some() || login.state.read_error.is_none() %}<dt>Observed</dt><dd>{% if let Some(at) = login.state.observed_at %}<time datetime="{{ at.to_rfc3339() }}">{{ self.local_time(at) }}</time>{% if let Some(source) = login.state.source %} by {{ source }}{% endif %}{% if !machines.is_empty() %} on {{ login.observed_on }}{% endif %}{% else if !login.installed %}CLI not on PATH{% else %}nothing observed yet{% endif %}</dd>{% endif %}
 </dl></section>{% endfor %}
 <section aria-labelledby="plan-usage-clear"><h2 id="plan-usage-clear">Clear cooldowns on this machine</h2>

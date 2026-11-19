@@ -238,7 +238,7 @@ fn muse() -> Result<BTreeMap<i64, Value>> {
     )
 }
 
-fn muse_usage(response: Option<&Value>) -> Result<&Value> {
+fn muse_usage(response: Option<&Value>) -> Result<(&Value, Vec<Window>)> {
     let response = response.context("muse serve gave no usage answer")?;
     if !response["error"].is_null() {
         bail!(
@@ -248,13 +248,22 @@ fn muse_usage(response: Option<&Value>) -> Result<&Value> {
         );
     }
     let usage = &response["result"]["usage"];
-    if !["window", "weekly"]
-        .iter()
-        .any(|name| from_percent(&usage[name]["usedPercent"]).is_some())
-    {
+    let mut windows = Vec::new();
+    for name in ["window", "weekly"] {
+        let reported = &usage[name];
+        if !reported.is_object() {
+            continue;
+        }
+        let mut window = Window::named(name).expect("a fixed window name");
+        window.used_percent = from_percent(&reported["usedPercent"]);
+        window.resets_at = milliseconds(&reported["resetsAtMs"]);
+        window.duration_minutes = reported["windowDurationMins"].as_u64();
+        windows.push(window);
+    }
+    if !windows.iter().any(|window| window.used_percent.is_some()) {
         bail!("muse serve returned no usage data");
     }
-    Ok(usage)
+    Ok((usage, windows))
 }
 
 fn take_muse(
@@ -262,58 +271,6 @@ fn take_muse(
     responses: &BTreeMap<i64, Value>,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let usage = muse_usage(responses.get(&1));
-    if let Ok(usage) = usage.as_ref() {
-        let mut windows = Vec::new();
-        for name in ["window", "weekly"] {
-            let reported = &usage[name];
-            if !reported.is_object() {
-                continue;
-            }
-            let mut window = Window::named(name).expect("a fixed window name");
-            window.used_percent = from_percent(&reported["usedPercent"]);
-            window.resets_at = milliseconds(&reported["resetsAtMs"]);
-            window.duration_minutes = reported["windowDurationMins"].as_u64();
-            windows.push(window);
-        }
-        let observed = milliseconds(&usage["observedAtMs"])
-            .filter(|observed| *observed <= now)
-            .unwrap_or(now);
-        let newer = state.observed_at.is_none_or(|saved| observed >= saved);
-        if newer {
-            state.windows = windows;
-            state.observed_at = Some(observed);
-            state.source = Some("muse serve".into());
-            let full = state
-                .windows
-                .iter()
-                .find(|window| {
-                    window.used_percent.is_some_and(|used| used >= 100.0) && !window.reset_by(now)
-                })
-                .cloned();
-            match full {
-                Some(window) => state.exhaust(
-                    &Exhausted {
-                        window: Some(window.name),
-                        resets_at: window.resets_at,
-                        overage: None,
-                    },
-                    now,
-                ),
-                None if state
-                    .cooldown
-                    .as_ref()
-                    .is_some_and(|cooldown| cooldown.since < observed) =>
-                {
-                    state.cooldown = None
-                }
-                None => {}
-            }
-        }
-        if let Some(tier) = token(&usage["tier"]) {
-            state.account.get_or_insert_default().plan = Some(tier);
-        }
-    }
     if let Some(response) = responses.get(&2) {
         let result = &response["result"];
         let account = if result["account"].is_object() {
@@ -333,7 +290,46 @@ fn take_muse(
             };
         }
     }
-    usage.map(|_| ())
+    let (usage, windows) = muse_usage(responses.get(&1))?;
+    let observed = milliseconds(&usage["observedAtMs"])
+        .filter(|observed| *observed <= now)
+        .unwrap_or(now);
+    let newer = state.observed_at.is_none_or(|saved| observed >= saved);
+    if newer {
+        state.windows = windows;
+        state.observed_at = Some(observed);
+        state.source = Some("muse serve".into());
+        let full = state
+            .windows
+            .iter()
+            .filter(|window| {
+                window.used_percent.is_some_and(|used| used >= 100.0) && !window.reset_by(now)
+            })
+            .max_by_key(|window| window.resets_at)
+            .cloned();
+        match full {
+            Some(window) => state.exhaust(
+                &Exhausted {
+                    window: Some(window.name),
+                    resets_at: window.resets_at,
+                    overage: None,
+                },
+                now,
+            ),
+            None if state
+                .cooldown
+                .as_ref()
+                .is_some_and(|cooldown| cooldown.since < observed) =>
+            {
+                state.cooldown = None
+            }
+            None => {}
+        }
+    }
+    if let Some(tier) = token(&usage["tier"]) {
+        state.account.get_or_insert_default().plan = Some(tier);
+    }
+    Ok(())
 }
 
 /// What Muse's account `state` says about signing in, when it says
@@ -461,6 +457,32 @@ fn rpc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muse_route_stays_held_after_the_shorter_of_two_full_windows_resets() {
+        use crate::plan_usage::route::{Route, Routing};
+
+        let now = Utc::now();
+        let short_reset = now + chrono::TimeDelta::minutes(20);
+        let weekly_reset = now + chrono::TimeDelta::days(1);
+        let responses = BTreeMap::from([(
+            1,
+            json!({"id": 1, "result": {"usage": {
+                "tier": "pro", "observedAtMs": now.timestamp_millis(),
+                "window": {"usedPercent": 103, "resetsAtMs": short_reset.timestamp_millis(), "windowDurationMins": 300},
+                "weekly": {"usedPercent": 100, "resetsAtMs": weekly_reset.timestamp_millis()}
+            }}}),
+        )]);
+        let mut state = State::default();
+        take_muse(&mut state, &responses, now).unwrap();
+        let availability = state.availability(
+            &Route::named(Harness::Muse),
+            &Routing::default(),
+            true,
+            short_reset + chrono::TimeDelta::seconds(1),
+        );
+        assert!(availability.limited(), "{availability:?}");
+    }
 
     #[test]
     fn codex_refusal_records_a_limit_and_its_permission_clears_one() {

@@ -243,6 +243,8 @@ fn muse_failed_and_empty_reads_are_visible_and_preserve_saved_limits() {
             scenario.user_config_is("[harness]\ndefault = \"muse\"\n");
             uninstalled(&scenario, "claude");
             uninstalled(&scenario, "codex");
+            let bin = scenario.path("bin");
+            let env = [("PATH", bin.to_str().unwrap())];
             if saved {
                 scenario.plan_usage_is(json!({"muse": {
                     "observed_at": "2026-01-01T00:00:00Z", "source": "session",
@@ -265,7 +267,10 @@ fn muse_failed_and_empty_reads_are_visible_and_preserve_saved_limits() {
                 ),
             );
 
-            let view = plan_usage(&scenario, &[]);
+            let output = scenario.run_with_env(&["plan-usage", "--json"], &env);
+            assert_eq!(output.code, Some(0), "{}", output.stderr);
+            let view = serde_json::from_str(&output.stdout).unwrap();
+            assert_eq!(harnesses(&view), ["muse"]);
             let muse = row(&view, "muse");
             assert_eq!(muse["read_error"], message, "{muse:#}");
             assert_eq!(muse["account"]["signed_in"], true);
@@ -276,7 +281,7 @@ fn muse_failed_and_empty_reads_are_visible_and_preserve_saved_limits() {
             } else {
                 assert!(muse["observed_at"].is_null());
             }
-            let output = scenario.run(&["plan-usage"]);
+            let output = scenario.run_with_env(&["plan-usage"], &env);
             assert_eq!(output.code, Some(0), "{}", output.stderr);
             assert!(
                 output
@@ -347,6 +352,7 @@ fn plan_usage_reads_codex_muse_and_claude_on_demand_and_reuses_them_for_a_minute
     assert_eq!(window(muse, "window")["duration_minutes"], json!(300));
     assert_eq!(window(muse, "window")["resets_at"], "2096-10-02T07:06:40Z");
     assert_eq!(window(muse, "weekly")["used_percent"], json!(64.0));
+    assert_eq!(window(muse, "weekly")["resets_at"], "2096-10-02T07:06:40Z");
     assert_eq!(muse["observed_at"], "2023-11-14T22:13:20Z");
     for cli in ["codex", "muse", "claude"] {
         assert_eq!(reads(&scenario, cli), 1, "{cli}");
@@ -419,6 +425,46 @@ fn muse_fresh_usage_at_or_above_100_routes_away_before_a_session_starts() {
     }
 }
 
+fn only_muse_route() -> Scenario {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\nroutes = [\"muse\"]\n");
+    readable_fakes(&scenario, 103);
+    let serve = std::fs::read_to_string(scenario.path("bin").join("muse")).unwrap();
+    let started = scenario.path("muse-started");
+    scripted(
+        &scenario,
+        "muse",
+        &format!(
+            "if [ \"$1\" = exec ]; then\n  touch '{}'\n  exit 1\nfi\n{serve}",
+            started.display(),
+        ),
+    );
+    scenario
+}
+
+#[test]
+fn muse_only_route_checks_fresh_usage_before_starting_a_ticket_session() {
+    let scenario = only_muse_route();
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(reads(&scenario, "muse"), 1, "{}", result.stderr);
+    assert!(!scenario.path("muse-started").exists(), "{}", result.stderr);
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
+}
+
+#[test]
+fn muse_only_route_keeps_its_saved_cooldown_when_refresh_cannot_write() {
+    let scenario = only_muse_route();
+    scenario.plan_usage_is(json!({"muse": {
+        "observed_at": "2026-01-01T00:00:00Z",
+        "cooldown": {"since": "2026-01-01T00:00:00Z", "until": "2096-10-02T07:06:40Z"}
+    }}));
+    std::fs::create_dir(scenario.path("home/.thirdshift/plan-usage.lock")).unwrap();
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(reads(&scenario, "muse"), 1, "{}", result.stderr);
+    assert!(!scenario.path("muse-started").exists(), "{}", result.stderr);
+    assert_eq!(result.code, Some(75), "{}", result.stderr);
+}
+
 #[test]
 fn plan_usage_shows_configured_routes_in_order_and_omits_api_key_and_unused_harnesses() {
     let scenario = Scenario::new();
@@ -429,13 +475,14 @@ fn plan_usage_shows_configured_routes_in_order_and_omits_api_key_and_unused_harn
          [security]\nharness = \"grok\"\nroutes = [\"claude\", \"kimi\"]\n",
     );
     uninstalled(&scenario, "agy");
+    uninstalled(&scenario, "muse");
     // Removing a fake must not expose a Harness installed on the host.
     let bin = scenario.path("bin");
     let env = [
         ("PATH", bin.to_str().unwrap()),
         ("FAKE_CLAUDE_SIGNED_OUT", "1"),
     ];
-    // Claude Code is signed out; Muse has no read and nothing observed.
+    // Claude Code is signed out; Muse is absent and has no saved Plan usage.
     let result = scenario.run_with_env(&["plan-usage", "--json"], &env);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let view: Value = serde_json::from_str(&result.stdout).unwrap();
