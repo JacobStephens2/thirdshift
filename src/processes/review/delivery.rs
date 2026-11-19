@@ -14,9 +14,21 @@ pub(super) struct Delivery<'a> {
     pub mode: Mode,
     pub merge: bool,
     pub input: &'a ReviewInput,
+    pub run_started: DateTime<Utc>,
+    pub run_name: &'static str,
 }
 
 impl Delivery<'_> {
+    fn check_closing_issues(&self) -> Result<()> {
+        check_closing_issues(
+            self.github,
+            self.pr,
+            &self.input.closing_issues,
+            self.run_started,
+            self.run_name,
+        )
+    }
+
     pub fn run(
         &self,
         findings: &str,
@@ -51,16 +63,20 @@ impl Delivery<'_> {
         let readiness = match mode {
             Mode::RecommendOnly => {
                 unchanged_checkout(git, snapshot)?;
-                Ok(())
+                self.check_closing_issues()
             }
             Mode::Address => self.address(&mut pushed, &mut ci_report, repair_cap, &mut repair),
         };
+        if readiness.as_ref().is_err_and(is_untrusted_edit) {
+            return readiness;
+        }
         let current = if mode == Mode::RecommendOnly {
             unchanged(github, pr, snapshot)?;
             None
         } else {
             Some(compatible(github, pr, snapshot)?)
         };
+        self.check_closing_issues()?;
         let mut marker = serde_json::json!({"reviewed_head": snapshot.head});
         let status = if let Some(head) = &pushed {
             marker["pushed_head"] = head.clone().into();
@@ -139,17 +155,23 @@ impl Delivery<'_> {
         let mut repairs = 0;
         loop {
             unchanged(github, pr, &expected)?;
+            self.check_closing_issues()?;
             let ci = watch
                 .assess(
                     &expected.head,
                     Some(&base),
-                    &mut || unchanged(github, pr, &expected).map(|()| Some(expected.head.clone())),
+                    &mut || {
+                        unchanged(github, pr, &expected)?;
+                        self.check_closing_issues()?;
+                        Ok(Some(expected.head.clone()))
+                    },
                     &mut |_| Ok(false),
                 )
                 .with_context(|| format!("CI watch on {} failed", expected.head))?;
             match ci {
                 Ci::Absent | Ci::Passed => {
                     self.require_mergeable(&expected.head)?;
+                    self.check_closing_issues()?;
                     report.push_str(&format!(
                         "\n\n### CI passed or absent at {}\n",
                         expected.head
@@ -158,6 +180,7 @@ impl Delivery<'_> {
                 }
                 Ci::Superseded => bail!("pull request changed during Review run CI watch"),
                 Ci::Failed(failed) => {
+                    self.check_closing_issues()?;
                     report.push_str(&format!(
                         "\n\n### CI red at {}\n\n{}{}\nInherited failures on {} at {}:\n{}",
                         expected.head,
@@ -180,6 +203,7 @@ impl Delivery<'_> {
                     progress::step(format!("CI red; starting Repair {repairs} of {repair_cap}"));
                     let entry = repair(session::Kind::Repair(repairs), &failed, &expected)?;
                     unchanged(github, pr, &expected)?;
+                    self.check_closing_issues()?;
                     report.push_str(&format!("\n\n### Repair {repairs}\n\n{entry}"));
                     let next = self.push_fixes(&expected)?;
                     watch.after_repair(expected.head.clone(), failed);
@@ -205,14 +229,17 @@ impl Delivery<'_> {
             "review fixes must be committed on the pull request's captured branch without rewriting history"
         );
         unchanged(self.github, self.pr, snapshot)?;
+        self.check_closing_issues()?;
         if head == snapshot.head {
             return Ok(None);
         }
         self.require_mergeable(&snapshot.head)?;
+        self.check_closing_issues()?;
         // A matching lease stays a fast-forward: the captured head is an ancestor.
         // It also catches a receive-time rewind that a plain push would overwrite.
         git.push_checked(&snapshot.branch, &head, Some(&snapshot.head), || {
-            compatible(self.github, self.pr, snapshot).map(|_| ())
+            compatible(self.github, self.pr, snapshot)?;
+            self.check_closing_issues()
         })?;
         Ok(Some(head))
     }

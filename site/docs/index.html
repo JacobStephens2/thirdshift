@@ -3670,6 +3670,12 @@ unpushed commits keep it.</p>
 <p>The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
 the Spec and the posted comment says it used the pull request body alone.
+Before writing <code>.thirdshift-review-input.md</code>, before and after each Step,
+session, Repair and Resume, and before Delivery pushes fixes or posts its
+comment, thirdshift checks every linked closing issue: a title or body edit by
+an account that is not a Trusted account, made since a few minutes before the
+Review run started, stops the run without starting the next session or
+publishing.
 Without <code>--recommend-only</code>, the session addresses findings using the same rules
 as a Ticket run: it runs each behavior finding&#39;s test or command before deciding,
 fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
@@ -3750,7 +3756,10 @@ declares this input; <code>review-and-address</code> reviews it and addresses fi
 an optional <code>security-review</code> Step follows the editing Steps before <code>delivery</code>
 pushes fixes and posts the comment. Custom pull-request Processes can
 also run skill and command Steps on that checkout. Command Steps receive <code>THIRDSHIFT_PULL_REQUEST_URL</code> and
-the filtered input is in <code>.thirdshift-review-input.md</code>. This version keeps these
+the filtered input is in <code>.thirdshift-review-input.md</code>. All linked closing issues
+are checked against untrusted title or body edits since a few minutes before the
+Process started before writing that file, around every Step, session, Repair and
+Resume, and before Delivery pushes or comments. This version keeps these
 Steps sequential and requires <code>review-and-address</code> before <code>delivery</code>, optionally
 followed directly by <code>self-merge</code>. Copied Processes retain the opt-in merge choice.</p>
 </div></details>
