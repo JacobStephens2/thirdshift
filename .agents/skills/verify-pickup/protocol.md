@@ -16,7 +16,14 @@ unbounded proof for every host count.
 - GitHub labels and complete, ordered Claim history are linearizable reads and
   writes. The bounded history fits one page; each `candidate` query is one
   request. We do not establish GitHub's consistency or multi-page snapshot
-  behavior. A PUT atomically swaps Ready/Claim labels, as `set_labels` does.
+  behavior. `ListReady` calls `GitHub::open_candidate_issues`, which executes
+  sequential read-only queries (`issues_labelled` REST,
+  `graphql_open_issues_labelled` GraphQL, and optional per-omitted-issue
+  `issue_labels` when `labels.hasNextPage` is true); any interleaving during
+  those non-mutating reads is projected into `ListReady` because `standing_of`
+  and `ready::refresh` re-read `candidate`, `issue`, and `candidate` under the
+  origin reservation before any Claim. A PUT atomically swaps Ready/Claim
+  labels, as `set_labels` does.
   Count applications only when `in-progress` was absent, including idempotent
   writes by broken competing owners.
 - Every other Ready gate is fixed favorable: trusted, settled, unblocked, no
@@ -39,13 +46,15 @@ unbounded proof for every host count.
 
 ## Actions → code requests
 
-Each external action is one request; intermediate local work cannot combine two
-requests. Constant reads (trust, branch/PR lookup, Spec Tickets) are projected out
-under the fixed gates above. The local markers retain dispatch-before-Claim.
+Except for `ListReady`'s non-mutating REST/GraphQL union in
+`open_candidate_issues`, each external action is one request; intermediate local
+work cannot combine two requests. Constant reads (trust, branch/PR lookup, Spec
+Tickets) are projected out under the fixed gates above. The local markers retain
+dispatch-before-Claim.
 
 | Model action | Product request / control |
 | --- | --- |
-| `ListReady` | `ready::first` → `GitHub::open_issues_labelled`: issue-list read |
+| `ListReady` | `ready::first` → `GitHub::open_candidate_issues`: issue-list read (REST + GraphQL union) |
 | `SelectHistory` | `standing_of` → `GitHub::candidate`: history read; reject active Claim and capture count |
 | `CreateReservation` | `Reservation::take`: `git push --no-verify --force-with-lease=<ref>: origin <unique-token>:<ref>`; absent ref only |
 | `RefreshIssue` | `ready::refresh` → `GitHub::issue`: current issue read |
@@ -111,5 +120,6 @@ Claim handling. Neither variant changes the owner-token release lease.
 Direct Issue URL commands and other Pass kinds as writers, Worktree acquisition
 and disposal, Self-merge's expected-base guard, Sweep of closed issues, Stop
 label policies, Ticket concurrency inside Spec runs, arbitrary human edits,
-unbounded restarts/host counts, pagination races, git/GitHub consistency, and
-liveness. No product code is changed by this verification task.
+unbounded restarts/host counts, pagination and REST/GraphQL snapshot races,
+git/GitHub consistency, and liveness. No product code is changed by this
+verification task.

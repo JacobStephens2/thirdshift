@@ -1436,6 +1436,31 @@ fn outcome_rows<'a>(report: &'a Value, kind: &str) -> Vec<&'a Value> {
 }
 
 #[test]
+fn security_and_release_outcomes_render_metrics() {
+    let scenario = Scenario::new();
+    for (number, kind) in [(1, "Security run"), (2, "Release run")] {
+        write(
+            &scenario,
+            &format!("{number}-fixture.command.json"),
+            &dated(number, kind, Some("failed"), 0),
+        );
+    }
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    assert_eq!(report["outcomes"].as_array().unwrap().len(), 2);
+    for kind in ["Security run", "Release run"] {
+        let rows = outcome_rows(&report, kind);
+        assert_eq!(rows.len(), 1, "{report:#}");
+        assert_eq!(rows[0]["runs"], 1);
+        assert_eq!(rows[0]["failed"], 1);
+    }
+    let text = scenario.run(&["metrics"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    for kind in ["Security run", "Release run"] {
+        assert!(text.stdout.contains(kind), "{}", text.stdout);
+    }
+}
+
+#[test]
 fn outcomes_stack_by_kind_without_pass_through_pickups_or_skipped_passes() {
     let scenario = Scenario::new();
     // A Pickup run that dispatched a Ticket run counts only the Ticket run.

@@ -8,6 +8,7 @@ use crate::worktree::Worktree;
 pub(super) struct SelfMerge<'a> {
     pub pr: &'a PullRequestUrl,
     pub snapshot: &'a ReviewPullRequest,
+    pub closing_issues: &'a crate::delivery::ClosingIssues,
     pub choice: &'a Choice,
     pub logs: &'a session::Logs,
     /// The Review run's command, frozen with its merge choice.
@@ -21,6 +22,7 @@ impl SelfMerge<'_> {
         let Self {
             pr,
             snapshot,
+            closing_issues,
             choice,
             logs,
             retry,
@@ -48,7 +50,13 @@ impl SelfMerge<'_> {
             repair_cap: limits.repair_cap,
             protected_paths: &limits.protected_paths,
         }
-        .fix_run(worktree, &mut target, pr, crate::processes::fix::steps()?)
+        .review_self_merge(
+            worktree,
+            &mut target,
+            pr,
+            closing_issues,
+            crate::processes::fix::steps()?,
+        )
         .map_err(|mut failed| {
             if let Some(recovery) = &mut failed.recovery {
                 recovery.add_command_context(

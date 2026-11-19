@@ -46,7 +46,10 @@
       <input type="hidden" name="section" value="{{ self.slug(self.folder()) }}">
       <button>Filter</button>
     </form>
+    {# Folded on each page load, without folds.js: live updates keep the reader's choice until the next load. #}
+    <details id="fleet-machines"><summary>Fleet machines <span class="count">{{ machines.len() }}</span></summary>
     <ul class="fleet-machines" aria-label="Fleet machines">{% for item in machines %}<li data-reachability="{{ item.reachability }}"><a href="{{ item.address }}">{{ item.name }}</a> · {{ item.reachability }} · {{ item.age }} · {{ item.active_runs }} active{% if !item.error.is_empty() %} · {{ item.error }}{% endif %}</li>{% endfor %}</ul>
+    </details>
     <nav class="folders" aria-label="Inbox sections"><a href="{{ self.folder_url("overview") }}" data-group="overview"{% if self.folder() == "overview" %} aria-current="page"{% endif %}><span>Overview</span></a>{% for section in inbox.sections %}<a href="{{ self.folder_url(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
     {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}

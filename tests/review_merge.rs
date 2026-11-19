@@ -416,3 +416,175 @@ fn custom_review_self_merge_logs_under_its_own_step_number() {
         result.stderr
     );
 }
+
+#[test]
+fn untrusted_closing_issue_edit_during_self_merge_repair_stops_without_merging() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("foreign", "colleague", &["Late foreign commit"]);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "gh fake on-merge 1 'git fetch -q origin foreign; git push -q origin FETCH_HEAD:refs/heads/colleague'\n{NO_FINDINGS}"
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "gh fake edits 7 '[{{\"kind\":\"body\",\"by\":\"outsider\",\"at\":\"2999-01-01T00:00:00Z\"}}]'\n{NO_FINDINGS}"
+        ),
+    );
+
+    let result = scenario.run(&["review", &url, "merge"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "#7 body edited since the Review run started by an account that is not a Trusted account; starting no further session"
+        ),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "OPEN", "{state}");
+    assert_eq!(state["prs"][0]["isDraft"], false, "{state}");
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+}
+
+#[test]
+fn untrusted_closing_issue_edit_during_self_merge_repair_stops_before_push_and_merge() {
+    let future = "2999-01-01T00:00:00Z";
+    let scenario = Scenario::new();
+    scenario.origin_has_commit("main", "shared.txt", "original\n", "Shared file");
+    let url = pull_request(&scenario);
+    scenario.origin_has_commit("colleague", "shared.txt", "author\n", "Author change");
+    scenario.origin_has_branch("base-update", "main", &[]);
+    scenario.origin_has_commit(
+        "base-update",
+        "shared.txt",
+        "upstream\n",
+        "Conflicting base change",
+    );
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&state);
+
+    scenario.agent_does(NO_FINDINGS);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "gh fake on-merge 1 'git fetch -q origin base-update; git push -q origin FETCH_HEAD:refs/heads/main'\n{NO_FINDINGS}"
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            r#"
+git checkout --ours shared.txt
+git add shared.txt
+git commit -qm 'Resolve base conflict'
+gh fake edits 7 '[{{"kind":"body","by":"outsider","at":"{future}"}}]'
+{NO_FINDINGS}
+"#
+        ),
+    );
+
+    let result = scenario.run(&["review", &url, "merge"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "#7 body edited since the Review run started by an account that is not a Trusted account; starting no further session"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+    assert_ne!(
+        scenario.origin_file("main", "shared.txt").as_deref(),
+        Some("author\n")
+    );
+}
+
+#[test]
+fn untrusted_closing_issue_edit_before_self_merge_repair_stops_cleanly() {
+    let future = "2999-01-01T00:00:00Z";
+    for (custom, unlink_first, run_name) in [
+        (false, false, "Review run"),
+        (true, false, "Process"),
+        (false, true, "Review run"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.origin_has_commit("main", "shared.txt", "original\n", "Shared file");
+        let url = pull_request(&scenario);
+        scenario.origin_has_commit("colleague", "shared.txt", "author\n", "Author change");
+        scenario.origin_has_branch("base-update", "main", &[]);
+        scenario.origin_has_commit(
+            "base-update",
+            "shared.txt",
+            "upstream\n",
+            "Conflicting base change",
+        );
+        scenario.issue_is(8, "OPEN");
+        let issue7 = scenario.issue_url(7);
+        let issue8 = scenario.issue_url(8);
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!(if unlink_first {
+            vec![json!({"url": issue7}), json!({"url": issue8})]
+        } else {
+            vec![json!({"url": issue7})]
+        });
+        scenario.write_gh_state(&state);
+        let before_log = scenario.origin_log("colleague");
+
+        let on_merge_script = if unlink_first {
+            format!(
+                "git fetch -q origin base-update; git push -q origin FETCH_HEAD:refs/heads/main; \
+                 gh fake pr colleague closingIssuesReferences '[{{\"url\":\"{issue7}\"}}]' && \
+                 gh fake edits 8 '[{{\"kind\":\"title\",\"by\":\"outsider\",\"at\":\"{future}\"}}]'"
+            )
+        } else {
+            format!(
+                "git fetch -q origin base-update; git push -q origin FETCH_HEAD:refs/heads/main; \
+                 gh fake edits 7 '[{{\"kind\":\"body\",\"by\":\"outsider\",\"at\":\"{future}\"}}]'"
+            )
+        };
+        let mut state = scenario.gh_state();
+        state["on_merge"] = json!({"times": 1, "script": on_merge_script});
+        scenario.write_gh_state(&state);
+        scenario.agent_does(NO_FINDINGS);
+
+        let result = if custom {
+            let shown = scenario.run(&["process", "show", "review-run"]);
+            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+            let directory = scenario.path("home/.thirdshift/processes");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("custom-merge.toml"), shown.stdout).unwrap();
+            scenario.run(&["process", "custom-merge", "pull-request", &url, "merge"])
+        } else {
+            scenario.run(&["review", &url, "merge"])
+        };
+
+        let expected = if unlink_first {
+            format!(
+                "#8 title edited since the {run_name} started by an account that is not a Trusted account; starting no further session"
+            )
+        } else {
+            format!(
+                "#7 body edited since the {run_name} started by an account that is not a Trusted account; starting no further session"
+            )
+        };
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stderr.contains(&expected), "{}", result.stderr);
+        assert_eq!(scenario.claude_calls().len(), 1, "no Repair session");
+        let state = scenario.gh_state();
+        assert_eq!(state["prs"][0]["state"], "OPEN", "{state}");
+        assert_eq!(state["prs"][0]["isDraft"], false, "{state}");
+        assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+        assert_eq!(scenario.origin_log("colleague"), before_log);
+    }
+}

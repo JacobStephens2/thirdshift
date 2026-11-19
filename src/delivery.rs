@@ -229,11 +229,41 @@ impl Delivery<'_> {
         pr: &crate::review::PullRequestUrl,
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
+        let closing_issues = ClosingIssues::new(pr.clone(), self.started, "Fix run");
+        self.fix_pr(worktree, pull_request, pr, &closing_issues, false, steps)
+    }
+
+    /// Continue an already-delivered Review PR through shared Self-merge,
+    /// keeping the Review run's closing-issue set and Run name through every
+    /// Repair, Resume, CI watch, push, and merge attempt.
+    pub(crate) fn review_self_merge(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+        pr: &crate::review::PullRequestUrl,
+        closing_issues: &ClosingIssues,
+        steps: Vec<Step>,
+    ) -> Result<Reached, FailedRun> {
+        self.fix_pr(worktree, pull_request, pr, closing_issues, true, steps)
+    }
+
+    fn fix_pr(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+        pr: &crate::review::PullRequestUrl,
+        closing_issues: &ClosingIssues,
+        self_merge: bool,
+        steps: Vec<Step>,
+    ) -> Result<Reached, FailedRun> {
         if !matches!(steps.as_slice(), [Step::Delivery, Step::SelfMerge]) {
             return Err(anyhow::anyhow!("fix-run must deliver then self-merge").into());
         }
-        let context = RepairContext::PullRequest(pr);
-        let started = self.started;
+        let context = RepairContext::PullRequest {
+            pr,
+            closing_issues,
+            self_merge,
+        };
         self.fix_with(
             worktree,
             pull_request,
@@ -243,11 +273,11 @@ impl Delivery<'_> {
                 let worktree = outside.worktree;
                 hand_over_pull_request(
                     pr,
+                    closing_issues,
                     outside.base,
                     worktree.branch(),
                     worktree.path(),
                     false,
-                    started,
                 )?;
                 outside.push()?;
                 outside.stage(Stage::PullRequestReadiness);
@@ -515,7 +545,11 @@ impl Delivery<'_> {
 #[derive(Clone, Copy)]
 enum RepairContext<'a> {
     Issue(&'a IssueUrl),
-    PullRequest(&'a crate::review::PullRequestUrl),
+    PullRequest {
+        pr: &'a crate::review::PullRequestUrl,
+        closing_issues: &'a ClosingIssues,
+        self_merge: bool,
+    },
     BaseBranch(&'a str),
 }
 
@@ -523,9 +557,26 @@ impl<'a> RepairContext<'a> {
     fn subject(self) -> prompt::RepairSubject<'a> {
         match self {
             Self::Issue(issue) => prompt::RepairSubject::Issue(issue),
-            Self::PullRequest(pr) => prompt::RepairSubject::PullRequest(&pr.url),
+            Self::PullRequest { pr, .. } => prompt::RepairSubject::PullRequest(&pr.url),
             Self::BaseBranch(base) => prompt::RepairSubject::BaseBranch(base),
         }
+    }
+
+    fn closing_issues(self) -> Option<&'a ClosingIssues> {
+        match self {
+            Self::PullRequest { closing_issues, .. } => Some(closing_issues),
+            Self::Issue(_) | Self::BaseBranch(_) => None,
+        }
+    }
+
+    fn is_review_self_merge(self) -> bool {
+        matches!(
+            self,
+            Self::PullRequest {
+                self_merge: true,
+                ..
+            }
+        )
     }
 }
 
@@ -572,9 +623,9 @@ fn run_checked<T, S>(
         // already removes ignored files with the rest of the Worktree.
         conceal_validation_logs(&path)?;
         match context {
-            RepairContext::PullRequest(pr) => {
-                hand_over_pull_request(pr, base, &branch, &path, true, started)
-            }
+            RepairContext::PullRequest {
+                pr, closing_issues, ..
+            } => hand_over_pull_request(pr, closing_issues, base, &branch, &path, true),
             RepairContext::Issue(issue) => {
                 no_untrusted_edit_since(issue, started, "Ticket run")?;
                 hand_over_issue(issue, &path)
@@ -600,14 +651,35 @@ fn run_checked<T, S>(
                 progress::step("the pull request was merged while Delivery was running");
                 Ok(on_merged(merged, log))
             } else {
-                let stopped_at = stopped_at(tracker, &error);
-                let path = worktree.path().to_path_buf();
-                let mut outside = OnFailure {
-                    base,
-                    worktree,
-                    pull_request,
-                };
-                Err(fail(&mut outside, stopped_at, path, log, error))
+                let interrupted = interrupt::requested();
+                let error = interrupted_or(error, interrupted);
+                // Review Self-merge runs after Delivery has already left the PR
+                // ready for review: an untrusted closing-issue edit stops
+                // cleanly without drafting the PR or pushing dirty/unreviewed
+                // Repair work.
+                if context.is_review_self_merge() && ClosingIssues::is_untrusted_edit(&error) {
+                    let stopped_at = stopped_at(tracker, &error);
+                    let mut recovery = Recovery::new(stopped_at, Preservation::None);
+                    recovery.record_worktree(worktree.path().to_path_buf());
+                    Err(FailedRun {
+                        recovery: Some(Box::new(recovery)),
+                        error,
+                        pr_url: None,
+                        release_url: None,
+                        log,
+                        interrupted,
+                        ticket_lines: Vec::new(),
+                    })
+                } else {
+                    let stopped_at = stopped_at(tracker, &error);
+                    let path = worktree.path().to_path_buf();
+                    let mut outside = OnFailure {
+                        base,
+                        worktree,
+                        pull_request,
+                    };
+                    Err(fail(&mut outside, stopped_at, path, log, error))
+                }
             }
         }
     };
@@ -1132,6 +1204,59 @@ trait FailedOutside {
     fn step(&mut self, line: String);
 }
 
+/// Tracks linked closing issues seen on a pull request across Steps, sessions,
+/// Repairs, Resumes, pushes, and merges so any untrusted title or body edit
+/// stops further sessions and publication cleanly.
+#[derive(Clone)]
+pub(crate) struct ClosingIssues {
+    pr: crate::review::PullRequestUrl,
+    seen: std::cell::RefCell<Vec<IssueUrl>>,
+    started: DateTime<Utc>,
+    run_name: &'static str,
+}
+
+impl ClosingIssues {
+    pub(crate) fn new(
+        pr: crate::review::PullRequestUrl,
+        started: DateTime<Utc>,
+        run_name: &'static str,
+    ) -> Self {
+        Self {
+            pr,
+            seen: std::cell::RefCell::new(Vec::new()),
+            started,
+            run_name,
+        }
+    }
+
+    pub(crate) fn is_untrusted_edit(error: &anyhow::Error) -> bool {
+        error.chain().any(|layer| layer.is::<UntrustedEdit>())
+    }
+
+    /// Record `issues` (retaining earlier seen links) and fail with
+    /// [`UntrustedEdit`] if an untrusted account edited any of them since the Run started.
+    pub(crate) fn check_known(&self, issues: &[IssueUrl]) -> Result<()> {
+        let mut seen = self.seen.borrow_mut();
+        let mut ids: std::collections::BTreeSet<_> = seen.iter().map(IssueUrl::identity).collect();
+        for issue in issues {
+            if ids.insert(issue.identity()) {
+                seen.push(issue.clone());
+            }
+        }
+        for issue in seen.iter() {
+            no_untrusted_edit_since(issue, self.started, self.run_name)?;
+        }
+        Ok(())
+    }
+
+    /// Fetch the pull request's current closing issues, retain all previously
+    /// seen links, and enforce [`no_untrusted_edit_since`] across the union.
+    pub(crate) fn check(&self, github: &GitHub) -> Result<()> {
+        let current = github.closing_issues(&self.pr)?;
+        self.check_known(&current)
+    }
+}
+
 /// Fail with [`UntrustedEdit`] if `issue` has had an edit to its body or
 /// title, since its Run `started`, by an account that is not a Trusted
 /// account: a session started now would work from text no Trusted account
@@ -1165,11 +1290,11 @@ pub(crate) fn hand_over_issue(issue: &IssueUrl, worktree: &Path) -> Result<()> {
 
 fn hand_over_pull_request(
     pr: &crate::review::PullRequestUrl,
+    closing_issues: &ClosingIssues,
     base: &str,
     branch: &str,
     worktree: &Path,
     ready: bool,
-    started: DateTime<Utc>,
 ) -> Result<()> {
     let github = GitHub::new();
     let snapshot = github.fix_pull_request(pr)?;
@@ -1188,11 +1313,9 @@ fn hand_over_pull_request(
     }
     let input = github.review_input(pr, &snapshot)?;
     // The Repair session works from these issues and can push. Stop before
-    // writing them when an untrusted account has edited one since the run
-    // started, the same gate a Ticket run applies to its own issue.
-    for issue in &input.closing_issues {
-        no_untrusted_edit_since(issue, started, "Fix run")?;
-    }
+    // writing them when an untrusted account has edited one (including any
+    // closing issue seen earlier in the Run and since unlinked) since the run started.
+    closing_issues.check_known(&input.closing_issues)?;
     skills::exclude(&Git::new(worktree), "/.thirdshift-review-input.md")?;
     crate::processes::review::write_review_input(
         &worktree.join(".thirdshift-review-input.md"),
@@ -1301,9 +1424,16 @@ impl Outside for InWorktree<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
+        if let Some(closing_issues) = self.context.closing_issues() {
+            closing_issues.check(&GitHub::new())?;
+        }
         self.pull_request.ensure_actionable(false)?;
-        self.worktree
-            .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
+        self.worktree.push_if_actionable(&mut || {
+            if let Some(closing_issues) = self.context.closing_issues() {
+                closing_issues.check(&GitHub::new())?;
+            }
+            self.pull_request.ensure_actionable(false)
+        })
     }
 
     fn open_missing_pr(&mut self) -> Result<()> {
@@ -1353,7 +1483,7 @@ impl Outside for InWorktree<'_> {
         // reviewed work. Preserve exact-head evidence for a later Fix run.
         // An adopted PR cannot acquire that authority merely by passing CI.
         if goal == Goal::ReadyForReview
-            && !matches!(self.context, RepairContext::PullRequest(_))
+            && !matches!(self.context, RepairContext::PullRequest { .. })
             && let Err(error) = self.record_delivered_head(pr_url)
         {
             progress::warn(
@@ -1457,6 +1587,24 @@ struct RunOutside<'a> {
 }
 
 impl RunOutside<'_> {
+    fn check_closing_issues(&self) -> Result<()> {
+        if let Some(closing_issues) = self.context.closing_issues() {
+            closing_issues.check(&GitHub::new())?;
+        }
+        Ok(())
+    }
+
+    fn finish_session_or_fix<T>(&mut self, result: Result<T>) -> Result<()> {
+        let checked = self.check_closing_issues();
+        match (result, checked) {
+            (_, Err(err)) if ClosingIssues::is_untrusted_edit(&err) => return Err(err),
+            (Err(err), _) => return Err(err),
+            (Ok(_), Err(err)) => return Err(err),
+            (Ok(_), Ok(())) => {}
+        }
+        self.refresh_built_with()
+    }
+
     /// A Repair or Base fix may have reported a new Harness version. Refresh
     /// attribution while the PR is still actionable, before any Self-merge.
     fn refresh_built_with(&mut self) -> Result<()> {
@@ -1479,6 +1627,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge_base_branch(&mut self) -> Result<Merge> {
+        self.check_closing_issues()?;
         self.pull_request.ensure_actionable(true)?;
         self.worktree.merge_base_branch(self.base)
     }
@@ -1492,9 +1641,12 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
+        self.check_closing_issues()?;
         self.pull_request.ensure_actionable(true)?;
-        self.worktree
-            .push_if_actionable(&mut || self.pull_request.ensure_actionable(true))
+        self.worktree.push_if_actionable(&mut || {
+            self.check_closing_issues()?;
+            self.pull_request.ensure_actionable(true)
+        })
     }
 
     fn head(&mut self) -> Result<String> {
@@ -1510,15 +1662,23 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn new_commits_on_origin(&mut self) -> Result<ForeignCommits> {
+        self.check_closing_issues()?;
         self.pull_request.ensure_actionable(true)?;
         self.worktree.new_commits_on_origin()
     }
 
     fn assess_ci(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
+        self.check_closing_issues()?;
+        let closing_issues = self.context.closing_issues();
         self.ci_watch.assess(
             head,
             base_commit,
-            &mut || self.pull_request.actionable_head(true),
+            &mut || {
+                if let Some(closing_issues) = closing_issues {
+                    closing_issues.check(&GitHub::new())?;
+                }
+                self.pull_request.actionable_head(true)
+            },
             &mut |watched| Ok(self.worktree.new_commits_on_origin()?.origin_head() != watched),
         )
     }
@@ -1545,10 +1705,10 @@ impl repair_loop::Outside for RunOutside<'_> {
                 prompt::review_repair(subject, branch, pr_url, from, self.scope)
             }
         };
+        self.check_closing_issues()?;
         self.pull_request.ensure_actionable(true)?;
         let result = self.sessions.run(kind, &prompt);
-        let refreshed = self.refresh_built_with();
-        result.and(refreshed)
+        self.finish_session_or_fix(result)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -1556,6 +1716,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()> {
+        self.check_closing_issues()?;
         let outside = base_fix::LaunchAndGitHub {
             launch: self.worktree.launch(),
             issue: self.issue,
@@ -1565,19 +1726,21 @@ impl repair_loop::Outside for RunOutside<'_> {
         let result = self
             .base_fix
             .fix(outside, self.pr_url, self.base, base_commit, failed);
-        let refreshed = self.refresh_built_with();
-        result.and(refreshed)
+        self.finish_session_or_fix(result)
     }
 
     fn pr_mergeable(&mut self) -> Result<bool> {
+        self.check_closing_issues()?;
         self.pull_request.is_mergeable()
     }
 
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()> {
+        self.check_closing_issues()?;
         self.pull_request.ensure_ready_and_mergeable()
     }
 
     fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
+        self.check_closing_issues()?;
         self.pull_request.merge(head)
     }
 

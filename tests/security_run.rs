@@ -5416,10 +5416,12 @@ fn invalid_parent_issue_url_retains_github_dependency_cause() {
     write_executable(
         &scenario.path("bin/gh"),
         r#"#!/bin/sh
-if [ "$1" = api ] && [ "$2" = graphql ]; then
+case "$*" in
+  'api graphql '*'parent { url }'*)
     printf '%s\n' '{"data":{"repository":{"issue":{"labelled":{"nodes":[],"pageInfo":{"hasNextPage":false}},"parent":{"url":"PRIVATE-INVALID-PARENT"}}}}}'
     exit 0
-fi
+    ;;
+esac
 exec "$(dirname "$0")/original/gh" "$@"
 "#,
     );

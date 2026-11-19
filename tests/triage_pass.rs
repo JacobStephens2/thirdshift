@@ -463,3 +463,40 @@ fn reserved_or_stale_candidates_give_way_to_the_next_issue() {
         }
     }
 }
+
+#[test]
+fn a_needs_triage_issue_omitted_by_rest_is_found_via_graphql_and_logged() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.issue_is(2814, "OPEN");
+    scenario.issue_labelled(2814, &["needs-triage"]);
+    let mut gh = scenario.gh_state();
+    gh["rest_omits"] = json!([2814]);
+    scenario.write_gh_state(&gh);
+    scenario.agent_does(RECOMMEND);
+
+    let result = scenario.run(&["triage"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.issue_labels(2814), ["ready-for-human", "bug"]);
+    let expected =
+        "GitHub needs-triage listing disagreement: REST omitted #2814 (found via GraphQL)";
+    let activity = std::fs::read_to_string(scenario.path(&format!("{LOGS}/activity.log"))).unwrap();
+    assert_eq!(
+        activity.matches(expected).count(),
+        1,
+        "activity:\n{activity}"
+    );
+    assert_eq!(
+        result.stderr.matches(expected).count(),
+        1,
+        "stderr:\n{}",
+        result.stderr
+    );
+    let graphql_listing_calls = scenario
+        .gh_calls_of("api", "graphql")
+        .into_iter()
+        .filter(|call| call.iter().any(|arg| arg == "label=needs-triage"))
+        .count();
+    assert_eq!(graphql_listing_calls, 1);
+}

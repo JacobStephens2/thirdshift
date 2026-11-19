@@ -167,6 +167,42 @@ fn peek_shows_retained_run_metrics_and_marks_missing_signals() {
 }
 
 #[test]
+fn security_and_release_outcomes_render_local_and_fleet_metrics() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (number, kind) in [(7, "Security run"), (8, "Release run"), (9, "Unknown run")] {
+        let mut value = record(home.path(), number, Some("failed"), 0);
+        value["kind"] = json!(kind);
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let hostname = api::json(console.get("/api/v1/whoami"))["hostname"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for route in [
+        "/metrics?window=all".to_owned(),
+        format!("/metrics?window=all&machine={hostname}"),
+    ] {
+        let response = console.get(&route);
+        assert_eq!(response.status(), 200, "{route}");
+        let html = response.text().unwrap();
+        for kind in ["Security run", "Release run"] {
+            assert!(html.contains(&format!("<option>{kind}</option>")), "{html}");
+            assert!(html.contains(&format!("<td>{kind}</td>")), "{html}");
+        }
+    }
+    let report = api::json(console.get("/api/v1/metrics?window=all"));
+    let rows = report["outcomes"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{report:#}");
+    for kind in ["Security run", "Release run"] {
+        let row = rows.iter().find(|row| row["kind"] == kind).unwrap();
+        assert_eq!(row["runs"], 1);
+        assert_eq!(row["failed"], 1);
+    }
+}
+
+#[test]
 fn metrics_page_shows_outcome_stacks_and_tables_and_keeps_single_command_inspection() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
