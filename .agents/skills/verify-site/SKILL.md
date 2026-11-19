@@ -71,7 +71,7 @@ printf '%s' "$home_html" | grep -q 'Your issues become pull requests overnight.'
 Follow `verify-ui` (Factory: `thirdshift-verify-ui`) for the two-phase verification workflow against [features/README.md](features/README.md). Site-specific rules:
 
 1. **Interactive exploration:** resolve Playwright from `$(pwd)/site/node_modules/playwright` (or drive with `@playwright/cli` / `agent-browser` and stop any daemon in `cleanup`). Test both `javaScriptEnabled: true` and `false` where `<details>` or fragment reveal applies, and abort external `https://**` requests (`route.abort()`) or fulfill YouTube embeds locally so runs never contact external origins.
-2. **Clean walkthrough pass:** check the Playwright version in `site/package.json` (`>= 1.59` uses `recordVideo.showActions`; otherwise use the init-script cursor fallback in `verify-ui` / `thirdshift-verify-ui`). Allow expected `https://**` route-abort `requestfailed` events and the single expected missing deploy-only `/commit.txt` 404 console error on `/prompts/` (`m.location().url.endsWith('/commit.txt')`), asserting zero unexpected `pageerror`, `console` error, or `>= 500` responses.
+2. **Clean walkthrough pass:** check the Playwright version in `site/package.json` (`>= 1.59` uses `recordVideo.showActions`; otherwise use the init-script cursor fallback in `verify-ui` / `thirdshift-verify-ui`). Allow expected `https://**` route-abort `requestfailed` events and the missing deploy-only `/commit.txt` request on `/prompts/` (both its 404 `console` error `m.location().url.endsWith('/commit.txt')` and its `net::ERR_ABORTED` `requestfailed` on navigation when `main.js` skips reading the 404 body), asserting zero unexpected `pageerror`, `console` error, or `>= 500` responses.
 
 ## Evidence
 

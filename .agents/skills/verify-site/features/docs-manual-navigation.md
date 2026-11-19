@@ -21,7 +21,7 @@ Preconditions:
 
 - **Confirm initial folded state.** Navigate to `${origin}/docs/`. Zero `main details[open]` elements exist on load.
 - **Navigate via Manual sections TOC.** Click link `Install` inside `nav[aria-label="Manual sections"]`. URL hash becomes `#install` and `#install > pre:first-of-type` (`curl ...` installer snippet; `#install > pre` matches two `<pre>` blocks) becomes visible.
-- **Unfold nested subsections.** Click heading `What a Ticket run does`, then `The Claim`, then `When the Claim ends`. Each nested section reveals its content cleanly while unrelated sections remain folded.
+- **Unfold nested subsections.** Click exact headings `What a Ticket run does`, then `The Claim` (`getByRole('heading', { name: 'The Claim', exact: true })` so `When the Claim ends` does not trigger a strict-mode collision), then `When the Claim ends`. Each nested section reveals its content cleanly while unrelated sections remain folded.
 - **Verify deep link.** Navigate directly to `${origin}/docs/#ui-verification-and-visual-evidence`. The `UI verification and Visual evidence` section opens automatically and scrolls into view.
 - **Proof.** Capture `1440×900` `.png` showing an unfolded manual section and record a `.mp4` walkthrough navigating `Install` -> `What a Ticket run does` -> `The Claim` -> `#ui-verification-and-visual-evidence`.
 
