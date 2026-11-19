@@ -131,6 +131,31 @@ fn pr_recipe_refuses_unsafe_captures_before_any_upload() {
 }
 
 #[test]
+fn pr_recipe_refuses_capture_paths_containing_hash_alt_delimiter() {
+    let scenario = Scenario::new();
+    let secret = scenario.path("secret-data");
+    fs::write(&secret, "SECRET-MARKER-hash-bypass\n").unwrap();
+    let planted_target = scenario.path("secret-target");
+    symlink(&secret, &planted_target).unwrap();
+    let decoy_dir = scenario.path("secret-target#");
+    fs::create_dir(&decoy_dir).unwrap();
+    let decoy_capture = decoy_dir.join("after.png");
+    fs::write(&decoy_capture, "faux image").unwrap();
+
+    let output = publish(&scenario, "create", &[decoy_capture]);
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "recipe accepted capture path containing '#' delimiter (gh --attach reads symlink target before '#')"
+    );
+    assert!(error.contains("path"), "{error}");
+    assert!(
+        scenario.gh_calls_of("pr", "create").is_empty(),
+        "uploaded before rejecting '#' in capture path"
+    );
+}
+
+#[test]
 fn pr_recipe_requires_gh_2_103_2_or_later() {
     for version in ["2.96.0", "2.103.1", "2.103.2", "2.104.0", "3.0.0"] {
         let scenario = Scenario::new();

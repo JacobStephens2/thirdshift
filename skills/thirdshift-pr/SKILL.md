@@ -202,6 +202,9 @@ This validates **all** captures before the first irreversible upload, refusing s
   [ "$#" -gt 0 ] && [ "$#" -le 50 ] || { echo 'expected 1–50 captures' >&2; exit 1; }
   attachments=()
   for capture in "$@"; do
+    case "$capture" in
+      *#*) printf 'refusing capture path containing #: %s\n' "$capture" >&2; exit 1 ;;
+    esac
     if [ -L "$capture" ] || [ ! -f "$capture" ] || [ ! -O "$capture" ]; then
       printf 'refusing capture that is not a regular file owned by this user: %s\n' "$capture" >&2
       exit 1
