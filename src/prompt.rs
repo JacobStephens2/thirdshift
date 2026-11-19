@@ -426,10 +426,13 @@ impl ReviewInstruction {
 
 const SPEC_TICKET_VISUAL_EVIDENCE: &str = "For Visual evidence, run interactive UI verification locally in this Worktree with the `thirdshift-verify-ui` skill without calling `gh` or uploading attachments (`--attach`): leave Visual evidence off this child Ticket PR, because Spec review captures and attaches unified Before and After Visual evidence when writing the Spec PR body.";
 
-fn open_pr_visual_evidence(target: &str, scope_note: &str) -> String {
-    format!(
-        "Whenever {scope_note} modify rendered UI files on {target}, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched."
-    )
+fn open_pr_visual_evidence(scope: TicketScope, target: &str, scope_note: &str) -> String {
+    match scope {
+        TicketScope::SpecTicket => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
+        TicketScope::Standard => format!(
+            "Whenever {scope_note} modify rendered UI files on {target}, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched."
+        ),
+    }
 }
 
 /// Whether prompts target a standalone pull request (`Standard`) or a child
@@ -512,17 +515,20 @@ fn continuation_delivery_instruction(
 ) -> String {
     let pr = pull_request_instruction(base, pr_url);
     let fixed = fixed_point_revision(base);
-    let visual = match (scope, pr_url) {
-        (TicketScope::SpecTicket, _) => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
-        (TicketScope::Standard, Some(url)) => open_pr_visual_evidence(
+    let visual = match pr_url {
+        Some(url) => open_pr_visual_evidence(
+            scope,
             &format!("PR {url}"),
             &format!(
                 "your commits (or earlier branch commits when PR {url} is missing Visual evidence against {fixed})"
             ),
         ),
-        (TicketScope::Standard, None) => format!(
-            "Whenever the branch modifies rendered UI files against {fixed}, run interactive UI verification with the `thirdshift-verify-ui` skill and attach unified `Before` and `After` Visual evidence covering the whole branch via `gh pr create --attach` using the `thirdshift-pr` skill."
-        ),
+        None => match scope {
+            TicketScope::SpecTicket => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
+            TicketScope::Standard => format!(
+                "Whenever the branch modifies rendered UI files against {fixed}, run interactive UI verification with the `thirdshift-verify-ui` skill and attach unified `Before` and `After` Visual evidence covering the whole branch via `gh pr create --attach` using the `thirdshift-pr` skill."
+            ),
+        },
     };
     format!("{pr}\n\n{visual}")
 }
@@ -883,15 +889,6 @@ fn base_ci_prompt(
     )
 }
 
-fn repair_visual_evidence(scope: TicketScope, pr_url: &str, scope_note: &str) -> String {
-    match scope {
-        TicketScope::SpecTicket => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
-        TicketScope::Standard => {
-            open_pr_visual_evidence(&format!("pull request {pr_url}"), scope_note)
-        }
-    }
-}
-
 /// The conflict Repair prompt, for a merge of `origin/<merging>` left in
 /// progress with conflicts: the Base branch, or in a Ticket run asked to merge,
 /// the Issue branch with Foreign commits on it.
@@ -903,9 +900,9 @@ pub(crate) fn conflict_repair<'a>(
     scope: TicketScope,
 ) -> String {
     let subject = subject.into();
-    let visual = repair_visual_evidence(
+    let visual = open_pr_visual_evidence(
         scope,
-        pr_url,
+        &format!("pull request {pr_url}"),
         "conflict-resolution commits or the merged commits",
     );
     format!(
@@ -939,7 +936,7 @@ pub(crate) fn ci_fix_repair<'a>(
     scope: TicketScope,
 ) -> String {
     let subject = subject.into();
-    let visual = repair_visual_evidence(scope, pr_url, "your commits");
+    let visual = open_pr_visual_evidence(scope, &format!("pull request {pr_url}"), "your commits");
     if let RepairSubject::BaseBranch(base) = subject {
         return base_ci_prompt(
             base,
@@ -998,9 +995,9 @@ pub(crate) fn review_repair<'a>(
 ) -> String {
     let subject = subject.into();
     let review = ReviewInstruction::ForeignCommits;
-    let visual = repair_visual_evidence(
+    let visual = open_pr_visual_evidence(
         scope,
-        pr_url,
+        &format!("pull request {pr_url}"),
         &format!("your commits or the merged commits across {own_head}..HEAD"),
     );
     format!(
@@ -1077,12 +1074,7 @@ pub(crate) fn security_review(
     branch: &str,
     scope: TicketScope,
 ) -> String {
-    let visual = match scope {
-        TicketScope::SpecTicket => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
-        TicketScope::Standard => {
-            open_pr_visual_evidence("this branch's open pull request", "your commits")
-        }
-    };
+    let visual = open_pr_visual_evidence(scope, "this branch's open pull request", "your commits");
     security_review_prompt(
         &issue.url,
         base,

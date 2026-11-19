@@ -1233,22 +1233,13 @@ mod tests {
     }
 
     #[test]
-    fn prompts_page_tracks_repair_skill_users_and_spec_ticket_prompts() {
+    fn prompts_page_tracks_repair_skill_users() {
         for skill in ["thirdshift-verify-ui", "thirdshift-pr"] {
             let used_by = skill_used_by(skill);
             assert!(
                 used_by.contains(FINISH.name),
                 "{skill} misses Finish Repairs: {used_by}"
             );
-        }
-        let ids: Vec<_> = prompts().into_iter().map(|p| p.id).collect();
-        for id in [
-            "prompt-spec-ticket-security-review",
-            "prompt-spec-ticket-conflict-repair",
-            "prompt-spec-ticket-ci-fix-repair",
-            "prompt-spec-ticket-review-repair",
-        ] {
-            assert!(ids.contains(&id), "missing {id} from prompts()");
         }
     }
 

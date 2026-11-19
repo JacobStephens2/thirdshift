@@ -122,15 +122,18 @@ test("the README and manual's repository links reach files and section anchors",
   }
 });
 
+async function readPlainText(relativePath, { decodeCode = false } = {}) {
+  let text = await readFile(resolve(__dirname, relativePath), "utf8");
+  text = text.replace(/<[^>]*>/g, "");
+  if (decodeCode) {
+    text = text.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("`", "");
+  }
+  return text.replace(/\s+/g, " ");
+}
+
 test("manual and docs describe GitHub-attached Visual evidence, setup readiness, and follow-up refresh rules", async () => {
   for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
-    const raw = await readFile(resolve(__dirname, file), "utf8");
-    const text = raw
-      .replace(/<[^>]*>/g, "")
-      .replaceAll("&lt;", "<")
-      .replaceAll("&gt;", ">")
-      .replaceAll("`", "")
-      .replace(/\s+/g, " ");
+    const text = await readPlainText(file, { decodeCode: true });
     assert.doesNotMatch(text, /secret gists?/i, `${file}: still mentions secret Gists`);
     for (const pattern of [
       /gh >= 2\.103\.2/,
@@ -149,15 +152,14 @@ test("manual and docs describe GitHub-attached Visual evidence, setup readiness,
 });
 
 test("hand-written site pages contain no stale secret-Gist Visual evidence claims", async () => {
+  const pages = new Map();
   for (const file of ["../index.html", "../how-it-works/index.html", "../architecture/index.html"]) {
-    const raw = await readFile(resolve(__dirname, file), "utf8");
-    const text = raw.replace(/<[^>]*>/g, "").replace(/\s+/g, " ");
+    const text = await readPlainText(file);
+    pages.set(file, text);
     assert.doesNotMatch(text, /secret gists?/i, `${file}: still advertises secret Gist Visual evidence`);
     assert.match(text, /--attach|attached|\.mp4|H\.264/i, `${file}: missing GitHub-attached Visual evidence description`);
   }
-  const guide = (await readFile(resolve(__dirname, "../how-it-works/index.html"), "utf8"))
-    .replace(/<[^>]*>/g, "")
-    .replace(/\s+/g, " ");
+  const guide = pages.get("../how-it-works/index.html");
   assert.match(guide, /thirdshift setup/, "how-it-works lacks thirdshift setup prerequisite readiness");
   assert.match(guide, /## Evidence/, "how-it-works lacks explicit ## Evidence limitation rule");
   assert.match(guide, /Spec review/, "how-it-works lacks Spec review unified Visual evidence explanation");
