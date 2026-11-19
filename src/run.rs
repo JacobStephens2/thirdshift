@@ -280,6 +280,7 @@ fn run(
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
+        spec_ticket: matches!(started_by.child(), Some(Kind::Ticket { .. })),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
         spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
@@ -366,6 +367,7 @@ fn start<O: Outside>(
         outside.make_claim()?;
     }
     let is_spec = !tickets.is_empty();
+    let spec_ticket = matches!(started_by.child(), Some(Kind::Ticket { .. }));
     let mut outcome = start_in_worktree(
         outside,
         issue,
@@ -373,6 +375,7 @@ fn start<O: Outside>(
         &selection,
         &base,
         asks.tickets_at_once,
+        spec_ticket,
     );
     if let Err(failed) = &outcome
         && crate::session::limits::plan_usage_paused(&failed.error).is_some()
@@ -435,13 +438,14 @@ fn start_in_worktree<O: Outside>(
     selection: &Selection,
     base: &str,
     parallel: NonZeroUsize,
+    spec_ticket: bool,
 ) -> Result<Reached, FailedRun> {
     let branch = selection.branch();
     let checkout = match selection {
         Selection::Fresh { .. } => Checkout::Fresh,
         Selection::Continuation { .. } => Checkout::Continuation,
     };
-    let opening = crate::implement::opening(issue, base, selection);
+    let opening = crate::implement::opening(issue, base, selection, spec_ticket);
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
@@ -529,6 +533,8 @@ struct LaunchAndGitHub<'a> {
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
+    /// Child Ticket runs in a Spec run keep UI verification local.
+    spec_ticket: bool,
     /// Base fixes have their own reproduction flow.
     diagnose_bugs: bool,
     /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
@@ -574,6 +580,7 @@ impl LaunchAndGitHub<'_> {
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
             security_review: self.security_review,
+            spec_ticket: self.spec_ticket,
             child_asks: self.child_asks,
             issue: self.issue,
             base,
@@ -1081,7 +1088,35 @@ mod tests {
                 base_branch(Some("issue-3")),
                 Call::Interrupted,
                 worktree(Checkout::Fresh, "issue-3"),
-                deliver_fresh("issue-3"),
+                Call::Deliver(
+                    Checkout::Fresh,
+                    "issue-3".to_string(),
+                    prompt::spec_ticket_fresh(&seven(), "issue-3", "issue-7"),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_base_fix_child_run_keeps_the_standard_fresh_prompt() {
+        let kind = Kind::BaseFix {
+            base: "main".to_string(),
+            spec_pr: None,
+        };
+        let mut outside = Scripted::new(Script::default());
+
+        let ended = start_by(&mut outside, &asks(), StartedBy::Child(&kind));
+
+        assert!(ended.is_ok());
+        assert_eq!(
+            outside.calls,
+            [
+                Call::Started { spec_run: false },
+                Call::Select,
+                base_branch(Some("main")),
+                Call::Interrupted,
+                worktree(Checkout::Fresh, "main"),
+                deliver_fresh("main"),
             ]
         );
     }

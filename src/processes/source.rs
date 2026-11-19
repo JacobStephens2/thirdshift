@@ -937,6 +937,7 @@ pub(super) fn run_issue_branch(
             issue: &issue,
             branch: &branch,
             base: &base,
+            spec_ticket: false,
             on_origin,
             selection: &selection,
             logs: &logs,
@@ -1035,7 +1036,11 @@ pub(super) fn run_security_review(
         .as_ref()
         .context("the Issue-branch worktree is gone")?;
     let before_each = || prepare_for_session(issue_run.issue, prepared.started, checkout.path());
-    let text = prompt::security_review(issue_run.issue, issue_run.base, issue_run.branch);
+    let text = if issue_run.spec_ticket {
+        prompt::spec_ticket_security_review(issue_run.issue, issue_run.base, issue_run.branch)
+    } else {
+        prompt::security_review(issue_run.issue, issue_run.base, issue_run.branch)
+    };
     let mut logs = session::Logs::of_process_review(&issue_run.issue.repo(), index + 1);
     if let Some(identity) = &prepared.dispatched {
         logs = logs.for_child(issue_run.issue, identity.clone());
@@ -1123,6 +1128,7 @@ pub(super) fn run_delivery(
     };
     let published = (delivery::Delivery {
         security_review: false,
+        spec_ticket: issue_run.spec_ticket,
         child_asks: &child_asks,
         issue: issue_run.issue,
         base: issue_run.base,
@@ -1227,7 +1233,7 @@ pub(super) fn run_implement(
         issue,
         run.base,
         checkout,
-        crate::implement::opening(issue, run.base, selection),
+        crate::implement::opening(issue, run.base, selection, run.spec_ticket),
         Some(&labels),
     )?;
     let mut pr = PullRequest::new(issue, checkout.branch(), run.base, GitHub::new());

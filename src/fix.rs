@@ -280,6 +280,7 @@ fn targeted_at(
         }
         let result = Delivery {
             security_review: false,
+            spec_ticket: false,
             child_asks: &child_asks,
             issue: &pr.issue,
             base: &snapshot.base,

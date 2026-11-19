@@ -469,6 +469,7 @@ struct IssueRun<'a> {
     issue: &'a IssueUrl,
     branch: &'a str,
     base: &'a str,
+    spec_ticket: bool,
     on_origin: bool,
     selection: &'a Selection,
     logs: &'a session::Logs,
@@ -509,6 +510,7 @@ struct StepRun<'a> {
     selection: Option<&'a Selection>,
     /// The Base branch checked out in the Launch directory.
     base: &'a str,
+    spec_ticket: bool,
     steps: &'a [ResolvedStep],
 }
 
@@ -1234,6 +1236,7 @@ fn run_parallel(
                     checkout,
                     selection,
                     base,
+                    spec_ticket: false,
                     steps,
                 };
                 let outcome = run_step_in(&run, &cwd, step, &prior, &results, first);
@@ -1349,6 +1352,7 @@ fn run_step(
         checkout,
         selection: issue_run.map(|run| run.selection),
         base: &prepared.base,
+        spec_ticket: issue_run.is_some_and(|run| run.spec_ticket),
         steps: &prepared.steps,
     };
     run_step_in(

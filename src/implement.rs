@@ -13,8 +13,16 @@ use crate::{prompt, worktree::Worktree};
 /// Continuation prompt, and for a fresh Issue branch the Continuation prompt
 /// it starts again with if Plan usage moves it to another route after it
 /// made commits, saying nothing of why.
-pub fn opening(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> Opening {
+pub fn opening(
+    issue: &IssueUrl,
+    base: &str,
+    selection: &crate::branch::Selection,
+    spec_ticket: bool,
+) -> Opening {
     let continuation = match selection {
+        crate::branch::Selection::Fresh { .. } if spec_ticket => Some(
+            prompt::spec_ticket_continuation(issue, base, selection.branch(), None),
+        ),
         crate::branch::Selection::Fresh { .. } => {
             Some(prompt::continuation(issue, base, selection.branch(), None))
         }
@@ -22,15 +30,31 @@ pub fn opening(issue: &IssueUrl, base: &str, selection: &crate::branch::Selectio
     };
     Opening {
         session: OpeningSession::Implementation,
-        prompt: prompt(issue, base, selection),
+        prompt: prompt(issue, base, selection, spec_ticket),
         continuation,
     }
 }
 
-fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> String {
+fn prompt(
+    issue: &IssueUrl,
+    base: &str,
+    selection: &crate::branch::Selection,
+    spec_ticket: bool,
+) -> String {
     let branch = selection.branch();
     match selection {
+        crate::branch::Selection::Fresh { .. } if spec_ticket => {
+            prompt::spec_ticket_fresh(issue, base, branch)
+        }
         crate::branch::Selection::Fresh { .. } => prompt::fresh(issue, base, branch),
+        crate::branch::Selection::Continuation { pr, .. } if spec_ticket => {
+            prompt::spec_ticket_continuation(
+                issue,
+                base,
+                branch,
+                pr.as_ref().map(|pr| pr.url.as_str()),
+            )
+        }
         crate::branch::Selection::Continuation { pr, .. } => {
             prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str()))
         }

@@ -37,6 +37,7 @@ impl SelfMerge<'_> {
         target.require_unstacked_base();
         crate::delivery::Delivery {
             security_review: false,
+            spec_ticket: false,
             child_asks: &child_asks,
             issue: &pr.issue,
             base: &snapshot.base,

@@ -75,6 +75,7 @@ pub(crate) fn run_custom(
         issue: delivery.issue,
         branch: &branch,
         base: delivery.base,
+        spec_ticket: delivery.spec_ticket,
         on_origin: matches!(selection, Selection::Continuation { .. }),
         selection,
         logs: delivery.logs,

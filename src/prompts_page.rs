@@ -224,6 +224,27 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
         },
         Prompt {
+            id: "prompt-spec-ticket-fresh",
+            title: "Spec ticket, fresh",
+            when: "In a Spec run, starts the implement session for a child Ticket run on a new Issue branch targeting the Spec branch. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::spec_ticket_fresh(&issue, SPEC_BRANCH, BRANCH),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-continuation",
+            title: "Spec ticket, Continuation with no pull request",
+            when: "In a Spec run, starts the implement session for a child Ticket run continuing an Issue branch that has no Ticket PR yet. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::spec_ticket_continuation(&issue, SPEC_BRANCH, BRANCH, None),
+        },
+        Prompt {
+            id: "prompt-spec-ticket-continuation-pr",
+            title: "Spec ticket, Continuation with an open pull request",
+            when: "In a Spec run, starts the implement session for a child Ticket run continuing an Issue branch whose Ticket PR against the Spec branch is open. Interactive UI verification stays local in the worktree without calling gh or uploading attachments.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::spec_ticket_continuation(&issue, SPEC_BRANCH, BRANCH, Some(PR_URL)),
+        },
+        Prompt {
             id: "prompt-bug-fresh",
             title: "Bug Ticket run, fresh",
             when: "Starts the implement session on an issue labelled bug: diagnose before changing code, then implement only if reproduced. Security fixes and Base fixes keep their own flow.",
@@ -1064,6 +1085,28 @@ mod tests {
         assert!(!fresh.contains("Merge base commit:"), "{fresh}");
     }
 
+    #[test]
+    fn spec_ticket_prompts_are_listed_on_the_prompts_page() {
+        let prompts = prompts();
+        for id in [
+            "prompt-spec-ticket-fresh",
+            "prompt-spec-ticket-continuation",
+            "prompt-spec-ticket-continuation-pr",
+        ] {
+            let prompt = prompts
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert!(
+                prompt
+                    .text
+                    .contains("without calling `gh` or uploading attachments"),
+                "{id}: {}",
+                prompt.text
+            );
+        }
+    }
+
     /// The golden-file test: the page carries the fragment as rendered now.
     /// The crates.io package leaves `site/` out, so it skips there.
     #[test]
@@ -1108,6 +1151,9 @@ mod tests {
                 "prompt-fresh"
                     | "prompt-continuation"
                     | "prompt-continuation-pr"
+                    | "prompt-spec-ticket-fresh"
+                    | "prompt-spec-ticket-continuation"
+                    | "prompt-spec-ticket-continuation-pr"
                     | "prompt-bug-fresh"
                     | "prompt-bug-continuation"
                     | "prompt-bug-continuation-pr"
