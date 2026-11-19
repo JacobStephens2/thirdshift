@@ -319,7 +319,7 @@ removes that row from view immediately, before the save completes; if the
 save fails, the row returns with the error shown on it. An inline dismissal shows a temporary
 `Dismissed <subject> · Undo` notice; Undo restores that Command's row. Notices
 stay while hovered, focused, saving or showing an error. Command details also
-keeps Dismiss and Undo. Both immediately
+keeps Dismiss and Undo. In Command details, both immediately
 show “Dismissing…” or
 “Taking back dismissal…” while the request is pending. The button stays disabled
 through live updates to prevent duplicate submissions. A failed request shows
