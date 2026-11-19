@@ -3718,9 +3718,10 @@ Delivery checks out the head branch in a Worktree, marks a draft ready, merges
 the Base branch, pushes and watches CI. Conflict, CI-fix and Foreign-commit review
 Repairs receive `.thirdshift-review-input.md`: the PR title and body, linked
 closing issues and only Trusted account comments. The file is refreshed before
-each session, including a Resume. A title or body edit to one of those closing
-issues by an account that is not a Trusted account, made since a few minutes
-before the Fix run started, fails the run instead of starting that session.
+each session, including a Resume. A title or body edit to any closing
+issue (retaining previously linked ones during the run) by an account that is
+not a Trusted account, made since a few minutes before the Fix run started,
+fails the run before continuing with that session, pushing or merging.
 Repairs share the usual five-session cap,
 Check re-run and optional Base fix. A Fix run starts no implementation or initial
 Standards/Spec review session.
@@ -3855,12 +3856,13 @@ unpushed commits keep it.
 The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
 the Spec and the posted comment says it used the pull request body alone.
-Before writing `.thirdshift-review-input.md`, before and after each Step,
-session, Repair and Resume, and before Delivery pushes fixes or posts its
-comment, thirdshift checks every linked closing issue: a title or body edit by
-an account that is not a Trusted account, made since a few minutes before the
-Review run started, stops the run without starting the next session or
-publishing.
+Before writing `.thirdshift-review-input.md`, before and after each Step, session,
+Repair and Resume, before Delivery pushes fixes or posts its comment, and through
+any Self-merge, thirdshift checks every linked closing issue (including any
+linked earlier in the run): a title or body edit by an account that is not a
+Trusted account, made since a few minutes before the Review run started, stops
+the run without starting the next session, converting the pull request to a
+draft, pushing or merging.
 Without `--recommend-only`, the session addresses findings using the same rules
 as a Ticket run: it runs each behavior finding's test or command before deciding,
 fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
@@ -3956,9 +3958,10 @@ an optional `security-review` Step follows the editing Steps before `delivery`
 pushes fixes and posts the comment. Custom pull-request Processes can
 also run skill and command Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
 the filtered input is in `.thirdshift-review-input.md`. All linked closing issues
-are checked against untrusted title or body edits since a few minutes before the
-Process started before writing that file, around every Step, session, Repair and
-Resume, and before Delivery pushes or comments. This version keeps these
+(retaining previously linked ones during the run) are checked against untrusted
+title or body edits since a few minutes before the Process started before
+writing that file, around every Step, session, Repair and Resume, and before
+Delivery or Self-merge pushes, comments or merges. This version keeps these
 Steps sequential and requires `review-and-address` before `delivery`, optionally
 followed directly by `self-merge`. Copied Processes retain the opt-in merge choice.
 

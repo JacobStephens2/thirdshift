@@ -1546,100 +1546,45 @@ fn review_input_does_not_follow_a_symlink_outside_the_worktree() {
     assert_eq!(scenario.launch_git(&["branch", "--list", "colleague"]), "");
 }
 
-#[test]
-fn untrusted_closing_issue_edit_before_review_refuses_input_and_session() {
-    for (custom, recommend_only, kind, minutes_ago, expected_stop) in [
-        (false, false, "body", 0, true),
-        (false, true, "title", 0, true),
-        (true, false, "body", 0, true),
-        (false, false, "body", 10, false),
-    ] {
-        let scenario = Scenario::new();
-        let outside = scenario.path("outside-secret.txt");
-        std::fs::write(&outside, "operator secret\n").unwrap();
-        let url = pull_request(&scenario);
-        if expected_stop {
-            // If `.thirdshift-review-input.md` is written before checking closing
-            // issues, `write_review_input` fails on the symlink instead of UntrustedEdit.
-            commit_review_input_symlink(&scenario, "colleague", &outside);
-        }
-        scenario.issue_is(8, "OPEN");
-        let at = if minutes_ago == 0 {
-            (chrono::Utc::now() - chrono::TimeDelta::seconds(30)).to_rfc3339()
-        } else {
-            (chrono::Utc::now() - chrono::TimeDelta::minutes(minutes_ago)).to_rfc3339()
-        };
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([
-            {"url": scenario.issue_url(7)},
-            {"url": scenario.issue_url(8)},
-        ]);
-        state["edits"] = json!({
-            "7": [{"kind": "body", "by": "acme", "at": "2999-01-01T00:00:00Z"}],
-            "8": [{"kind": kind, "by": "outsider", "at": at}],
-        });
-        scenario.write_gh_state(&state);
-        scenario.agent_does(
-            "printf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
-        );
+#[derive(Clone, Copy)]
+enum ReviewInvocation {
+    Review,
+    RecommendOnly,
+    CustomCopy(&'static str),
+}
 
-        let args = if custom {
-            let shown = scenario.run(&["process", "show", "review-run"]);
-            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-            let directory = scenario.path("home/.thirdshift/processes");
-            std::fs::create_dir_all(&directory).unwrap();
-            std::fs::write(directory.join("custom-review.toml"), shown.stdout).unwrap();
-            vec![
-                "process".to_string(),
-                "custom-review".to_string(),
-                "pull-request".to_string(),
-                url.clone(),
-            ]
-        } else if recommend_only {
-            vec![
-                "review".to_string(),
-                url.clone(),
-                "--recommend-only".to_string(),
-            ]
-        } else {
-            vec!["review".to_string(), url.clone()]
-        };
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let result = scenario.run(&arg_refs);
-
-        if expected_stop {
-            let run_name = if custom { "Process" } else { "Review run" };
-            assert_eq!(result.code, Some(1), "{}", result.stderr);
-            assert!(
-                result.stderr.contains(&format!(
-                    "#8 {kind} edited since the {run_name} started by an account that is not a Trusted account; starting no further session"
-                )),
-                "{}",
-                result.stderr
-            );
-            assert!(!result.stderr.contains("symlink"), "{}", result.stderr);
-            assert_eq!(
-                std::fs::read_to_string(&outside).unwrap(),
-                "operator secret\n"
-            );
-            assert!(
-                scenario.claude_calls().is_empty(),
-                "{:?}",
-                scenario.claude_calls()
-            );
-            assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
-            assert_eq!(
-                scenario
-                    .launch_git(&["worktree", "list", "--porcelain"])
-                    .matches("worktree ")
-                    .count(),
-                1
-            );
-        } else {
-            assert_eq!(result.code, Some(0), "{}", result.stderr);
-            assert_eq!(scenario.claude_calls().len(), 1);
+impl ReviewInvocation {
+    fn run_name(self) -> &'static str {
+        match self {
+            Self::Review | Self::RecommendOnly => "Review run",
+            Self::CustomCopy(_) => "Process",
         }
     }
+
+    fn run(self, scenario: &Scenario, url: &str) -> support::RunResult {
+        match self {
+            Self::Review => scenario.run(&["review", url]),
+            Self::RecommendOnly => scenario.run(&["review", url, "--recommend-only"]),
+            Self::CustomCopy(name) => {
+                let shown = scenario.run(&["process", "show", "review-run"]);
+                assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+                write_custom_process(scenario, name, &shown.stdout);
+                scenario.run(&["process", name, "pull-request", url])
+            }
+        }
+    }
+}
+
+fn pr_with_closing_issues(scenario: &Scenario, issues: &[u32]) -> String {
+    let url = pull_request(scenario);
+    let refs: Vec<_> = issues
+        .iter()
+        .map(|issue| json!({"url": scenario.issue_url(*issue)}))
+        .collect();
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!(refs);
+    scenario.write_gh_state(&state);
+    url
 }
 
 fn write_custom_process(scenario: &Scenario, name: &str, body: &str) {
@@ -1659,21 +1604,92 @@ fn assert_untrusted_edit_stop(result: &support::RunResult, issue: u32, kind: &st
     );
 }
 
+fn assert_no_comment_or_push(scenario: &Scenario, unpushed_file: Option<&str>) {
+    if let Some(file) = unpushed_file {
+        assert!(scenario.origin_file("colleague", file).is_none());
+    }
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+}
+
+#[test]
+fn untrusted_closing_issue_edit_before_review_refuses_input_and_session() {
+    for (invocation, kind, minutes_ago, expected_stop) in [
+        (ReviewInvocation::Review, "body", 0, true),
+        (ReviewInvocation::RecommendOnly, "title", 0, true),
+        (
+            ReviewInvocation::CustomCopy("custom-review"),
+            "body",
+            0,
+            true,
+        ),
+        (ReviewInvocation::Review, "body", 10, false),
+    ] {
+        let scenario = Scenario::new();
+        let outside = scenario.path("outside-secret.txt");
+        std::fs::write(&outside, "operator secret\n").unwrap();
+        scenario.issue_is(8, "OPEN");
+        let url = pr_with_closing_issues(&scenario, &[7, 8]);
+        if expected_stop {
+            // If `.thirdshift-review-input.md` is written before checking closing
+            // issues, `write_review_input` fails on the symlink instead of UntrustedEdit.
+            commit_review_input_symlink(&scenario, "colleague", &outside);
+        }
+        let at = if minutes_ago == 0 {
+            (chrono::Utc::now() - chrono::TimeDelta::seconds(30)).to_rfc3339()
+        } else {
+            (chrono::Utc::now() - chrono::TimeDelta::minutes(minutes_ago)).to_rfc3339()
+        };
+        let mut state = scenario.gh_state();
+        state["edits"] = json!({
+            "7": [{"kind": "body", "by": "acme", "at": "2999-01-01T00:00:00Z"}],
+            "8": [{"kind": kind, "by": "outsider", "at": at}],
+        });
+        scenario.write_gh_state(&state);
+        scenario.agent_does(
+            "printf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+        );
+
+        let result = invocation.run(&scenario, &url);
+
+        if expected_stop {
+            assert_untrusted_edit_stop(&result, 8, kind, invocation.run_name());
+            assert!(!result.stderr.contains("symlink"), "{}", result.stderr);
+            assert_eq!(
+                std::fs::read_to_string(&outside).unwrap(),
+                "operator secret\n"
+            );
+            assert!(
+                scenario.claude_calls().is_empty(),
+                "{:?}",
+                scenario.claude_calls()
+            );
+            assert_no_comment_or_push(&scenario, None);
+            assert_eq!(
+                scenario
+                    .launch_git(&["worktree", "list", "--porcelain"])
+                    .matches("worktree ")
+                    .count(),
+                1
+            );
+        } else {
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            assert_eq!(scenario.claude_calls().len(), 1);
+        }
+    }
+}
+
 #[test]
 fn untrusted_closing_issue_edit_during_review_and_resume_stops() {
     let future = "2999-01-01T00:00:00Z";
-    for (custom, recommend_only, resume, run_name) in [
-        (false, false, false, "Review run"),
-        (false, true, false, "Review run"),
-        (true, false, false, "Process"),
-        (false, false, true, "Review run"),
-        (true, false, true, "Process"),
+    for (invocation, recommend_only, resume) in [
+        (ReviewInvocation::Review, false, false),
+        (ReviewInvocation::RecommendOnly, true, false),
+        (ReviewInvocation::CustomCopy("custom-review"), false, false),
+        (ReviewInvocation::Review, false, true),
+        (ReviewInvocation::CustomCopy("custom-review"), false, true),
     ] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
 
         let commit_fix = if recommend_only {
             ""
@@ -1698,36 +1714,11 @@ printf '## Standards\nNo findings.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINAL
             "printf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
         );
 
-        let args = if custom {
-            let shown = scenario.run(&["process", "show", "review-run"]);
-            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-            write_custom_process(&scenario, "custom-review", &shown.stdout);
-            vec![
-                "process".to_string(),
-                "custom-review".to_string(),
-                "pull-request".to_string(),
-                url.clone(),
-            ]
-        } else if recommend_only {
-            vec![
-                "review".to_string(),
-                url.clone(),
-                "--recommend-only".to_string(),
-            ]
-        } else {
-            vec!["review".to_string(), url.clone()]
-        };
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let result = scenario.run(&arg_refs);
+        let result = invocation.run(&scenario, &url);
 
-        assert_untrusted_edit_stop(&result, 7, "body", run_name);
+        assert_untrusted_edit_stop(&result, 7, "body", invocation.run_name());
         assert_eq!(scenario.claude_calls().len(), 1);
-        assert!(
-            scenario
-                .origin_file("colleague", "review-fix.txt")
-                .is_none()
-        );
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
     }
 }
 
@@ -1740,10 +1731,7 @@ fn untrusted_closing_issue_edit_stops_across_custom_process_steps() {
     // Case A: preflight `command` step edits closing issue -> stops before `Skill` step.
     {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
         write_custom_process(
             &scenario,
             "preflight-edit",
@@ -1781,16 +1769,13 @@ worktree = "review"
             "{:?}",
             scenario.claude_calls()
         );
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, None);
     }
 
     // Cases B & C: `Skill` step edits closing issue cleanly or with killed work -> stops before next step or Resume.
     for resume in [false, true] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
         write_custom_process(
             &scenario,
             "skill-before-review",
@@ -1831,16 +1816,13 @@ printf 'Skill report.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
         let result = scenario.run(&["process", "skill-before-review", "pull-request", &url]);
         assert_untrusted_edit_stop(&result, 7, "title", "Process");
         assert_eq!(scenario.claude_calls().len(), 1);
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, None);
     }
 
     // Case D: `review-and-address` commits a fix and edits closing issue -> stops before post-review `Skill` step and delivery.
     {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
         write_custom_process(
             &scenario,
             "review-then-skill",
@@ -1876,21 +1858,13 @@ printf '## Standards\nNo findings.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINAL
         let result = scenario.run(&["process", "review-then-skill", "pull-request", &url]);
         assert_untrusted_edit_stop(&result, 7, "title", "Process");
         assert_eq!(scenario.claude_calls().len(), 1);
-        assert!(
-            scenario
-                .origin_file("colleague", "review-fix.txt")
-                .is_none()
-        );
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
     }
 
     // Case E: post-review `command` step edits closing issue -> stops before delivery.
     {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
         write_custom_process(
             &scenario,
             "review-then-command",
@@ -1923,24 +1897,21 @@ printf '## Standards\nNo findings.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINAL
         let result = scenario.run(&["process", "review-then-command", "pull-request", &url]);
         assert_untrusted_edit_stop(&result, 7, "title", "Process");
         assert_eq!(scenario.claude_calls().len(), 1);
-        assert!(
-            scenario
-                .origin_file("colleague", "review-fix.txt")
-                .is_none()
-        );
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
     }
 }
 
 #[test]
 fn newly_linked_closing_issue_during_review_is_checked_before_delivery() {
     let future = "2999-01-01T00:00:00Z";
-    for recommend_only in [false, true] {
+    for (invocation, recommend_only) in [
+        (ReviewInvocation::Review, false),
+        (ReviewInvocation::RecommendOnly, true),
+    ] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
         scenario.issue_is(8, "OPEN");
+        let url = pr_with_closing_issues(&scenario, &[7]);
         let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
         state["edits"]["8"] = json!([{"kind": "body", "by": "outsider", "at": future}]);
         scenario.write_gh_state(&state);
 
@@ -1956,20 +1927,11 @@ fn newly_linked_closing_issue_during_review_is_checked_before_delivery() {
 printf '## Standards\nNo findings.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE""#
         ));
 
-        let result = if recommend_only {
-            scenario.run(&["review", &url, "--recommend-only"])
-        } else {
-            scenario.run(&["review", &url])
-        };
+        let result = invocation.run(&scenario, &url);
 
-        assert_untrusted_edit_stop(&result, 8, "body", "Review run");
+        assert_untrusted_edit_stop(&result, 8, "body", invocation.run_name());
         assert_eq!(scenario.claude_calls().len(), 1);
-        assert!(
-            scenario
-                .origin_file("colleague", "review-fix.txt")
-                .is_none()
-        );
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
     }
 }
 
@@ -1978,11 +1940,8 @@ fn untrusted_closing_issue_edit_during_security_review_stops_before_resume_and_d
     let future = "2999-01-01T00:00:00Z";
     for (resume, exit_nonzero) in [(false, false), (true, false), (false, true)] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
         scenario.user_config_is("[security]\nreview = true\n");
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
         write_custom_process(
             &scenario,
             "review-then-security",
@@ -2025,7 +1984,7 @@ printf '%s\n' 'Security review: {{"unaddressed_count":0,"findings":[],"pre_exist
         let result = scenario.run(&["process", "review-then-security", "pull-request", &url]);
         assert_untrusted_edit_stop(&result, 7, "body", "Process");
         assert_eq!(scenario.claude_calls().len(), 2);
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, None);
     }
 }
 
@@ -2034,10 +1993,7 @@ fn untrusted_closing_issue_edit_during_delivery_validation_stops_before_resume_a
     let future = "2999-01-01T00:00:00Z";
     for resume in [false, true] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
         scenario.agent_does_in_session(
             1,
             "printf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
@@ -2073,24 +2029,20 @@ printf 'Final validation passed.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
         let result = scenario.run(&["review", &url, "--security-review"]);
         assert_untrusted_edit_stop(&result, 7, "title", "Review run");
         assert_eq!(scenario.claude_calls().len(), 3);
-        assert!(scenario.origin_file("colleague", "security.txt").is_none());
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("security.txt"));
     }
 }
 
 #[test]
 fn untrusted_closing_issue_edit_during_delivery_ci_watch_stops_before_repair_and_comment() {
     let future = "2999-01-01T00:00:00Z";
-    for (custom, ci_failing, run_name) in [
-        (false, true, "Review run"),
-        (true, true, "Process"),
-        (false, false, "Review run"),
+    for (invocation, ci_failing) in [
+        (ReviewInvocation::Review, true),
+        (ReviewInvocation::CustomCopy("custom-ci-watch"), true),
+        (ReviewInvocation::Review, false),
     ] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
 
         let ci = if ci_failing {
             r#"[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]"#
@@ -2117,35 +2069,24 @@ printf 'Repaired CI.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#,
         );
 
-        let result = if custom {
-            let shown = scenario.run(&["process", "show", "review-run"]);
-            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-            write_custom_process(&scenario, "custom-ci-watch", &shown.stdout);
-            scenario.run(&["process", "custom-ci-watch", "pull-request", &url])
-        } else {
-            scenario.run(&["review", &url])
-        };
+        let result = invocation.run(&scenario, &url);
 
-        assert_untrusted_edit_stop(&result, 7, "body", run_name);
+        assert_untrusted_edit_stop(&result, 7, "body", invocation.run_name());
         assert_eq!(scenario.claude_calls().len(), 1);
-        assert!(scenario.origin_file("colleague", "ci-fix.txt").is_none());
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("ci-fix.txt"));
     }
 }
 
 #[test]
 fn untrusted_closing_issue_edit_during_delivery_repair_stops_before_resume_push_and_comment() {
     let future = "2999-01-01T00:00:00Z";
-    for (custom, resume, run_name) in [
-        (false, false, "Review run"),
-        (true, false, "Process"),
-        (false, true, "Review run"),
+    for (invocation, resume) in [
+        (ReviewInvocation::Review, false),
+        (ReviewInvocation::CustomCopy("custom-repair"), false),
+        (ReviewInvocation::Review, true),
     ] {
         let scenario = Scenario::new();
-        let url = pull_request(&scenario);
-        let mut state = scenario.gh_state();
-        state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-        scenario.write_gh_state(&state);
+        let url = pr_with_closing_issues(&scenario, &[7]);
 
         scenario.agent_does_in_session(
             1,
@@ -2174,19 +2115,11 @@ printf 'Repaired CI.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
         );
         scenario.agent_does("printf 'Repaired CI.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
 
-        let result = if custom {
-            let shown = scenario.run(&["process", "show", "review-run"]);
-            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-            write_custom_process(&scenario, "custom-repair", &shown.stdout);
-            scenario.run(&["process", "custom-repair", "pull-request", &url])
-        } else {
-            scenario.run(&["review", &url])
-        };
+        let result = invocation.run(&scenario, &url);
 
-        assert_untrusted_edit_stop(&result, 7, "title", run_name);
+        assert_untrusted_edit_stop(&result, 7, "title", invocation.run_name());
         assert_eq!(scenario.claude_calls().len(), 2);
-        assert!(scenario.origin_file("colleague", "ci-fix.txt").is_none());
-        assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+        assert_no_comment_or_push(&scenario, Some("ci-fix.txt"));
     }
 }
 
@@ -2194,10 +2127,7 @@ printf 'Repaired CI.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 fn untrusted_closing_issue_edit_before_push_fixes_stops_push_and_comment() {
     let future = "2999-01-01T00:00:00Z";
     let scenario = Scenario::new();
-    let url = pull_request(&scenario);
-    let mut state = scenario.gh_state();
-    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
-    scenario.write_gh_state(&state);
+    let url = pr_with_closing_issues(&scenario, &[7]);
 
     let marker = scenario.path("push-edited");
     let gh = scenario.path("bin/gh");
@@ -2228,10 +2158,5 @@ printf '## Standards\nFixed export.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINA
     let result = scenario.run(&["review", &url]);
     assert_untrusted_edit_stop(&result, 7, "body", "Review run");
     assert_eq!(scenario.claude_calls().len(), 1);
-    assert!(
-        scenario
-            .origin_file("colleague", "review-fix.txt")
-            .is_none()
-    );
-    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+    assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
 }

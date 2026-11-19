@@ -14,21 +14,10 @@ pub(super) struct Delivery<'a> {
     pub mode: Mode,
     pub merge: bool,
     pub input: &'a ReviewInput,
-    pub run_started: DateTime<Utc>,
-    pub run_name: &'static str,
+    pub guard: Guard<'a>,
 }
 
 impl Delivery<'_> {
-    fn check_closing_issues(&self) -> Result<()> {
-        check_closing_issues(
-            self.github,
-            self.pr,
-            &self.input.closing_issues,
-            self.run_started,
-            self.run_name,
-        )
-    }
-
     pub fn run(
         &self,
         findings: &str,
@@ -42,6 +31,7 @@ impl Delivery<'_> {
             snapshot,
             mode,
             input,
+            guard,
             ..
         } = *self;
         let mut stack = String::new();
@@ -63,20 +53,22 @@ impl Delivery<'_> {
         let readiness = match mode {
             Mode::RecommendOnly => {
                 unchanged_checkout(git, snapshot)?;
-                self.check_closing_issues()
+                guard.check_issues()
             }
             Mode::Address => self.address(&mut pushed, &mut ci_report, repair_cap, &mut repair),
         };
-        if readiness.as_ref().is_err_and(is_untrusted_edit) {
+        if readiness
+            .as_ref()
+            .is_err_and(crate::delivery::ClosingIssues::is_untrusted_edit)
+        {
             return readiness;
         }
         let current = if mode == Mode::RecommendOnly {
-            unchanged(github, pr, snapshot)?;
+            guard.unchanged(snapshot)?;
             None
         } else {
-            Some(compatible(github, pr, snapshot)?)
+            Some(guard.compatible(snapshot)?)
         };
-        self.check_closing_issues()?;
         let mut marker = serde_json::json!({"reviewed_head": snapshot.head});
         let status = if let Some(head) = &pushed {
             marker["pushed_head"] = head.clone().into();
@@ -137,9 +129,9 @@ impl Delivery<'_> {
     ) -> Result<()> {
         let Self {
             git,
-            github,
             pr,
             snapshot,
+            guard,
             ..
         } = *self;
         *pushed = self.push_fixes(snapshot)?;
@@ -154,15 +146,13 @@ impl Delivery<'_> {
         let mut watch = Watch::new(&pr.issue);
         let mut repairs = 0;
         loop {
-            unchanged(github, pr, &expected)?;
-            self.check_closing_issues()?;
+            guard.unchanged(&expected)?;
             let ci = watch
                 .assess(
                     &expected.head,
                     Some(&base),
                     &mut || {
-                        unchanged(github, pr, &expected)?;
-                        self.check_closing_issues()?;
+                        guard.unchanged(&expected)?;
                         Ok(Some(expected.head.clone()))
                     },
                     &mut |_| Ok(false),
@@ -171,7 +161,7 @@ impl Delivery<'_> {
             match ci {
                 Ci::Absent | Ci::Passed => {
                     self.require_mergeable(&expected.head)?;
-                    self.check_closing_issues()?;
+                    guard.check_issues()?;
                     report.push_str(&format!(
                         "\n\n### CI passed or absent at {}\n",
                         expected.head
@@ -180,7 +170,7 @@ impl Delivery<'_> {
                 }
                 Ci::Superseded => bail!("pull request changed during Review run CI watch"),
                 Ci::Failed(failed) => {
-                    self.check_closing_issues()?;
+                    guard.check_issues()?;
                     report.push_str(&format!(
                         "\n\n### CI red at {}\n\n{}{}\nInherited failures on {} at {}:\n{}",
                         expected.head,
@@ -202,8 +192,6 @@ impl Delivery<'_> {
                     repairs += 1;
                     progress::step(format!("CI red; starting Repair {repairs} of {repair_cap}"));
                     let entry = repair(session::Kind::Repair(repairs), &failed, &expected)?;
-                    unchanged(github, pr, &expected)?;
-                    self.check_closing_issues()?;
                     report.push_str(&format!("\n\n### Repair {repairs}\n\n{entry}"));
                     let next = self.push_fixes(&expected)?;
                     watch.after_repair(expected.head.clone(), failed);
@@ -228,25 +216,22 @@ impl Delivery<'_> {
                 && git.succeeds(&["merge-base", "--is-ancestor", &snapshot.head, &head])?,
             "review fixes must be committed on the pull request's captured branch without rewriting history"
         );
-        unchanged(self.github, self.pr, snapshot)?;
-        self.check_closing_issues()?;
+        self.guard.unchanged(snapshot)?;
         if head == snapshot.head {
             return Ok(None);
         }
         self.require_mergeable(&snapshot.head)?;
-        self.check_closing_issues()?;
         // A matching lease stays a fast-forward: the captured head is an ancestor.
         // It also catches a receive-time rewind that a plain push would overwrite.
         git.push_checked(&snapshot.branch, &head, Some(&snapshot.head), || {
-            compatible(self.github, self.pr, snapshot)?;
-            self.check_closing_issues()
+            self.guard.compatible(snapshot).map(|_| ())
         })?;
         Ok(Some(head))
     }
 
     fn unchanged_head(&self, head: &str) -> Result<()> {
         if self.merge {
-            let current = compatible(self.github, self.pr, self.snapshot)?;
+            let current = self.guard.compatible(self.snapshot)?;
             if current.head != head {
                 return Err(crate::failed_run::MergeHold {
                     reason: format!("head moved after review; expected {head}, actual {}; the PR stays ready for review", current.head),
@@ -258,7 +243,7 @@ impl Delivery<'_> {
             head: head.into(),
             ..self.snapshot.clone()
         };
-        unchanged(self.github, self.pr, &expected)
+        self.guard.unchanged(&expected)
     }
 
     /// GitHub may still serve the pre-push head briefly after a successful push.
@@ -268,7 +253,7 @@ impl Delivery<'_> {
         let mut waiting_line = poll::WaitingLine::new();
         let mut backoff = poll::Backoff::new();
         loop {
-            let current = compatible(self.github, self.pr, snapshot)?;
+            let current = self.guard.compatible(snapshot)?;
             if current.head == head {
                 return Ok(());
             }
