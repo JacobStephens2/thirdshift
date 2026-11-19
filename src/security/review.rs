@@ -178,31 +178,35 @@ struct ProofOfConcept {
 impl OldFinding {
     fn reproduction(&self) -> Result<Reproduction> {
         let proof = &self.proof_of_concept;
-        if [
-            &self.fingerprint,
-            &self.title,
-            &self.description,
-            &proof.test,
-            &proof.command,
-            &proof.notes,
-        ]
-        .iter()
-        .any(|text| text.trim().is_empty())
-            || self.fingerprint.contains(['\r', '\n', '`'])
-            || self.title.contains(['\r', '\n'])
-            || proof.head_exit_code <= 0
-            || proof.merge_base_exit_code <= 0
-        {
-            bail!(
-                "Security review's private report lacks a valid old finding and failing proof-of-concept runs"
-            );
+        for (field, text) in [
+            ("fingerprint", &self.fingerprint),
+            ("title", &self.title),
+            ("description", &self.description),
+            ("test", &proof.test),
+            ("command", &proof.command),
+            ("notes", &proof.notes),
+        ] {
+            if text.trim().is_empty() {
+                bail!("has an empty `{field}` field");
+            }
         }
-        let severity = Severity::parse(&proof.severity)
-            .context("Security review's private report has an invalid reproduced severity")?;
+        if self.fingerprint.contains(['\r', '\n', '`']) {
+            bail!("has a `fingerprint` with a newline or backtick");
+        }
+        if self.title.contains(['\r', '\n']) {
+            bail!("has a `title` with a newline");
+        }
+        if proof.head_exit_code <= 0 {
+            bail!("has a non-positive `head_exit_code`");
+        }
+        if proof.merge_base_exit_code <= 0 {
+            bail!("has a non-positive `merge_base_exit_code`");
+        }
+        let severity = Severity::parse(&proof.severity).context("has an invalid `severity`")?;
         let size = match proof.fix_size.as_str() {
             "single" => FixSize::Single,
             "spec" => FixSize::Spec,
-            _ => bail!("Security review's private report has an invalid reproduced fix size"),
+            _ => bail!("has an invalid `fix_size`"),
         };
         Ok(Reproduction {
             outcome: ReproductionOutcome::Reproduced { severity, size },
@@ -244,6 +248,46 @@ fn serde_field_name(error: &serde_json::Error) -> Option<String> {
         .strip_prefix("unknown field `")
         .or_else(|| message.strip_prefix("missing field `"))?;
     rest.split('`').next().map(str::to_string)
+}
+
+/// Whether the finding object carries `field` at its top level, where a
+/// nested missing-field error would otherwise misstate a misplaced field.
+fn has_top_level_field(element: &[u8], field: &str) -> bool {
+    serde_json::from_slice::<serde_json::Value>(element)
+        .ok()
+        .and_then(|value| value.as_object().map(|object| object.contains_key(field)))
+        .unwrap_or(false)
+}
+
+/// The field whose JSON type does not match the schema: every field is a
+/// string except `proof_of_concept` (an object) and its two exit codes
+/// (numbers). Names only, never values.
+fn type_mismatch_field(element: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(element).ok()?;
+    let object = value.as_object()?;
+    for (field, value) in object {
+        if field == "proof_of_concept" {
+            let Some(proof) = value.as_object() else {
+                return Some(field.clone());
+            };
+            for (proof_field, proof_value) in proof {
+                let mismatch = if matches!(
+                    proof_field.as_str(),
+                    "head_exit_code" | "merge_base_exit_code"
+                ) {
+                    !proof_value.is_number()
+                } else {
+                    !proof_value.is_string()
+                };
+                if mismatch {
+                    return Some(proof_field.clone());
+                }
+            }
+        } else if !value.is_string() {
+            return Some(field.clone());
+        }
+    }
+    None
 }
 
 /// Split a JSON array's top-level elements in document order, respecting
@@ -317,11 +361,17 @@ fn parse_report(bytes: &[u8]) -> Result<Vec<OldFinding>> {
         let finding: OldFinding = serde_json::from_slice(element).map_err(|error| {
             let message = error.to_string();
             if let Some(field) = serde_field_name(&error) {
-                if message.starts_with("unknown field") {
+                // A field present at the top level but missing inside
+                // proof_of_concept is misplaced, not missing.
+                if message.starts_with("unknown field") || has_top_level_field(element, &field) {
                     invalid_report(format!("unknown field `{field}` at finding {index}"))
                 } else {
                     invalid_report(format!("missing field `{field}` at finding {index}"))
                 }
+            } else if let Some(field) = type_mismatch_field(element) {
+                invalid_report(format!(
+                    "invalid type for field `{field}` at finding {index}"
+                ))
             } else {
                 invalid_report(format!("invalid field type at finding {index}"))
             }
@@ -347,13 +397,9 @@ fn load_report(report: &Path, review: &Result<Review>) -> Result<Vec<(OldFinding
         .into_iter()
         .enumerate()
         .map(|(position, finding)| {
-            let reproduction = finding.reproduction().map_err(|error| {
-                let cause = format!("{error:#}");
-                let cause = cause
-                    .strip_prefix("Security review's private report ")
-                    .unwrap_or(&cause);
-                invalid_report(format!("finding {} {cause}", position + 1))
-            })?;
+            let reproduction = finding
+                .reproduction()
+                .map_err(|error| invalid_report(format!("finding {} {:#}", position + 1, error)))?;
             Ok((finding, reproduction))
         })
         .collect()

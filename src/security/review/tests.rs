@@ -79,3 +79,41 @@ fn malformed_final_messages_produce_a_public_incomplete_hold() {
     let missing = Outcome::of(Review::from_final_message(None), None);
     assert!(missing.hold().is_some());
 }
+
+#[test]
+fn poc_first_top_level_severity_is_named_unknown() {
+    let report = br#"[{"proof_of_concept":{"test":"t","command":"c","head_exit_code":1,"merge_base_exit_code":1,"notes":"n"},"fingerprint":"fp-1","title":"T","description":"D","severity":"high","fix_size":"single"}]"#;
+    let error = match super::parse_report(report) {
+        Ok(_) => panic!("top-level shape should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        format!("{error}"),
+        "Security review's private report is invalid: unknown field `severity` at finding 1"
+    );
+}
+
+#[test]
+fn type_error_names_offending_field() {
+    let report = br#"[{"fingerprint":"fp-1","title":"T","description":"D","proof_of_concept":{"test":"t","command":"c","head_exit_code":"1","merge_base_exit_code":1,"notes":"n","severity":"high","fix_size":"single"}}]"#;
+    let error = match super::parse_report(report) {
+        Ok(_) => panic!("type error should fail"),
+        Err(error) => error,
+    };
+    assert!(format!("{error}").contains("`head_exit_code`"), "{error}");
+}
+
+#[test]
+fn empty_title_validation_names_title_field() {
+    let path = std::env::temp_dir().join(format!("ts-2298-{}.json", std::process::id()));
+    std::fs::write(&path, br#"[{"fingerprint":"fp-1","title":"","description":"D","proof_of_concept":{"test":"t","command":"c","head_exit_code":1,"merge_base_exit_code":1,"notes":"n","severity":"high","fix_size":"single"}}]"#).unwrap();
+    let review = super::Review::from_final_message(Some(
+        r#"Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":1}"#,
+    ));
+    let error = match super::load_report(&path, &review) {
+        Ok(_) => panic!("empty title should fail"),
+        Err(error) => error,
+    };
+    std::fs::remove_file(&path).ok();
+    assert!(format!("{error}").contains("`title`"), "{error}");
+}
