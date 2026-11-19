@@ -7,8 +7,8 @@ const { tmpdir, hostname } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
-const { createServer } = require('node:http');
 const { replaceRecord } = require('./records.cjs');
+const { createServer } = require('node:http');
 
 const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
 async function waitUntil(check, label) {
@@ -129,12 +129,30 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   assert.equal(await page.locator('.command').count(), 1, 'local machine filter');
   await page.goto(caller.origin);
   await remoteRows.first().waitFor();
-  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
-  await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
+  let releaseRefresh;
+  const refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
+  const holdRefresh = async route => {
+    const request = route.request();
+    if (new URL(request.url()).pathname === '/' && request.method() === 'GET' && !request.isNavigationRequest() && !request.redirectedFrom()) await refreshGate;
+    await route.continue();
+  };
+  await page.route(`${caller.origin}/**`, holdRefresh);
+  const undo = page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true });
+  try {
+    await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
+    await undo.waitFor();
+    assert.equal(await undo.isDisabled(), true, 'Undo waits for the Dismiss refresh before accepting another action');
+  } finally {
+    releaseRefresh();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
   // Wait for the owning machine's dismissed row, beyond optimistic removal.
-  // The notice can appear while Dismiss is pending, when Undo is ignored.
   await remoteRows.locator('form[action="/dismiss/undo"]').waitFor({ state: 'attached' });
-  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  await undo.click();
+  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  // Verify Undo survived a reload before starting a fresh notification baseline.
+  await page.reload();
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
   await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
@@ -148,6 +166,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await replaceRecord(remotePath, JSON.stringify(added));
   await remoteRows.locator('.subject[title="Process custom-build on acme/widgets"]').waitFor();
   await remoteRows.locator(':scope > .row-head > .ticket-progress').getByText('2 / 2 Tickets complete', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => notices.length), 0, 'a metadata update keeps the Needs you count unchanged');
   added.name = 'another-remote-command'; added.cause = 'Another remote problem';
   await replaceRecord(remotePath.replace('1-fixture', '2-fixture'), JSON.stringify(added));
   await page.waitForFunction(() => notices.length === 1);
