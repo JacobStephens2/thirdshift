@@ -18,6 +18,8 @@ Do not push: thirdshift pushes branch <Spec branch> after the optional Security 
 
 Update PR <pull request URL> using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.
 
+If the Spec diff against refs/remotes/origin/<base> modifies rendered UI files, run interactive UI verification with the `thirdshift-verify-ui` skill across refs/remotes/origin/<base> (matching `Before` captures) and `HEAD` (matching `After` captures), and attach unified `Before` and `After` Visual evidence to PR <pull request URL> via `gh pr edit --attach` when updating it with `thirdshift-pr` (leave Visual evidence out if the Spec makes no rendered UI changes).
+
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 
 Include "Closes #<n>" in the PR body.

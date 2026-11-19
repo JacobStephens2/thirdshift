@@ -1146,7 +1146,7 @@ Native macOS (including Intel macOS) and native Windows have no binary. Apple Si
 The user account that runs thirdshift needs:
 
 - The selected **Harness** installed and authenticated: **`claude`** (Claude Code, the default), **`codex`** (Codex CLI), **`agy`** (Google Antigravity CLI), **`grok`** (Grok Build), **`muse`** (Muse Code), **`opencode`** (OpenCode, with a configured Model provider), or **`kimi`** (Kimi Code CLI, signed in or with a configured provider). See [Harness, Model and Effort](#harness-model-and-effort) for each CLI's flags and quirks.
-- **`gh`** (GitHub CLI), logged in. For a fine-grained personal access token, grant repository permissions **Contents**, **Issues** and **Pull requests** read and write, plus **Actions** and **Commit statuses** read. If `check-runs` returns HTTP 403, CI watch, CI-fix Repairs and Score packets read the latest GitHub Actions workflow jobs instead, alongside commit statuses. Checks from non-Actions apps are unavailable through this fallback.
+- **`gh`** (GitHub CLI), logged in (`gh >= 2.103.2` to attach `.png` and H.264 `.mp4` **Visual evidence** via `--attach`). For a fine-grained personal access token, grant repository permissions **Contents**, **Issues** and **Pull requests** read and write, plus **Actions** and **Commit statuses** read. If `check-runs` returns HTTP 403, CI watch, CI-fix Repairs and Score packets read the latest GitHub Actions workflow jobs instead, alongside commit statuses. Checks from non-Actions apps are unavailable through this fallback.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 - **`node`** (Node.js) on `PATH`, for a [Security run](#security-runs) only: the Security audit's report validators run on it.
 
@@ -1167,7 +1167,7 @@ On Linux without a user manager, cleanup is best effort: each session carries a 
 File cleanup removes thirdshift's own worktree, local Issue branch and Command scratch, including the extracted Factory skills and session `mktemp` files. Paused Commands and failures with Recovery retain scratch until successful continuation or Dismissal; see [Logs](#logs). The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Files an agent creates outside Command scratch, such as a downloaded JDK in `~/.local/jdk/`, stay:
 
 - **Install the target repository's toolchains up front** (language runtimes, package managers, test tools), so the agents don't download their own on every Ticket run.
-- **For UI work, install the headless browser dependencies**, e.g. `libgbm1` on Ubuntu server, which headless Chromium needs. Without it, agents can't take screenshots to check a UI change and fall back to reading the code.
+- **For UI work, run `thirdshift setup` up front** to verify `gh >= 2.103.2`, `ffmpeg` on `PATH`, and Playwright headless Chromium readiness (including system libraries such as `libgbm1` on Ubuntu). Setup prints `Visual evidence: WARN` and install/upgrade commands when anything is missing and offers to install them interactively; when tools are absent or blocked, sessions record the explicit limitation under `## Evidence` rather than failing the PR.
 
 ### Usage and cost
 
@@ -2829,6 +2829,27 @@ skipped. While the repository is at its [Command limit](#the-command-limit), a P
 
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
+After saving the User config and any entered Credentials, `thirdshift setup`
+checks the host tools for pull request **Visual evidence**: `gh >= 2.103.2`,
+`ffmpeg` on `PATH`, and an installed Playwright Chromium executable. It checks
+Playwright's standard cache (`~/.cache/ms-playwright` on Linux,
+`~/Library/Caches/ms-playwright` on macOS), or `PLAYWRIGHT_BROWSERS_PATH` when
+set. A browser folder without an executable does not pass.
+
+Setup prints `Visual evidence: PASS` when all three are present. Otherwise it
+prints `Visual evidence: WARN (need ...)`, names the missing or outdated tools, and shows the exact repair
+commands: Homebrew on macOS; `apt` (including GitHub's package repository for
+an up-to-date `gh`) and Playwright's Chromium installation on Debian/Ubuntu.
+Playwright installation needs Node.js and npm; Setup includes their installation
+when Chromium is missing. On a terminal, one `Install or upgrade Visual evidence
+tools now? [y/N]` prompt offers to run those commands in the foreground.
+Enter or `N` leaves the host unchanged; `y` runs the commands, checks again,
+and reports the updated status. An installer failure or interruption warns and
+keeps the saved User config and Credentials; missing host tools later rely on
+the explicit limitation rule under `## Evidence`. Without a terminal, Setup only
+reports status and commands, runs no installer, and exits `0`. A passing check
+asks no install question.
+
 Read every setting with its value and default, read one, or set one:
 
 ```sh
@@ -3493,7 +3514,7 @@ Without `base-fix` or `base.fix`, or with `no-base-fix`, an Inherited failure fa
 Running thirdshift again on an issue picks up where the last Ticket run stopped ([ADR-0002](adr/0002-existing-issue-branch-means-continue.md)). It looks at the highest-numbered Issue branch:
 
 - **No Issue branch yet**: a fresh Ticket run creates `issue-<n>` from the Base branch.
-- **The branch exists with no pull request, or an open one**: the Ticket run is a **Continuation**. It checks out that branch, and the agent builds on its commits instead of starting over, then creates the pull request or updates the open one. With an open pull request, that pull request's base is the Base branch, whatever you have checked out.
+- **The branch exists with no pull request, or an open one**: the Ticket run is a **Continuation**. It checks out that branch, and the agent builds on its commits instead of starting over, then creates the pull request or updates the open one. With an open pull request, that pull request's base is the Base branch, whatever you have checked out. Whenever commits modify rendered UI files on the branch (or an open pull request lacks accurate Visual evidence), the session runs interactive UI verification and attaches or refreshes captures via `gh pr edit --attach`, leaving existing Visual evidence untouched when commits only alter non-UI backend or test files.
 - **The branch's pull request was merged or closed**: finished work is never reopened. The Ticket run starts fresh on the next number, `issue-<n>-branch-2`, `-3`, and so on. A number counts as used even if GitHub deleted the branch after merging.
 
 So you can retry a Failed ticket run with the same command, or start an issue on one server and continue it on another.
@@ -3562,7 +3583,7 @@ The Spec PR opens as a draft as soon as the first Ticket lands, titled from the 
 
 An Unready Ticket's checklist and Command log line also name its open blockers, marking those outside the Spec and those labelled `ready-for-agent`. For example: `#24 unready: labelled ready-for-human; blocked by #99 (outside the Spec; ready-for-agent)`. The Spec run reports outside blockers but never starts them. Its Command record retains the Ticket and open blocker titles read with the graph, visible in `thirdshift show <command> --json`. Titles are best effort: `null` means no title was captured, including in older records; `show` does not fetch missing titles from GitHub.
 
-The Spec review session reviews the whole Spec branch against the Base branch and the Spec. Once it is marked ready, the Spec PR goes through the same step 6 as a Ticket run's pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets, with the same Check re-run after a CI-fix Repair that leaves the head unchanged. Inherited failures are told apart the same way everywhere: the Spec PR's against the Base branch, and a Ticket's against the Spec branch, its Base branch, with the cause shown on the Ticket's line of the checklist.
+The **Spec review** session reviews the whole Spec branch against the Base branch and the Spec, captures unified `Before` (`refs/remotes/origin/<base>`) and `After` (`HEAD`) **Visual evidence** via `thirdshift-verify-ui` when the Spec modifies rendered UI files, and attaches them to the Spec PR via `gh pr edit --attach` (child Ticket runs run interactive UI verification locally in their **Worktree** without calling `gh` or uploading attachments for child Ticket PRs). Once it is marked ready, the Spec PR goes through the same step 6 as a Ticket run's pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets, with the same Check re-run after a CI-fix Repair that leaves the head unchanged. Inherited failures are told apart the same way everywhere: the Spec PR's against the Base branch, and a Ticket's against the Spec branch, its Base branch, with the cause shown on the Ticket's line of the checklist.
 
 Tickets always merge into the Spec branch, whatever the command or the User config says. `merge` (or `--merge`, or `merge.always = true` without `no-merge`) applies to the Spec PR alone: the Spec run ends with the Self-merge of the Spec PR into the Base branch, then deletes the Spec branch on `origin` and closes the Spec if the merge did not. Without it, the Spec run ends with the Spec PR ready for review. A Spec PR that fails from the Spec review on follows the [Failed ticket run](#failed-ticket-runs) rules for its pull request, back to draft unless only the Self-merge could not happen (a policy refusal), and the Spec run exits `1`.
 
@@ -3601,7 +3622,12 @@ Running the Spec again picks up where the last Spec run stopped. The Spec branch
 ## Fix runs
 
 Use a **Fix run** when a delivered pull request needs its Base branch merged in,
-a merge conflict resolved or CI repaired. On Ready for review rows with CI red
+a merge conflict resolved or CI repaired. Whenever a Fix run or **Delivery** **Repair**
+(conflict, CI-fix, or review repair) commits changes to rendered UI files on an
+open pull request (outside child Ticket runs), it runs interactive UI verification
+and publishes missing **Visual evidence** or refreshes stale captures via
+`gh pr edit --attach`, leaving existing **Visual evidence** untouched when commits
+only alter non-UI backend or test files. On Ready for review rows with CI red
 or Merge conflict, the Console offers **Start Fix run** with confirmation of the
 pull request, repository and owning machine. It requires current `run` permission
 and a known Launch directory on that machine, and uses its User config and CLI
@@ -4205,7 +4231,7 @@ Before any session, a command checks its review's Harness with the same PATH, Mo
 
 If a non-default review Harness passes preflight but returns a Harness error before any turns or tokens, thirdshift warns in the same way and retries the review once on the default Harness. A failure on the default, a model refusal or a failure after work starts is not retried. Each attempt keeps its own Session trace and `.models.json`; the retry uses `security-review-fallback`, also selected by `logs --session security-review`. Those records, the Command log and the Run notification name the Harness each attempt actually ran on; the `Built with` line still names the Command's. A Continuation reads `security.harness` again and applies these checks again. A review on `security.harness` that reaches a Plan-usage limit, even after work began, moves on too: to the next of `security.routes`, else of `harness.routes`, else to `harness.default`, with its uncommitted changes discarded as for any routed Step. With routes configured, one that cannot start walks the same routes instead of this one retry; see [Routing by Plan usage](#routing-by-plan-usage).
 
-The session reads the relevant attack-class guidance and supporting code without delegated auditors or the full audit workflow. It fixes only findings reproduced by a failing proof-of-concept test, keeps that test and commits the fix. Unaddressed introduced findings appear under Security in the PR's Unaddressed findings. A Ticket run or Spec run asked to Self-merge leaves the PR ready for review and fails with the findings named if any remain, or if the review was refused or incomplete. A Ticket run or Spec run not asked to merge records the outcome and continues. An old finding, whose proof-of-concept also fails at the pinned merge base, is reported in a private file under the repository's logs (`security-reviews/`). thirdshift records it as a draft advisory, or a `security-finding`/`needs-triage` issue on a private repository, reusing existing records in the repository by canonical fingerprint (matching case-folded token sets across `.`, `:`, `/`, `-`, `_` and whitespace regardless of order, while storing new records' fingerprints verbatim) and preserving the Day shift's grades. New records include scored reproduction and fix-size metadata so a later Security run can take the fix when allowed. Its details stay out of the PR and it does not hold Self-merge; fixing belongs to a separate Security run. The separate Security audit retains its full audit workflow.
+The session reads the relevant attack-class guidance and supporting code without delegated auditors or the full audit workflow. It fixes only findings reproduced by a failing proof-of-concept test, keeps that test and commits the fix. When a Security review commits changes to rendered UI files on an open pull request (outside child Ticket runs, which keep UI verification local, and Review runs, which never edit the PR), it runs interactive UI verification and refreshes stale **Visual evidence** via `gh pr edit --attach`, leaving non-UI PR **Visual evidence** untouched. Unaddressed introduced findings appear under Security in the PR's Unaddressed findings. A Ticket run or Spec run asked to Self-merge leaves the PR ready for review and fails with the findings named if any remain, or if the review was refused or incomplete. A Ticket run or Spec run not asked to merge records the outcome and continues. An old finding, whose proof-of-concept also fails at the pinned merge base, is reported in a private file under the repository's logs (`security-reviews/`). thirdshift records it as a draft advisory, or a `security-finding`/`needs-triage` issue on a private repository, reusing existing records in the repository by canonical fingerprint (matching case-folded token sets across `.`, `:`, `/`, `-`, `_` and whitespace regardless of order, while storing new records' fingerprints verbatim) and preserving the Day shift's grades. New records include scored reproduction and fix-size metadata so a later Security run can take the fix when allowed. Its details stay out of the PR and it does not hold Self-merge; fixing belongs to a separate Security run. The separate Security audit retains its full audit workflow.
 
 ### Security runs on a schedule, with fixing allowed
 
@@ -4845,6 +4871,48 @@ Embedded Process changes exercise the release workflow alongside skills and Rust
 ### Release publication
 
 The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the two Linux musl binaries and the installer, smoke-checks that the `x86_64` binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, checks the `aarch64` binary's static linking and version on Ubuntu, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
+
+## UI verification and Visual evidence
+
+UI-changing implementation, diagnosis and PR sessions use the `thirdshift-verify-ui`
+Factory skill across all seven Harnesses, with shell/CLI browser tools and no MCP
+configuration. It composes inside existing sessions; a Custom process or Experiment
+Arm may also select it as a standalone skill Step without adding a Built-in process Step.
+It discovers project-local `verify-*` skills, then `AGENTS.md` UI verification and
+test/dev-server documentation. Each command uses an ephemeral port and isolated
+temporary state, and stops its app and browser children before returning.
+
+Interactive exploration precedes a clean capture pass. Static layout, typography
+and copy changes get paired Before/After `.png` screenshots; interactive UI gets
+an After H.264 `.mp4` walkthrough recording and a matching Before recording when
+changing an existing flow or fixing a bug. Net-new flows omit Before video. Captures
+use desktop 1440×900 and mobile 390×844 when responsive behavior is affected. The
+`thirdshift-pr` skill validates captures and attaches them directly on GitHub with
+`gh >= 2.103.2` (`gh pr create --attach` and `gh pr edit --attach`), keeping media
+out of git and inheriting repository read permissions
+([ADR 0034](adr/0034-pull-request-visual-evidence-uses-github-attachments.md)).
+
+Run `thirdshift setup` to verify host prerequisites (`gh >= 2.103.2`, `ffmpeg`,
+and Playwright headless Chromium). If the app, browser, `ffmpeg`, or
+attachment-capable `gh` cannot run, never claim interactive verification succeeded:
+the pull request remains Ready for review with the explicit limitation recorded
+under `## Evidence`.
+
+Across multi-ticket [Spec runs](#spec-runs), child **Ticket runs** run interactive
+UI verification locally in their **Worktree** with `thirdshift-verify-ui` without
+calling `gh` or uploading attachments (`--attach`) on child Ticket PRs, while the
+**Spec review** session captures and attaches unified `Before`
+(`refs/remotes/origin/<base>`) and `After` (`HEAD`) **Visual evidence** via
+`gh pr edit --attach` when writing the **Spec PR** body if rendered UI changed
+(leaving Visual evidence out when no rendered UI changed). On open pull requests,
+**Continuations**, **Fix runs**, UI-touching **Security reviews**, and
+**Delivery** **Repairs** (conflict, CI-fix, and review repairs) re-run
+interactive UI verification and publish missing **Visual evidence** or refresh stale
+captures via `gh pr edit --attach` whenever commits modify rendered UI files,
+leaving existing **Visual evidence** untouched when commits only alter non-UI
+backend or test files. Optional host-only faux test credentials come from
+`~/.config/thirdshift/verify-env/<owner>/<repo>.env`; Launch-directory `.env`
+files are never copied into the Worktree.
 
 ## Credits and license
 

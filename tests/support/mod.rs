@@ -95,10 +95,11 @@ pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
 /// Every Factory skill, by the name a session finds it under.
-pub const FACTORY_SKILLS: [&str; 12] = [
+pub const FACTORY_SKILLS: [&str; 13] = [
     "thirdshift-triage",
     "thirdshift-to-questionnaire",
     "thirdshift-implement",
+    "thirdshift-verify-ui",
     "thirdshift-code-review",
     "thirdshift-pr",
     "thirdshift-tdd",

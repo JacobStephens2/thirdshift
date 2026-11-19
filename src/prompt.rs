@@ -426,15 +426,48 @@ impl ReviewInstruction {
     }
 }
 
+const SPEC_TICKET_VISUAL_EVIDENCE: &str = "For Visual evidence, run interactive UI verification locally in this Worktree with the `thirdshift-verify-ui` skill without calling `gh` or uploading attachments (`--attach`): leave Visual evidence off this child Ticket PR, because Spec review captures and attaches unified Before and After Visual evidence when writing the Spec PR body.";
+
+fn open_pr_visual_evidence(scope: TicketScope, target: &str, scope_note: &str) -> String {
+    match scope {
+        TicketScope::SpecTicket => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
+        TicketScope::Standard => format!(
+            "Whenever {scope_note} modify rendered UI files on {target}, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched."
+        ),
+    }
+}
+
+/// Whether prompts target a standalone pull request (`Standard`) or a child
+/// Ticket PR in a Spec run (`SpecTicket`), where Visual evidence stays local.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TicketScope {
+    Standard,
+    SpecTicket,
+}
+
+impl TicketScope {
+    pub(crate) fn for_child(kind: Option<&crate::child_run::Kind>) -> Self {
+        if matches!(kind, Some(crate::child_run::Kind::Ticket { .. })) {
+            Self::SpecTicket
+        } else {
+            Self::Standard
+        }
+    }
+}
+
 /// The fresh prompt, for a run that starts a new Issue branch.
-pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
+pub(crate) fn fresh(issue: &IssueUrl, base: &str, branch: &str, scope: TicketScope) -> String {
     let review = ReviewInstruction::Implement;
+    let visual = match scope {
+        TicketScope::Standard => String::new(),
+        TicketScope::SpecTicket => format!("{SPEC_TICKET_VISUAL_EVIDENCE}\n"),
+    };
     format!(
         "/thirdshift-implement {url}\n\
          The base branch is {base}. Review with the `thirdshift-code-review` skill using {fixed} as the fixed point.\n\
          {address_findings}\n\
          Push branch {branch} and create a pull request against {base} using the `thirdshift-pr` skill, marked ready for review.\n\
-         {unaddressed_findings}\n\
+         {visual}{unaddressed_findings}\n\
          Include \"Closes #{number}\" in the PR body.\n\
          {issue_file_instruction}\n\
          {SOURCE_EDITS}\n\
@@ -477,11 +510,40 @@ fn pull_request_instruction(base: &str, pr_url: Option<&str>) -> String {
     }
 }
 
+fn continuation_delivery_instruction(
+    base: &str,
+    pr_url: Option<&str>,
+    scope: TicketScope,
+) -> String {
+    let pr = pull_request_instruction(base, pr_url);
+    let fixed = fixed_point_revision(base);
+    let visual = match pr_url {
+        Some(url) => open_pr_visual_evidence(
+            scope,
+            &format!("PR {url}"),
+            &format!(
+                "your commits (or earlier branch commits when PR {url} is missing Visual evidence against {fixed})"
+            ),
+        ),
+        None => match scope {
+            TicketScope::SpecTicket => SPEC_TICKET_VISUAL_EVIDENCE.to_string(),
+            TicketScope::Standard => format!(
+                "Whenever the branch modifies rendered UI files against {fixed}, run interactive UI verification with the `thirdshift-verify-ui` skill and attach unified `Before` and `After` Visual evidence covering the whole branch via `gh pr create --attach` using the `thirdshift-pr` skill."
+            ),
+        },
+    };
+    format!("{pr}\n\n{visual}")
+}
+
 /// `continuation`, a Continuation prompt written before the branch had a
 /// pull request, as the Continuation prompt for its open pull request
 /// `pr_url`: the same prompt [`continuation`] gives with that PR.
 pub fn with_open_pr(continuation: &str, base: &str, pr_url: &str) -> String {
-    continuation.replace(
+    let standard = continuation.replace(
+        &continuation_delivery_instruction(base, None, TicketScope::Standard),
+        &continuation_delivery_instruction(base, Some(pr_url), TicketScope::Standard),
+    );
+    standard.replace(
         &pull_request_instruction(base, None),
         &pull_request_instruction(base, Some(pr_url)),
     )
@@ -489,9 +551,15 @@ pub fn with_open_pr(continuation: &str, base: &str, pr_url: &str) -> String {
 
 /// The continuation prompt, for a run that picks up an existing Issue branch.
 /// With `pr_url`, the agent updates that PR; otherwise it creates one.
-pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&str>) -> String {
+pub(crate) fn continuation(
+    issue: &IssueUrl,
+    base: &str,
+    branch: &str,
+    pr_url: Option<&str>,
+    scope: TicketScope,
+) -> String {
     let review = ReviewInstruction::Implement;
-    let pr = pull_request_instruction(base, pr_url);
+    let pr = continuation_delivery_instruction(base, pr_url, scope);
     format!(
         "/thirdshift-implement {url}\n\
          \n\
@@ -700,6 +768,8 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
          \n\
          Update PR {pr_url} using the `thirdshift-pr` skill, rewriting its body to cover the whole Spec. Leave out its Tickets checklist, or keep it between its markers as it is: thirdshift puts it back. Leave the PR a draft: thirdshift marks it ready once you are done.\n\
          \n\
+         If the Spec diff against {fixed} modifies rendered UI files, run interactive UI verification with the `thirdshift-verify-ui` skill across {fixed} (matching `Before` captures) and `HEAD` (matching `After` captures), and attach unified `Before` and `After` Visual evidence to PR {pr_url} via `gh pr edit --attach` when updating it with `thirdshift-pr` (leave Visual evidence out if the Spec makes no rendered UI changes).\n\
+         \n\
          {unaddressed_findings}\n\
          \n\
          Include \"Closes #{number}\" in the PR body.\n\
@@ -824,13 +894,19 @@ fn base_ci_prompt(
 /// The conflict Repair prompt, for a merge of `origin/<merging>` left in
 /// progress with conflicts: the Base branch, or in a Ticket run asked to merge,
 /// the Issue branch with Foreign commits on it.
-pub fn conflict_repair<'a>(
+pub(crate) fn conflict_repair<'a>(
     subject: impl Into<RepairSubject<'a>>,
     merging: &str,
     branch: &str,
     pr_url: &str,
+    scope: TicketScope,
 ) -> String {
     let subject = subject.into();
+    let visual = open_pr_visual_evidence(
+        scope,
+        &format!("pull request {pr_url}"),
+        "conflict-resolution commits or the merged commits",
+    );
     format!(
         "/thirdshift-resolving-merge-conflicts\n\
          \n\
@@ -838,6 +914,8 @@ pub fn conflict_repair<'a>(
          {branch} implements {url}; its pull request is {pr_url}.\n\
          \n\
          Resolve the conflicts, finish the merge, and push {branch}. Do not rebase or force-push.\n\
+         \n\
+         {visual}\n\
          \n\
          {issue_file_instruction}\n\
          {SOURCE_EDITS}\n\
@@ -851,21 +929,23 @@ pub fn conflict_repair<'a>(
 /// The CI-fix Repair prompt, for red CI on the PR's head commit, listing
 /// each of the branch's own failures in `failed` as one to fix, and after
 /// them its Inherited failures, if any, as not to fix.
-pub fn ci_fix_repair<'a>(
+pub(crate) fn ci_fix_repair<'a>(
     subject: impl Into<RepairSubject<'a>>,
     base: &str,
     branch: &str,
     pr_url: &str,
     failed: &FailedChecks,
+    scope: TicketScope,
 ) -> String {
     let subject = subject.into();
+    let visual = open_pr_visual_evidence(scope, &format!("pull request {pr_url}"), "your commits");
     if let RepairSubject::BaseBranch(base) = subject {
         return base_ci_prompt(
             base,
             branch,
             &failed.own,
             &format!(
-                "The pull request is {pr_url}. Commit changed files and push {branch} when needed. Do not merge, re-run jobs or wait on CI: thirdshift owns Delivery.\n{PR_LIFECYCLE}"
+                "The pull request is {pr_url}. Commit changed files and push {branch} when needed. Do not merge, re-run jobs or wait on CI: thirdshift owns Delivery.\n\n{visual}\n{PR_LIFECYCLE}"
             ),
         );
     }
@@ -889,6 +969,8 @@ pub fn ci_fix_repair<'a>(
          {CI_FIX_VALIDATION}\n\
          Run the affected checks locally. Commit only changed files, and push {branch} only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
+         {visual}\n\
+         \n\
          Compare the failing test or check with the branch's diff against {base}. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
          Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on {base}). Do not change code for those unrelated failures.\n\
          \n\
@@ -906,14 +988,20 @@ pub fn ci_fix_repair<'a>(
 /// The review Repair prompt, for Foreign commits a Ticket run asked to merge
 /// has merged into the Issue branch on top of `own_head`, the head it last
 /// knew as its own.
-pub fn review_repair<'a>(
+pub(crate) fn review_repair<'a>(
     subject: impl Into<RepairSubject<'a>>,
     branch: &str,
     pr_url: &str,
     own_head: &str,
+    scope: TicketScope,
 ) -> String {
     let subject = subject.into();
     let review = ReviewInstruction::ForeignCommits;
+    let visual = open_pr_visual_evidence(
+        scope,
+        &format!("pull request {pr_url}"),
+        &format!("your commits or the merged commits across {own_head}..HEAD"),
+    );
     format!(
         "/thirdshift-code-review {own_head}\n\
          \n\
@@ -924,6 +1012,8 @@ pub fn review_repair<'a>(
          {address_findings}\n\
          \n\
          {unaddressed_findings}\n\
+         \n\
+         {visual}\n\
          \n\
          Commit only if the review changes files. If no files change, make no commit, including no `--allow-empty` commit. If there is no new review information, leave the PR body unchanged; still record actual declined findings as required above. Push {branch} when needed to publish changes or reconcile upstream commits. Do not rebase or force-push.\n\
          \n\
@@ -980,13 +1070,21 @@ pub fn security_audit(
 pub const SECURITY_REVIEW_REPORT_FILE: &str = "<private report file>";
 pub const SECURITY_REVIEW_MERGE_BASE: &str = "<merge base commit>";
 
-pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
+pub(crate) fn security_review(
+    issue: &IssueUrl,
+    base: &str,
+    branch: &str,
+    scope: TicketScope,
+) -> String {
+    let visual = open_pr_visual_evidence(scope, "this branch's open pull request", "your commits");
     security_review_prompt(
         &issue.url,
         base,
         branch,
         &issue_file_instruction(issue),
-        "Update this branch's pull request: list each unaddressed introduced finding under Security in its Unaddressed findings, with evidence and why it is unaddressed. Preserve Standards and Spec entries and the rest of the body. Do not merge. Delivery pushes any new commits and marks the PR ready after this session.",
+        &format!(
+            "Update this branch's pull request: list each unaddressed introduced finding under Security in its Unaddressed findings, with evidence and why it is unaddressed. Preserve Standards and Spec entries and the rest of the body. {visual} Keep a draft pull request as a draft (do not mark a draft Spec PR ready early), and do not merge. Delivery pushes any new commits and marks the PR ready after this session."
+        ),
     )
 }
 
@@ -1120,10 +1218,10 @@ mod tests {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let pr = "https://github.com/acme/widgets/pull/8";
         for base in ["main", "issue-3"] {
-            let written = continuation(&issue, base, "issue-7", None);
+            let written = continuation(&issue, base, "issue-7", None, TicketScope::Standard);
             assert_eq!(
                 with_open_pr(&written, base, pr),
-                continuation(&issue, base, "issue-7", Some(pr))
+                continuation(&issue, base, "issue-7", Some(pr), TicketScope::Standard)
             );
         }
     }
@@ -1134,7 +1232,7 @@ mod tests {
         let pr =
             crate::review::PullRequestUrl::parse("https://github.com/acme/widgets/pull/8").unwrap();
         for prompt in [
-            fresh(&issue, "main", "issue-7"),
+            fresh(&issue, "main", "issue-7", TicketScope::Standard),
             code_review(&issue, "main", "issue-7"),
             pull_request_review(
                 &pr,
@@ -1238,9 +1336,15 @@ mod tests {
             first: true,
         };
         for prompt in [
-            fresh(&issue, "main", "issue-7"),
-            continuation(&issue, "main", "issue-7", None),
-            continuation(&issue, "main", "issue-7", Some(&pr.url)),
+            fresh(&issue, "main", "issue-7", TicketScope::Standard),
+            continuation(&issue, "main", "issue-7", None, TicketScope::Standard),
+            continuation(
+                &issue,
+                "main",
+                "issue-7",
+                Some(&pr.url),
+                TicketScope::Standard,
+            ),
             pull_request_review(&pr, "main", crate::review::Mode::Address, &[], earlier()),
             pull_request_review(
                 &pr,
@@ -1303,9 +1407,15 @@ mod tests {
             crate::review::PullRequestUrl::parse("https://github.com/acme/widgets/pull/8").unwrap();
         for base in ["main", "issue-20", "release/next"] {
             for prompt in [
-                fresh(&issue, base, "issue-7"),
-                continuation(&issue, base, "issue-7", None),
-                continuation(&issue, base, "issue-7", Some(&pr.url)),
+                fresh(&issue, base, "issue-7", TicketScope::Standard),
+                continuation(&issue, base, "issue-7", None, TicketScope::Standard),
+                continuation(
+                    &issue,
+                    base,
+                    "issue-7",
+                    Some(&pr.url),
+                    TicketScope::Standard,
+                ),
                 pull_request_review(
                     &pr,
                     base,
@@ -1342,14 +1452,15 @@ mod tests {
                 }
             }
             assert!(
-                fresh(&issue, base, "issue-7").contains(&format!("pull request against {base}"))
+                fresh(&issue, base, "issue-7", TicketScope::Standard)
+                    .contains(&format!("pull request against {base}"))
             );
             assert!(
-                continuation(&issue, base, "issue-7", None)
+                continuation(&issue, base, "issue-7", None, TicketScope::Standard)
                     .contains(&format!("pull request against {base}"))
             );
         }
-        let prompt = review_repair(&issue, "issue-7", &pr.url, "abc123");
+        let prompt = review_repair(&issue, "issue-7", &pr.url, "abc123", TicketScope::Standard);
         assert!(prompt.starts_with("/thirdshift-code-review abc123\n"));
         assert!(prompt.contains("using abc123 as the fixed point"));
     }
@@ -1404,13 +1515,21 @@ mod tests {
         };
         for prompt in [
             base_ci_fix("main", "fix-main-abc1234", &[]),
-            ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
+            ci_fix_repair(
+                &issue,
+                "main",
+                "issue-7",
+                "<pr>",
+                &failed,
+                TicketScope::Standard,
+            ),
             ci_fix_repair(
                 RepairSubject::PullRequest("<pr>"),
                 "main",
                 "feature",
                 "<pr>",
                 &failed,
+                TicketScope::Standard,
             ),
             ci_fix_repair(
                 RepairSubject::BaseBranch("main"),
@@ -1418,6 +1537,7 @@ mod tests {
                 "fix-main-abc1234",
                 "<pr>",
                 &failed,
+                TicketScope::Standard,
             ),
         ] {
             for instruction in [
@@ -1489,15 +1609,28 @@ mod tests {
             on_base: Vec::new(),
         };
         for prompt in [
-            fresh(&issue, "main", "issue-7"),
-            continuation(&issue, "main", "issue-7", None),
-            continuation(&issue, "main", "issue-7", Some("<pr>")),
+            fresh(&issue, "main", "issue-7", TicketScope::Standard),
+            continuation(&issue, "main", "issue-7", None, TicketScope::Standard),
+            continuation(
+                &issue,
+                "main",
+                "issue-7",
+                Some("<pr>"),
+                TicketScope::Standard,
+            ),
             spec_review(&issue, "main", "spec-7", "<pr>"),
             architecture_review("main", None),
-            conflict_repair(&issue, "main", "issue-7", "<pr>"),
-            ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
-            review_repair(&issue, "issue-7", "<pr>", "abc123"),
-            security_review(&issue, "main", "issue-7"),
+            conflict_repair(&issue, "main", "issue-7", "<pr>", TicketScope::Standard),
+            ci_fix_repair(
+                &issue,
+                "main",
+                "issue-7",
+                "<pr>",
+                &failed,
+                TicketScope::Standard,
+            ),
+            review_repair(&issue, "issue-7", "<pr>", "abc123", TicketScope::Standard),
+            security_review(&issue, "main", "issue-7", TicketScope::Standard),
         ] {
             for instruction in [
                 "prefer an available structured patch/edit tool",
@@ -1525,14 +1658,27 @@ mod tests {
             on_base: Vec::new(),
         };
         for prompt in [
-            fresh(&issue, "main", "issue-7"),
-            continuation(&issue, "main", "issue-7", None),
-            continuation(&issue, "main", "issue-7", Some("<pr>")),
+            fresh(&issue, "main", "issue-7", TicketScope::Standard),
+            continuation(&issue, "main", "issue-7", None, TicketScope::Standard),
+            continuation(
+                &issue,
+                "main",
+                "issue-7",
+                Some("<pr>"),
+                TicketScope::Standard,
+            ),
             spec_review(&issue, "main", "spec-7", "<pr>"),
-            conflict_repair(&issue, "main", "issue-7", "<pr>"),
-            ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
-            review_repair(&issue, "issue-7", "<pr>", "abc123"),
-            security_review(&issue, "main", "issue-7"),
+            conflict_repair(&issue, "main", "issue-7", "<pr>", TicketScope::Standard),
+            ci_fix_repair(
+                &issue,
+                "main",
+                "issue-7",
+                "<pr>",
+                &failed,
+                TicketScope::Standard,
+            ),
+            review_repair(&issue, "issue-7", "<pr>", "abc123", TicketScope::Standard),
+            security_review(&issue, "main", "issue-7", TicketScope::Standard),
             process_step(
                 "notes",
                 "gather",
@@ -1594,7 +1740,7 @@ mod tests {
     #[test]
     fn a_review_without_file_changes_commits_nothing_and_preserves_review_information() {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
-        let prompt = review_repair(&issue, "issue-7", "<pr>", "abc123");
+        let prompt = review_repair(&issue, "issue-7", "<pr>", "abc123", TicketScope::Standard);
 
         for instruction in [
             "Commit only if the review changes files.",
@@ -1608,6 +1754,277 @@ mod tests {
                 prompt.contains(instruction),
                 "missing {instruction}: {prompt}"
             );
+        }
+    }
+
+    #[test]
+    fn spec_ticket_prompts_verify_ui_locally_without_uploading_visual_evidence() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/21").unwrap();
+        let failed = FailedChecks {
+            own: vec![crate::github::Check {
+                name: "ci".to_string(),
+                conclusion: crate::github::Conclusion::Failure,
+                url: None,
+                job: None,
+                workflow_run: None,
+            }],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        let prompts = [
+            fresh(&issue, "issue-20", "issue-21", TicketScope::SpecTicket),
+            continuation(
+                &issue,
+                "issue-20",
+                "issue-21",
+                None,
+                TicketScope::SpecTicket,
+            ),
+            continuation(
+                &issue,
+                "issue-20",
+                "issue-21",
+                Some("<pr>"),
+                TicketScope::SpecTicket,
+            ),
+            security_review(&issue, "issue-20", "issue-21", TicketScope::SpecTicket),
+            conflict_repair(
+                &issue,
+                "issue-20",
+                "issue-21",
+                "<pr>",
+                TicketScope::SpecTicket,
+            ),
+            ci_fix_repair(
+                &issue,
+                "issue-20",
+                "issue-21",
+                "<pr>",
+                &failed,
+                TicketScope::SpecTicket,
+            ),
+            ci_fix_repair(
+                RepairSubject::BaseBranch("issue-20"),
+                "issue-20",
+                "issue-21",
+                "<pr>",
+                &failed,
+                TicketScope::SpecTicket,
+            ),
+            review_repair(
+                &issue,
+                "issue-21",
+                "<pr>",
+                "abc123",
+                TicketScope::SpecTicket,
+            ),
+        ];
+        for prompt in prompts {
+            for expected in [
+                "For Visual evidence, run interactive UI verification locally in this Worktree",
+                "thirdshift-verify-ui",
+                "without calling `gh` or uploading attachments",
+                "Spec review captures and attaches unified",
+            ] {
+                assert!(prompt.contains(expected), "missing {expected}: {prompt}");
+            }
+            assert!(
+                !prompt.contains("gh pr edit --attach")
+                    && !prompt.contains("gh pr create --attach"),
+                "child Ticket prompt must not upload attachments: {prompt}"
+            );
+        }
+        let fresh_ticket = fresh(&issue, "issue-20", "issue-21", TicketScope::SpecTicket);
+        assert!(
+            fresh_ticket
+                .contains("Push branch issue-21 and create a pull request against issue-20"),
+            "{fresh_ticket}"
+        );
+        assert_eq!(
+            with_open_pr(
+                &continuation(
+                    &issue,
+                    "issue-20",
+                    "issue-21",
+                    None,
+                    TicketScope::SpecTicket,
+                ),
+                "issue-20",
+                "<pr>",
+            ),
+            continuation(
+                &issue,
+                "issue-20",
+                "issue-21",
+                Some("<pr>"),
+                TicketScope::SpecTicket,
+            ),
+        );
+    }
+
+    #[test]
+    fn spec_review_attaches_unified_before_and_after_visual_evidence() {
+        let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
+        let prompt = spec_review(
+            &spec,
+            "main",
+            "issue-20",
+            "https://github.com/acme/widgets/pull/9",
+        );
+        for expected in [
+            "refs/remotes/origin/main",
+            "HEAD",
+            "thirdshift-verify-ui",
+            "Before",
+            "After",
+            "gh pr edit --attach",
+            "thirdshift-pr",
+        ] {
+            assert!(prompt.contains(expected), "missing {expected}: {prompt}");
+        }
+    }
+
+    #[test]
+    fn open_pr_followups_refresh_stale_visual_evidence_and_preserve_non_ui_evidence() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let pr = "https://github.com/acme/widgets/pull/1";
+        let failed = FailedChecks {
+            own: vec![crate::github::Check {
+                name: "ci".to_string(),
+                conclusion: crate::github::Conclusion::Failure,
+                url: None,
+                job: None,
+                workflow_run: None,
+            }],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        let prompts = [
+            continuation(&issue, "main", "issue-7", Some(pr), TicketScope::Standard),
+            security_review(&issue, "main", "issue-7", TicketScope::Standard),
+            conflict_repair(&issue, "main", "issue-7", pr, TicketScope::Standard),
+            conflict_repair(
+                RepairSubject::PullRequest(pr),
+                "main",
+                "issue-7",
+                pr,
+                TicketScope::Standard,
+            ),
+            ci_fix_repair(
+                &issue,
+                "main",
+                "issue-7",
+                pr,
+                &failed,
+                TicketScope::Standard,
+            ),
+            ci_fix_repair(
+                RepairSubject::PullRequest(pr),
+                "main",
+                "issue-7",
+                pr,
+                &failed,
+                TicketScope::Standard,
+            ),
+            ci_fix_repair(
+                RepairSubject::BaseBranch("main"),
+                "main",
+                "issue-7",
+                pr,
+                &failed,
+                TicketScope::Standard,
+            ),
+            review_repair(&issue, "issue-7", pr, "abc123", TicketScope::Standard),
+            review_repair(
+                RepairSubject::PullRequest(pr),
+                "issue-7",
+                pr,
+                "abc123",
+                TicketScope::Standard,
+            ),
+        ];
+        for prompt in prompts {
+            for expected in [
+                "thirdshift-verify-ui",
+                "gh pr edit --attach",
+                "publish missing Visual evidence or refresh stale captures",
+                "leave existing Visual evidence untouched",
+            ] {
+                assert!(prompt.contains(expected), "missing {expected}: {prompt}");
+            }
+        }
+        let no_pr = continuation(&issue, "main", "issue-7", None, TicketScope::Standard);
+        assert!(no_pr.contains("thirdshift-verify-ui"), "{no_pr}");
+        assert!(no_pr.contains("gh pr create --attach"), "{no_pr}");
+        assert_eq!(
+            with_open_pr(&no_pr, "main", pr),
+            continuation(&issue, "main", "issue-7", Some(pr), TicketScope::Standard),
+        );
+    }
+
+    #[test]
+    fn security_review_scopes_visual_evidence_to_own_commits_and_guards_draft_prs() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let prompt = security_review(&issue, "main", "issue-7", TicketScope::Standard);
+        assert!(
+            !prompt.contains("your commits against refs/remotes/origin/main"),
+            "security_review must not match earlier branch UI commits when unchanged: {prompt}"
+        );
+        assert!(
+            prompt.contains("draft"),
+            "security_review must preserve draft state when running before Delivery readiness: {prompt}"
+        );
+    }
+
+    #[test]
+    fn review_runs_and_local_eval_never_attach_visual_evidence() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let pr = crate::review::PullRequestUrl {
+            url: "https://github.com/acme/widgets/pull/1".to_string(),
+            issue: issue.clone(),
+        };
+        let failed = FailedChecks {
+            own: vec![crate::github::Check {
+                name: "ci".to_string(),
+                conclusion: crate::github::Conclusion::Failure,
+                url: None,
+                job: None,
+                workflow_run: None,
+            }],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        let earlier = EarlierSteps {
+            results: &[],
+            first: true,
+        };
+        let local = local_implement(&issue, "main", "issue-7");
+        assert!(!local.contains("thirdshift-verify-ui"), "{local}");
+        for prompt in [
+            pull_request_review(
+                &pr,
+                "main",
+                crate::review::Mode::Address,
+                &[],
+                EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+            pull_request_review(
+                &pr,
+                "main",
+                crate::review::Mode::RecommendOnly,
+                &[],
+                earlier,
+            ),
+            pull_request_validation(&pr, "abc123", &[]),
+            pull_request_ci_fix_repair(&pr, "main", "issue-7", &failed, &[]),
+            pull_request_security_review(&pr, "main", "issue-7"),
+            local,
+            local_security_review(&issue, "main", "issue-7"),
+        ] {
+            assert!(!prompt.contains("--attach"), "{prompt}");
         }
     }
 }

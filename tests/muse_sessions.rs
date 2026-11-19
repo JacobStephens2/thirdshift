@@ -307,6 +307,7 @@ fn setup_checks_muses_proposed_model_with_the_same_flags_and_environment() {
             ("Run notifications", ""),
             ("Claude setup token", ""),
             ("Run the Console?", ""),
+            ("Install or upgrade Visual evidence tools now? [y/N]", "n"),
         ],
     );
     assert_eq!(result.code, Some(0), "{}", result.stderr);

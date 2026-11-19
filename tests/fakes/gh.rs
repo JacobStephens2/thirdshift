@@ -294,7 +294,7 @@ const BOOLEAN_FLAGS: [&str; 7] = [
 ];
 
 /// `--flag` values by name; a boolean flag's is `None`.
-type Flags = BTreeMap<String, Option<String>>;
+type Flags = BTreeMap<String, Vec<Option<String>>>;
 
 /// Split args into positionals and the --flag values.
 fn parse(args: &[&str]) -> (Vec<String>, Flags) {
@@ -305,13 +305,19 @@ fn parse(args: &[&str]) -> (Vec<String>, Flags) {
         if arg.starts_with('-') {
             let name = arg.trim_start_matches('-');
             if BOOLEAN_FLAGS.contains(&name) {
-                flags.insert(name.to_owned(), None);
+                flags.entry(name.to_owned()).or_default().push(None);
             } else if let Some((name, value)) = name.split_once('=') {
-                flags.insert(name.to_owned(), Some(value.to_owned()));
+                flags
+                    .entry(name.to_owned())
+                    .or_default()
+                    .push(Some(value.to_owned()));
             } else {
                 i += 1;
                 let value = args.get(i).unwrap_or_else(|| panic!("{arg} needs a value"));
-                flags.insert(name.to_owned(), Some((*value).to_owned()));
+                flags
+                    .entry(name.to_owned())
+                    .or_default()
+                    .push(Some((*value).to_owned()));
             }
         } else {
             positional.push(arg.to_owned());
@@ -323,7 +329,10 @@ fn parse(args: &[&str]) -> (Vec<String>, Flags) {
 
 /// The value of `--name`, if it was given one.
 fn flag<'a>(flags: &'a Flags, name: &str) -> Option<&'a str> {
-    flags.get(name).and_then(Option::as_deref)
+    flags
+        .get(name)
+        .and_then(|values| values.last())
+        .and_then(Option::as_deref)
 }
 
 /// Fail unless `-R`/`--repo`, if given, names the fake's repo.
@@ -405,12 +414,51 @@ fn unsupported_jq(jq: Option<&str>) -> ! {
     )
 }
 
+/// Model local-reference rewriting and attachment order without network uploads.
+/// Deliberately read each capture: publish-recipe tests can detect unsafe reads.
+fn attached_body(flags: &Flags) -> String {
+    let body_file = flag(flags, "body-file");
+    let mut body = body_file
+        .map(|path| fs::read_to_string(path).unwrap())
+        .unwrap_or_else(|| flag(flags, "body").unwrap_or("").to_owned());
+    for (index, value) in flags.get("attach").into_iter().flatten().enumerate() {
+        let value = value.as_deref().expect("--attach needs a file");
+        let (path, alt) = value.split_once('#').unwrap_or((value, "capture"));
+        let candidate = Path::new(path);
+        let resolved = if candidate.is_absolute() || candidate.exists() {
+            candidate.to_owned()
+        } else {
+            Path::new(body_file.unwrap_or("."))
+                .parent()
+                .unwrap()
+                .join(candidate)
+        };
+        let _bytes = fs::read(&resolved).expect("attachment must be readable");
+        let url = format!("https://github.com/user-attachments/assets/fake-{index}");
+        if body.contains(path) {
+            if path.ends_with(".mp4") {
+                let suffix = format!("]({path})");
+                if let Some(line) = body
+                    .lines()
+                    .find(|line| line.starts_with("![") && line.ends_with(&suffix))
+                {
+                    body = body.replace(line, &url);
+                }
+            }
+            body = body.replace(path, &url);
+        } else if path.ends_with(".mp4") {
+            body.push_str(&format!("\n\n{url}\n"));
+        } else {
+            body.push_str(&format!("\n\n![{alt}]({url})\n"));
+        }
+    }
+    body
+}
+
 fn pr_create(state: &mut Json, flags: &Flags) {
     let n = prs(state).len() + 1;
     let url = format!("https://github.com/{}/pull/{n}", state.at("repo").str());
-    let body = flag(flags, "body-file")
-        .map(|path| fs::read_to_string(path).unwrap())
-        .unwrap_or_else(|| flag(flags, "body").unwrap_or("").to_owned());
+    let body = attached_body(flags);
     state.at_mut("prs").items_mut().push(object([
         ("number", number(n)),
         ("url", string(&url)),
@@ -624,7 +672,7 @@ fn pr_edit(state: &mut Json, positional: &[String], flags: &Flags) {
     let at = selected_pr(state, &positional[0]);
     let pr = &mut state.at_mut("prs").items_mut()[at];
     ensure_open(pr);
-    let body = fs::read_to_string(flag(flags, "body-file").expect("no --body-file")).unwrap();
+    let body = attached_body(flags);
     pr.set("body", string(body));
     save(state);
 }
@@ -3077,6 +3125,13 @@ pub fn main(args: Vec<String>) {
         (positional, flags)
     };
     match args.as_slice() {
+        ["--version"] => println!(
+            "gh version {} (2026-10-23)",
+            state
+                .get("version")
+                .and_then(Json::as_str)
+                .unwrap_or("2.103.2")
+        ),
         ["auth", "token", "--hostname", "github.com"] => {
             if let Some(token) = state.get("auth_token").and_then(Json::as_str) {
                 println!("{token}");

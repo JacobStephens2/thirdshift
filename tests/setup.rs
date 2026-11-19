@@ -328,6 +328,62 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
 }
 
 #[test]
+fn visual_evidence_without_a_terminal_warns_after_saving_and_never_installs() {
+    let scenario = Scenario::new();
+    let marker = scenario.path("installer-ran");
+    for tool in ["brew", "sudo", "apt", "npx"] {
+        write_executable(
+            &scenario.path(&format!("bin/{tool}")),
+            &format!(
+                "#!/bin/sh\nprintf called > '{}'\nexit 1\n",
+                marker.display()
+            ),
+        );
+    }
+    fs::remove_file(scenario.path("bin/gh")).unwrap();
+    write_executable(
+        &scenario.path("bin/gh"),
+        "#!/bin/sh\necho 'gh version 2.103.1'\n",
+    );
+    write_executable(&scenario.path("bin/ffmpeg"), "#!/bin/sh\nexit 0\n");
+    let result = scenario.run_with_env(
+        &["setup"],
+        &[("PATH", scenario.path("bin").to_str().unwrap())],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(user_config(&scenario).is_some());
+    assert!(
+        result.stderr.contains("Visual evidence: WARN"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("gh >= 2.103.2"), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Playwright Chromium"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(if cfg!(target_os = "macos") {
+            "brew"
+        } else {
+            "sudo apt"
+        }),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("[y/N]"), "{}", result.stderr);
+    assert!(!marker.exists(), "an unattended probe ran an installer");
+
+    let missing = scenario.run_with_env(&["setup"], &[("PATH", "/thirdshift-no-tools")]);
+    assert_eq!(missing.code, Some(0), "{}", missing.stderr);
+    assert!(missing.stderr.contains("Visual evidence: WARN"));
+    assert!(missing.stderr.contains("ffmpeg on PATH"));
+    assert!(missing.stderr.contains("gh >= 2.103.2"));
+    assert!(!marker.exists());
+}
+
+#[test]
 fn setup_preserves_address_scopes() {
     let scenario = Scenario::new();
     scenario.user_config_is("[console]\nallowed_emails = ['reader@example.test']\n[console.address_scopes] # permissions\n'reader@example.test' = ['read'] # keep read-only\n");
@@ -638,6 +694,7 @@ fn a_claude_setup_token_is_saved_with_hidden_input_even_without_notifications() 
         (NOTIFY, "n"),
         (CLAUDE_TOKEN, token),
         (CONSOLE, "n"),
+        (VISUAL_INSTALL, "n"),
     ]
     .into_iter()
     .map(TerminalStep::from)
@@ -679,6 +736,7 @@ fn setup_offers_an_installed_kimi_and_checks_its_model_against_kimis_config() {
         (NOTIFY, "n"),
         (CLAUDE_TOKEN, ""),
         (CONSOLE, "n"),
+        (VISUAL_INSTALL, "n"),
     ]
     .into_iter()
     .map(TerminalStep::from)
@@ -1335,11 +1393,635 @@ fn setup_on_terminal(
     env: &[(&str, &str)],
     keystrokes: &[Keystrokes],
 ) -> TerminalResult {
-    let result = scenario.run_on_terminal(&["setup"], env, keystrokes);
+    let mut keystrokes = keystrokes.to_vec();
+    keystrokes.push((VISUAL_INSTALL, "n"));
+    let result = scenario.run_on_terminal(&["setup"], env, &keystrokes);
     assert_eq!(result.code, Some(0), "terminal: {}", result.stderr);
     assert_eq!(result.stdout, "");
     assert!(result.terminal_restored, "{}", result.stderr);
     result
+}
+
+const VISUAL_INSTALL: &str = "Install or upgrade Visual evidence tools now? [y/N] ";
+
+fn visual_tools(scenario: &Scenario, version: &str, chromium: bool) {
+    // Scenario's CLIs are symlinks to one cached fake; replace only this link.
+    fs::remove_file(scenario.path("bin/gh")).unwrap();
+    write_executable(
+        &scenario.path("bin/gh"),
+        &format!("#!/bin/sh\necho 'gh version {version}'\n"),
+    );
+    write_executable(&scenario.path("bin/ffmpeg"), "#!/bin/sh\nexit 0\n");
+    if chromium {
+        let relative = if cfg!(target_os = "macos") {
+            "home/Library/Caches/ms-playwright/chromium_headless_shell-999/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+        } else {
+            "home/.cache/ms-playwright/chromium_headless_shell-999/chrome-headless-shell-linux64/chrome-headless-shell"
+        };
+        let executable = scenario.path(relative);
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        write_executable(&executable, "#!/bin/sh\nexit 0\n");
+    }
+}
+
+fn default_setup_keys() -> Vec<TerminalStep<'static>> {
+    [
+        HARNESS,
+        MODEL,
+        EFFORT,
+        MERGE,
+        BASE_FIX,
+        PULL,
+        TRIAGE_READY,
+        SECURITY_FIX,
+        SECURITY_REVIEW,
+        NOTIFY,
+        CLAUDE_TOKEN,
+        CONSOLE,
+    ]
+    .into_iter()
+    .map(|prompt| TerminalStep::line(prompt, ""))
+    .collect()
+}
+
+#[test]
+fn visual_evidence_ready_tools_pass_without_an_install_prompt() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", true);
+    let result = scenario.run_terminal(&["setup"], &[], &default_setup_keys());
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Visual evidence: PASS"),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains(VISUAL_INSTALL), "{}", result.stderr);
+    assert!(result.user_config.is_some());
+}
+
+#[test]
+fn visual_evidence_accepts_existing_playwright_headless_shell() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    let relative = if cfg!(target_os = "macos") {
+        "home/Library/Caches/ms-playwright/chromium_headless_shell-1194/chrome-mac/headless_shell"
+    } else {
+        "home/.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell"
+    };
+    let browser = scenario.path(relative);
+    fs::create_dir_all(browser.parent().unwrap()).unwrap();
+    write_executable(&browser, "#!/bin/sh\nexit 0\n");
+
+    let result = scenario.run(&["setup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(user_config(&scenario).is_some());
+    assert!(
+        result.stderr.contains("Visual evidence: PASS"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn visual_evidence_gh_version_threshold_and_cache_executables_are_checked() {
+    for (version, ready) in [
+        ("2.103.1", false),
+        ("2.103.2", true),
+        ("2.104.0", true),
+        ("3.0.0", true),
+        ("2.103.2-rc1", false),
+        ("garbled", false),
+    ] {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, version, true);
+        let result = scenario.run(&["setup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            result.stderr.contains("Visual evidence: PASS"),
+            ready,
+            "{version}: {}",
+            result.stderr
+        );
+    }
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    let cache = scenario.path("custom-cache/chromium-999/chrome-linux64/chrome");
+    fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    fs::write(&cache, "not executable").unwrap();
+    let custom = scenario.path("custom-cache");
+    let env = [("PLAYWRIGHT_BROWSERS_PATH", custom.to_str().unwrap())];
+    assert!(
+        scenario
+            .run_with_env(&["setup"], &env)
+            .stderr
+            .contains("Visual evidence: WARN")
+    );
+    write_executable(&cache, "#!/bin/sh\nexit 0\n");
+    assert!(
+        scenario
+            .run_with_env(&["setup"], &env)
+            .stderr
+            .contains("Visual evidence: PASS")
+    );
+}
+
+#[test]
+fn visual_evidence_terminal_default_no_leaves_the_host_unchanged_after_saving_credentials() {
+    for answer in ["", "N"] {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, "2.103.2", false);
+        let marker = scenario.path("installer-ran");
+        for tool in ["sudo", "brew", "npx"] {
+            write_executable(
+                &scenario.path(&format!("bin/{tool}")),
+                &format!("#!/bin/sh\necho called > '{}'\nexit 1\n", marker.display()),
+            );
+        }
+        let mut keys = default_setup_keys();
+        keys[10] = TerminalStep::line(CLAUDE_TOKEN, "saved-trial-token");
+        let saved = |_: u32| {
+            assert!(user_config(&scenario).is_some());
+            assert!(
+                scenario
+                    .credentials()
+                    .unwrap()
+                    .contains("saved-trial-token")
+            );
+        };
+        keys.push(TerminalStep::inspect(VISUAL_INSTALL, &saved));
+        keys.push(TerminalStep::line("", answer));
+        let result = scenario.run_terminal(&["setup"], &[], &keys);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stderr.matches(VISUAL_INSTALL).count(), 1);
+        assert!(!marker.exists());
+        assert!(result.terminal_restored);
+    }
+}
+
+#[test]
+fn visual_evidence_terminal_yes_runs_foreground_installers_then_reports_pass() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    let marker = scenario.path("installer-commands");
+    for tool in ["sudo", "brew"] {
+        write_executable(
+            &scenario.path(&format!("bin/{tool}")),
+            &format!(
+                "#!/bin/sh\necho '{tool}' \"$@\" >> '{}'\n",
+                marker.display()
+            ),
+        );
+    }
+    let cache = scenario.path("browsers/chromium-999/chrome-linux64/chrome");
+    let browser = scenario.path("browser-template");
+    write_executable(&browser, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &scenario.path("bin/npx"),
+        &format!(
+            "#!/bin/sh\ntest -t 0 && test -t 2 || exit 91\ntest -f '{}' || exit 92\necho npx \"$@\" >> '{}'\nmkdir -p '{}'\ncp '{}' '{}'\n",
+            scenario.path("home/.thirdshift/config.toml").display(),
+            marker.display(),
+            cache.parent().unwrap().display(),
+            browser.display(),
+            cache.display()
+        ),
+    );
+    let mut keys = default_setup_keys();
+    keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+    let browsers = scenario.path("browsers");
+    let result = scenario.run_terminal(
+        &["setup"],
+        &[("PLAYWRIGHT_BROWSERS_PATH", browsers.to_str().unwrap())],
+        &keys,
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Visual evidence: WARN"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Visual evidence: PASS"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        fs::read_to_string(marker)
+            .unwrap()
+            .contains("npx --yes --package=playwright playwright install")
+    );
+    assert!(result.terminal_restored);
+}
+
+#[test]
+fn visual_evidence_installer_failure_and_ctrl_c_keep_saved_config_and_credentials() {
+    for interrupted in [false, true] {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, "2.103.2", false);
+        for tool in ["sudo", "brew"] {
+            write_executable(
+                &scenario.path(&format!("bin/{tool}")),
+                "#!/bin/sh\nexit 0\n",
+            );
+        }
+        let installer = if interrupted {
+            "#!/bin/sh\necho 'fake installer waiting' >&2\nexec /bin/sleep 30\n"
+        } else {
+            "#!/bin/sh\nexit 17\n"
+        };
+        write_executable(&scenario.path("bin/npx"), installer);
+        let mut keys = default_setup_keys();
+        keys[10] = TerminalStep::line(CLAUDE_TOKEN, "saved-trial-token");
+        keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+        if interrupted {
+            keys.push(TerminalStep::bytes("fake installer waiting", b"\x03"));
+        }
+        let result = scenario.run_terminal(&["setup"], &[], &keys);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("saved settings kept"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            result
+                .stderr
+                .contains(if interrupted { "interrupted" } else { "17" }),
+            "{}",
+            result.stderr
+        );
+        assert!(result.user_config.is_some());
+        assert!(
+            scenario
+                .credentials()
+                .unwrap()
+                .contains("saved-trial-token")
+        );
+        assert!(result.terminal_restored);
+    }
+}
+
+#[test]
+fn visual_evidence_installer_stops_for_a_signal_sent_only_to_setup() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    for tool in ["sudo", "brew"] {
+        write_executable(
+            &scenario.path(&format!("bin/{tool}")),
+            "#!/bin/sh\nexit 0\n",
+        );
+    }
+    write_executable(
+        &scenario.path("bin/npx"),
+        "#!/bin/sh\necho 'fake installer waiting' >&2\nexec /bin/sleep 300\n",
+    );
+    let mut keys = default_setup_keys();
+    keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+    keys.push(TerminalStep::signal(
+        "fake installer waiting",
+        libc::SIGTERM,
+    ));
+    let result =
+        scenario.run_terminal_bounded(&["setup"], &[], &keys, std::time::Duration::from_secs(15));
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("saved settings kept"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.user_config.is_some());
+    assert!(result.terminal_restored);
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
+        let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((triple >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(triple & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+struct LocalHttpServer {
+    port: u16,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl LocalHttpServer {
+    fn start(
+        respond: impl Fn(&str, u16) -> (&'static str, &'static str, Vec<u8>) + Send + 'static,
+    ) -> Self {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if thread_stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let Ok(mut stream) = stream else {
+                    break;
+                };
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let (status, content_type, body) = respond(path, port);
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        Self {
+            port,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for LocalHttpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_local_npm_registry(tarball: Vec<u8>) -> LocalHttpServer {
+    use sha2::{Digest, Sha512};
+
+    let integrity = format!("sha512-{}", base64_encode(&Sha512::digest(&tarball)));
+    LocalHttpServer::start(move |path, port| {
+        if path == "/playwright" {
+            let metadata = serde_json::json!({
+                "name": "playwright",
+                "dist-tags": { "latest": "0.0.1" },
+                "versions": {
+                    "0.0.1": {
+                        "name": "playwright",
+                        "version": "0.0.1",
+                        "bin": { "playwright": "cli.js" },
+                        "dist": {
+                            "tarball": format!("http://127.0.0.1:{port}/playwright-0.0.1.tgz"),
+                            "integrity": integrity,
+                        }
+                    }
+                }
+            })
+            .to_string();
+            ("200 OK", "application/json", metadata.into_bytes())
+        } else if path == "/playwright-0.0.1.tgz" {
+            ("200 OK", "application/octet-stream", tarball.clone())
+        } else {
+            ("404 Not Found", "text/plain", b"not found".to_vec())
+        }
+    })
+}
+
+fn serve_404_npm_registry() -> LocalHttpServer {
+    LocalHttpServer::start(|_, _| ("404 Not Found", "text/plain", Vec::new()))
+}
+
+#[test]
+fn visual_evidence_installer_uses_isolated_working_directory() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    for tool in ["sudo", "brew"] {
+        write_executable(
+            &scenario.path(&format!("bin/{tool}")),
+            "#!/bin/sh\nexit 0\n",
+        );
+    }
+    fs::write(
+        scenario.launch_dir().join(".npmrc"),
+        "registry=http://127.0.0.1:1/untrusted\n",
+    )
+    .unwrap();
+    let observed_cwd = scenario.path("npx-cwd");
+    let browser = scenario.path("browser-template");
+    write_executable(&browser, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &scenario.path("bin/npx"),
+        &format!(
+            "#!/bin/sh\npwd -P > '{}'\ntest -f package.json && test -d node_modules || exit 93\ntest ! -e .npmrc || exit 94\nmkdir -p \"$PLAYWRIGHT_BROWSERS_PATH/chromium-999/chrome-linux64\"\ncp '{}' \"$PLAYWRIGHT_BROWSERS_PATH/chromium-999/chrome-linux64/chrome\"\n",
+            observed_cwd.display(),
+            browser.display(),
+        ),
+    );
+    let mut keys = default_setup_keys();
+    keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+    let result = scenario.run_terminal(
+        &["setup"],
+        &[("PLAYWRIGHT_BROWSERS_PATH", "relative-browsers")],
+        &keys,
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let cwd = fs::read_to_string(&observed_cwd).unwrap();
+    let cwd = std::path::Path::new(cwd.trim());
+    assert_ne!(
+        cwd,
+        scenario.launch_dir().canonicalize().unwrap(),
+        "npx ran inside the repository working directory: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("exit status: 93") && !result.stderr.contains("exit status: 94"),
+        "npx working directory was not isolated: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Visual evidence: PASS"),
+        "{}",
+        result.stderr
+    );
+    let remaining: Vec<_> = fs::read_dir(scenario.path("home/.thirdshift"))
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("visual-evidence-")
+        })
+        .collect();
+    assert!(remaining.is_empty(), "{remaining:?}");
+}
+
+#[test]
+fn visual_evidence_installer_ignores_working_directory_npmrc_and_local_playwright() {
+    // Real npx proof-of-concept: an untrusted repository .npmrc or local
+    // node_modules/.bin/playwright must not hijack `npx` when consenting.
+    let has_npx = std::process::Command::new("npx")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let has_tar = std::process::Command::new("tar")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !has_npx || !has_tar {
+        eprintln!("real npx isolation cases require npx and tar; stand-in case still runs");
+        return;
+    }
+
+    // Case 1: Repository clone contains only `.npmrc` (no package.json or node_modules),
+    // and an ancestor directory outside home/.thirdshift also contains package.json + .npmrc.
+    {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, "2.103.2", false);
+        for tool in ["sudo", "brew"] {
+            write_executable(
+                &scenario.path(&format!("bin/{tool}")),
+                "#!/bin/sh\nexit 0\n",
+            );
+        }
+        let marker = scenario.path("hijacked-by-npmrc");
+        let pkg_root = scenario.path("evil-pkg");
+        let pkg = pkg_root.join("package");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"playwright","version":"0.0.1","bin":{"playwright":"cli.js"}}"#,
+        )
+        .unwrap();
+        write_executable(
+            &pkg.join("cli.js"),
+            &format!(
+                "#!/usr/bin/env node\nrequire('fs').writeFileSync({}, 'hijacked');\n",
+                serde_json::to_string(&marker.display().to_string()).unwrap()
+            ),
+        );
+        let tgz = scenario.path("playwright-0.0.1.tgz");
+        let tar_status = std::process::Command::new("tar")
+            .args(["-czf"])
+            .arg(&tgz)
+            .args(["-C"])
+            .arg(&pkg_root)
+            .arg("package")
+            .status()
+            .unwrap();
+        assert!(tar_status.success());
+        let evil_server = serve_local_npm_registry(fs::read(&tgz).unwrap());
+        let safe_server = serve_404_npm_registry();
+        let evil_port = evil_server.port();
+        let safe_port = safe_server.port();
+
+        fs::write(
+            scenario.path("home/.npmrc"),
+            format!("registry=http://127.0.0.1:{safe_port}/\nfetch-retries=0\n"),
+        )
+        .unwrap();
+        // Ancestor directory outside home/.thirdshift (simulating shared /tmp ancestor).
+        fs::write(scenario.path("package.json"), r#"{"name":"ancestor"}"#).unwrap();
+        fs::write(
+            scenario.path(".npmrc"),
+            format!("registry=http://127.0.0.1:{evil_port}/\n"),
+        )
+        .unwrap();
+        // Cloned repository root with only `.npmrc`.
+        fs::write(
+            scenario.launch_dir().join(".npmrc"),
+            format!("registry=http://127.0.0.1:{evil_port}/\n"),
+        )
+        .unwrap();
+
+        let mut keys = default_setup_keys();
+        keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+        let result = scenario.run_terminal(&["setup"], &[], &keys);
+
+        drop((evil_server, safe_server));
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            !marker.exists(),
+            "repository or ancestor .npmrc hijacked npx and executed untrusted package code:\n{}",
+            result.stderr
+        );
+    }
+
+    // Case 2: Repository contains local node_modules/.bin/playwright.
+    {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, "2.103.2", false);
+        for tool in ["sudo", "brew"] {
+            write_executable(
+                &scenario.path(&format!("bin/{tool}")),
+                "#!/bin/sh\nexit 0\n",
+            );
+        }
+        let safe_server = serve_404_npm_registry();
+        let safe_port = safe_server.port();
+        fs::write(
+            scenario.path("home/.npmrc"),
+            format!("registry=http://127.0.0.1:{safe_port}/\nfetch-retries=0\n"),
+        )
+        .unwrap();
+        let marker = scenario.path("hijacked-by-node-modules");
+        for root in [scenario.launch_dir(), scenario.path("")] {
+            let bin_dir = root.join("node_modules/.bin");
+            let pkg_dir = root.join("node_modules/playwright");
+            fs::create_dir_all(&bin_dir).unwrap();
+            fs::create_dir_all(&pkg_dir).unwrap();
+            fs::write(
+                pkg_dir.join("package.json"),
+                r#"{"name":"playwright","version":"0.0.0","bin":{"playwright":"../.bin/playwright"}}"#,
+            )
+            .unwrap();
+            write_executable(
+                &bin_dir.join("playwright"),
+                &format!("#!/bin/sh\nprintf hijacked > '{}'\n", marker.display()),
+            );
+        }
+
+        let mut keys = default_setup_keys();
+        keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+        let result = scenario.run_terminal(&["setup"], &[], &keys);
+
+        drop(safe_server);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            !marker.exists(),
+            "repository node_modules/.bin/playwright hijacked npx:\n{}",
+            result.stderr
+        );
+    }
 }
 
 /// The keystrokes that turn Run notifications on, to `me@example.com` from
