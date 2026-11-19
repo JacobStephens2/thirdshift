@@ -19,7 +19,7 @@ Preconditions:
 - `serve-site.cjs` is running on `$origin` and `Doctor` passed.
 
 - **Navigate and unfold `/how-it-works/`.** Open `${origin}/how-it-works/`. Click `03 / Agent session` in `nav[aria-label="Guide sections"]`; `main.js` automatically opens its containing `<details class="fold">` so `#session` becomes visible. Clicking `#session-title` then folds it closed, and clicking `#session-title` again reopens it. Verify `document.documentElement.scrollWidth <= innerWidth`.
-- **Navigate figures and disclosures on `/architecture/`.** Open `${origin}/architecture/`. Click `Figure 4` in `nav[aria-label="Figures"]` (`#spec-run`), then toggle `Console and host resources` inside `#factory .reading-more`. Verify `.reading-content` becomes visible and narrow `390×844` layout keeps page scroll width within viewport.
+- **Navigate figures and disclosures on `/architecture/`.** Open `${origin}/architecture/`. Click `Figure 4` in `nav[aria-label="Figures"]` (`#spec-run`), then click `summary:has-text("Console and host resources")` on `#factory details.reading-more:has(> summary:has-text("Console and host resources"))`. Verify the disclosure gains `[open]` and its first paragraph (`p`) becomes visible, while narrow `390×844` layout keeps page scroll width within viewport.
 - **Proof.** Capture `1440×900` `.png` of `/architecture/` (or `/how-it-works/`) with a section open and record a `.mp4` walkthrough navigating guide sections and architecture figures/folds.
 
 ## Gotchas

@@ -9,8 +9,8 @@ disable-model-invocation: true
 Imported from [Cursor pstack](https://github.com/cursor/plugins/blob/eb4db2b55b2b7dec3d9282754cddf0a56bf4ff10/pstack/skills/maintain-verification-skill/SKILL.md)
 at `eb4db2b55b2b7dec3d9282754cddf0a56bf4ff10`; [MIT license](LICENSE).
 Local adaptation: target project-local `.agents/skills/verify-*/` skills with feature maps
-(separate from Factory `skills/`), enforce `thirdshift-verify-ui` isolation, `trap ... EXIT`
-cleanup, `verify-env`, and **Visual evidence** checks, and edit using `/writing-for-agents`.
+(separate from Factory `skills/`), enforce `verify-ui` (Factory: `thirdshift-verify-ui`) isolation,
+`trap ... EXIT` cleanup, conditional `verify-env`, and **Visual evidence** checks, and edit using `/writing-for-agents`.
 
 A feature map rots the moment routes or setup change. Audit every mapped feature against source and drive every feature live to keep the skill trustworthy.
 
@@ -36,9 +36,9 @@ Edit only the target `verify-<app>/` directory (`SKILL.md`, `features/`, and its
 
 3. **Reconcile.** Merge overlapping live recipes into minimal app states, spot-check cited drift, and sweep recent commits for unmapped user-facing routes or controls (citing concrete source paths for any gap).
 
-4. **Live pass.** Exercise every mapped feature live inside isolated `( ... )` subshells with single `trap ... EXIT` cleanup registered before launch, OS-assigned ephemeral ports, isolated `mktemp -d` state, and optional host-only faux credentials from `~/.config/thirdshift/verify-env/<owner>/<repo>.env` (leaving Launch-directory `.env` files untouched). Hold four invariants throughout:
+4. **Live pass.** Exercise every mapped feature live inside isolated `( ... )` subshells following `verify-ui` / `thirdshift-verify-ui` isolation (single `trap ... EXIT` cleanup, OS-assigned ephemeral ports, isolated `mktemp -d` state, sourcing `~/.config/thirdshift/verify-env/<owner>/<repo>.env` only when the documented setup requires host credentials and leaving Launch-directory `.env` untouched). Hold four invariants throughout:
    - **Doctor before driving:** run `Doctor` before the first drive, on each fresh session, and after any failed drive; reset state or relaunch on wedged UI state.
-   - **Evidence survives cleanup:** write `.png` and H.264 (`yuv420p`, `+faststart`, `<= 8 MB`) `.mp4` captures with `mktemp` outside the cleaned state dir and confirm their files and formats after teardown.
+   - **Evidence survives cleanup:** write `.png` and H.264 (`yuv420p`, `+faststart`, `<= 8 MB`) `.mp4` proof captures with `mktemp` outside the cleaned state directory (per `verify-ui` / `thirdshift-verify-ui`) and confirm readability/playback after teardown.
    - **Zero leaked processes:** stop and wait for tracked server PIDs/process groups and browser contexts/daemons on success, failure, and interruption; confirm zero server or browser children remain.
    - **Strict skip reporting:** mark a path `verified-unreachable` only with its attempted route and unmet prerequisite (adding missing prerequisites to `Gotchas` as doc drift).
 

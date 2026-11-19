@@ -32,13 +32,9 @@ test -d console/node_modules || npm ci --prefix console
   }
   trap cleanup EXIT
 
-  # Optional host-only faux credentials (leave Launch-directory .env untouched).
-  verify_env="$HOME/.config/thirdshift/verify-env/JacobStephens2/thirdshift.env"
-  if [ -r "$verify_env" ]; then
-    set -a; . "$verify_env"; set +a
-  fi
-
   node .agents/skills/verify-console/scripts/seed-home.cjs "$state_dir"
+  # No host verify-env file is sourced: seed-home.cjs stubs gh and seeds faux local data
+  # under HOME="$state_dir" (leave Launch-directory .env files untouched).
   HOME="$state_dir" PATH="$state_dir/bin:$PATH" \
     "${THIRDSHIFT_BINARY:-./target/debug/thirdshift}" console --no-sign-in \
     >"$state_dir/console.out" 2>"$state_dir/console.err" &
@@ -70,39 +66,32 @@ Run this read-only health check before the first drive and after any failure:
 
 ```sh
 kill -0 "$server_pid"
+# --no-sign-in mode:
 whoami_json=$(curl -fsS "$origin/api/v1/whoami")
 printf '%s' "$whoami_json" | grep -q '"api_version":"v1"'
 inbox_html=$(curl -fsS "$origin/")
 printf '%s' "$inbox_html" | grep -q 'acme/widgets'
 ```
 
-In `--sign-in` mode, check `curl -sS -o /dev/null -w '%{http_code}' "$origin/"` returns `303` and `sign_in_html=$(curl -fsS "$origin/sign-in")` contains `Sign in`.
+In `--sign-in` mode, replace the `--no-sign-in` HTTP checks above with:
+
+```sh
+test "$(curl -sS -o /dev/null -w '%{http_code}' "$origin/")" = 303
+test "$(curl -sS -o /dev/null -w '%{http_code}' "$origin/api/v1/whoami")" = 401
+sign_in_html=$(curl -fsS "$origin/sign-in")
+printf '%s' "$sign_in_html" | grep -q 'Sign in'
+```
 
 ## Drive
 
-Follow `thirdshift-verify-ui`'s two-phase workflow against [features/README.md](features/README.md):
+Follow `verify-ui` (Factory: `thirdshift-verify-ui`) for the two-phase verification workflow against [features/README.md](features/README.md). Console-specific rules:
 
-1. **Interactive exploration:** drive the affected routes and controls with default CSP enforced (using `@playwright/cli`, `agent-browser`, or a short Node script resolving `console/node_modules/playwright`) while checking ARIA snapshots, console errors, `pageerror`, failed requests, `5xx` responses, keyboard shortcuts, and `390×844` phone responsiveness. Stop any CLI browser daemon explicitly in `cleanup` before exiting.
-2. **Clean walkthrough pass:** write a temporary Playwright script (`script=$(mktemp "$state_dir/walkthrough.XXXXXX.cjs")`) resolving `playwright` from `$(pwd)/console/node_modules/playwright`. `console/package.json` pins Playwright `1.64.0` (`>= 1.59`), so use native `recordVideo.showActions` with `viewport: { width: 1440, height: 900 }` (and `390×844` when responsive layout changed) and matching `recordVideo.size`. Pass `bypassCSP: true` on the recording context only so the Console's `style-src 'self'` CSP does not block Playwright's `showActions` cursor/click overlay (keep Phase 1 exploration without `bypassCSP` so real CSP regressions still fail). Attach `pageerror`, `console` error, `requestfailed`, and `>= 500` response listeners before navigation, pace deliberate `~300–500 ms` beats with zero idle pauses, assert expected DOM/ARIA state after every action, and close `context` then `browser` in `finally`.
+1. **Interactive exploration:** resolve Playwright from `$(pwd)/console/node_modules/playwright` (or drive with `@playwright/cli` / `agent-browser` and stop any daemon in `cleanup`). Keep default CSP enabled during exploration so real CSP regressions surface; on `/waterfall`, clicking `Zoom timeline around this call` / `Zoom out to whole Command` runs `Idiomorph.morph` on inline-styled bars (`src/console/assets/spans.js`), emitting expected `style-src 'self'` console errors — filter those `/waterfall` inline-style zoom messages only when zooming while keeping strict zero-error checks across all other Console routes.
+2. **Clean walkthrough pass:** check the Playwright version in `console/package.json` (`>= 1.59` uses `recordVideo.showActions`; otherwise use the init-script cursor fallback in `verify-ui` / `thirdshift-verify-ui`). Pass `bypassCSP: true` on the Phase 2 recording context only so the Console's `style-src 'self'` CSP does not block Playwright's `showActions` overlay.
 
 ## Evidence
 
-Create proof paths outside `$state_dir` so teardown preserves them:
-
-```sh
-shot=$(mktemp /tmp/after-desktop.XXXXXX.png)
-video=$(mktemp /tmp/after-desktop.XXXXXX.mp4)
-```
-
-Pair `Before`/`After` `.png` screenshots for static layout/copy changes and `After` `.mp4` walkthroughs (`Before` `.mp4` too for bug fixes or changes to existing interactive flows). Transcode Playwright's `.webm` video and verify size, non-empty output, and H.264 `+faststart`:
-
-```sh
-ffmpeg -y -i "$raw_video" -an -c:v libx264 -pix_fmt yuv420p \
-  -movflags +faststart -crf 28 "$video"
-test -s "$video" && test "$(wc -c < "$video")" -le 8388608
-```
-
-Inspect finished `.png` captures and extracted video frames for legibility and faux-only data, keep captures outside git, and pass exact paths and `**Before/After — <flow>, <viewport>**` labels to `thirdshift-pr` for `gh --attach`.
+Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Record only faux `seed-home.cjs` state (never capture real `~/.thirdshift/console-accounts.json` or live host data), then defer `ffmpeg` H.264 (`yuv420p`, `+faststart`, `<= 8 MB`) transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
 
 ## Cleanup
 

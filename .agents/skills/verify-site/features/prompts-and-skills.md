@@ -21,7 +21,7 @@ Preconditions:
 
 - **Confirm closed initial folds.** Open `${origin}/prompts/`. Zero `main > section > .wrap > details[open]` top-level sections are open.
 - **Open a Factory skill.** Click `#skills-title`, then click `#skill-thirdshift-verify-ui-title` (or `#skill-thirdshift-code-review-title`). The skill's `SKILL.md` body becomes visible immediately while sibling supporting files remain folded.
-- **Follow a deep-link fragment.** Navigate to `${origin}/prompts/#skill-thirdshift-pr` (or click a `#file-*` link inside `#licence-title`). Containing `<details>` ancestors open and scroll the target into view.
+- **Follow a deep-link fragment.** Navigate to `${origin}/prompts/#skill-thirdshift-pr` (or click `summary:has(#licence-title)` to open the Licence fold, then click a `#file-*` link inside its sibling `<p class="lede">`, `details:has(#licence-title) > p.lede a[href^="#file-"]`). Containing `<details>` ancestors open and scroll the target into view.
 - **Proof.** Capture `1440×900` `.png` of an opened Factory skill sheet and record a `.mp4` walkthrough expanding `Factory skills` -> `thirdshift-verify-ui` -> fragment reveal.
 
 ## Gotchas

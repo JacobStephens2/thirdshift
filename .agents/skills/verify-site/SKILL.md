@@ -32,12 +32,7 @@ npm run docs:check --prefix site
   }
   trap cleanup EXIT
 
-  # Optional host-only faux credentials (unused by static site/; leave Launch-directory .env untouched).
-  verify_env="$HOME/.config/thirdshift/verify-env/JacobStephens2/thirdshift.env"
-  if [ -r "$verify_env" ]; then
-    set -a; . "$verify_env"; set +a
-  fi
-
+  # Static site/ needs no host credentials (leave Launch-directory .env and verify-env untouched).
   node .agents/skills/verify-site/scripts/serve-site.cjs site \
     >"$state_dir/site.out" 2>"$state_dir/site.err" &
   server_pid=$!
@@ -73,29 +68,14 @@ printf '%s' "$home_html" | grep -q 'Your issues become pull requests overnight.'
 
 ## Drive
 
-Follow `thirdshift-verify-ui`'s two-phase workflow against [features/README.md](features/README.md):
+Follow `verify-ui` (Factory: `thirdshift-verify-ui`) for the two-phase verification workflow against [features/README.md](features/README.md). Site-specific rules:
 
-1. **Interactive exploration:** drive affected pages (both `javaScriptEnabled: true` and `false` where progressive enhancement matters, at `1440×900` desktop and `390×844` mobile) while aborting external `https://**` requests (or stubbing `youtube-nocookie.com/embed/**` for video embed tests) so offline local runs never touch live YouTube or font CDNs. Stop any CLI browser daemon explicitly in `cleanup`.
-2. **Clean walkthrough pass:** write a temporary Playwright script (`script=$(mktemp "$state_dir/walkthrough.XXXXXX.cjs")`) resolving `playwright` from `$(pwd)/site/node_modules/playwright`. `site/package.json` pins Playwright `1.64.0` (`>= 1.59`), so use native `recordVideo.showActions` with `viewport: { width: 1440, height: 900 }` (plus `390×844` when responsive layout changed) and matching `recordVideo.size`. Attach `pageerror`, `console` error, `requestfailed` (filtering expected `https://**` route aborts), and `>= 500` response listeners before navigation (on `/prompts/`, also allow the expected missing deploy-only `/commit.txt` 404 via `m.location().url`), pace deliberate `~300–500 ms` beats with zero idle pauses, assert visible state after each step, and close `context` then `browser` in `finally`.
+1. **Interactive exploration:** resolve Playwright from `$(pwd)/site/node_modules/playwright` (or drive with `@playwright/cli` / `agent-browser` and stop any daemon in `cleanup`). Test both `javaScriptEnabled: true` and `false` where `<details>` or fragment reveal applies, and abort external `https://**` requests (`route.abort()`) or fulfill YouTube embeds locally so runs never contact external origins.
+2. **Clean walkthrough pass:** check the Playwright version in `site/package.json` (`>= 1.59` uses `recordVideo.showActions`; otherwise use the init-script cursor fallback in `verify-ui` / `thirdshift-verify-ui`). Allow expected `https://**` route-abort `requestfailed` events and the single expected missing deploy-only `/commit.txt` 404 console error on `/prompts/` (`m.location().url.endsWith('/commit.txt')`), asserting zero unexpected `pageerror`, `console` error, or `>= 500` responses.
 
 ## Evidence
 
-Create proof paths outside `$state_dir` so teardown preserves them:
-
-```sh
-shot=$(mktemp /tmp/after-desktop.XXXXXX.png)
-video=$(mktemp /tmp/after-desktop.XXXXXX.mp4)
-```
-
-Pair `Before`/`After` `.png` screenshots for static layout/copy changes and `After` `.mp4` walkthroughs (`Before` `.mp4` too for bug fixes or changes to existing interactive flows). Transcode Playwright's `.webm` video and verify size, non-empty output, and H.264 `+faststart`:
-
-```sh
-ffmpeg -y -i "$raw_video" -an -c:v libx264 -pix_fmt yuv420p \
-  -movflags +faststart -crf 28 "$video"
-test -s "$video" && test "$(wc -c < "$video")" -le 8388608
-```
-
-Inspect finished `.png` captures and extracted video frames for legibility and layout fit, keep captures outside git, and pass exact paths and `**Before/After — <flow>, <viewport>**` labels to `thirdshift-pr` for `gh --attach`.
+Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Defer `ffmpeg` H.264 (`yuv420p`, `+faststart`, `<= 8 MB`) transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
 
 ## Cleanup
 

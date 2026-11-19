@@ -97,19 +97,20 @@ function seedCommand(folder, repository, number, title, outcome, startAgo, endAg
   const recordPath = join(folder, `${stem}.command.json`);
 
   const calls = [
-    ['Read', 'Read src/search.rs', startAgo - 20, startAgo - 35],
-    ['Edit', 'Update search behavior', startAgo - 40, startAgo - 65],
+    ['Read', 'src/search.rs', startAgo - 20, startAgo - 35],
+    ['Edit', 'src/search.rs (update search behavior)', startAgo - 40, startAgo - 65],
     ['Bash', 'cargo test --test search', startAgo - 70, startAgo - 130],
     ['Bash', 'cargo clippy --all-targets', startAgo - 135, startAgo - 165],
   ];
-  const spans = calls.map(([tool, name, start, end], index) => ({
+  const spans = calls.map(([tool, args, start, end], index) => ({
     spanId: (index + 1).toString(16).padStart(16, '0'),
-    name,
+    name: `${tool} ${args}`,
     startTimeUnixNano: `${BigInt(Date.parse(isoSecondsAgo(start))) * 1000000n}`,
     endTimeUnixNano: `${BigInt(Date.parse(isoSecondsAgo(end))) * 1000000n}`,
     attributes: [
       { key: 'gen_ai.operation.name', value: { stringValue: 'execute_tool' } },
       { key: 'gen_ai.tool.name', value: { stringValue: tool } },
+      { key: 'gen_ai.tool.call.arguments', value: { stringValue: args } },
       { key: 'gen_ai.tool.call.id', value: { stringValue: `call-${number}-${index}` } },
     ],
   }));

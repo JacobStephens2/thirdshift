@@ -1,26 +1,13 @@
 # Site verification map
 
-Maintained source for verifying the `thirdshift` static website (`site/`). Read this index before driving, then follow the matching feature recipe.
+Maintained source for verifying the `thirdshift` static website (`site/`). Read [../SKILL.md](../SKILL.md) and `verify-ui` (Factory: `thirdshift-verify-ui`) for isolation, walkthrough recording, and transcoding rules, then follow the matching feature recipe.
 
-## Baseline preconditions
+## Site preconditions
 
-- Run `npm run docs:check --prefix site` before serving.
-- Run inside one `( ... )` subshell with `trap cleanup EXIT` registered before launching `serve-site.cjs` or any browser daemon.
-- Read `$origin` (`http://127.0.0.1:<port>`) from `serve-site.cjs` stdout and run `Doctor` before driving.
-- Intercept external `https://**` requests in Playwright (`route.abort()`, or fulfill YouTube embeds locally) so verification stays local and deterministic.
-
-## Driving conventions
-
-- Prefer ARIA roles, accessible names, and explicit headings over positional selectors.
-- Test both `1440×900` desktop and `390×844` mobile when layout, disclosures, or diagrams change, and verify `document.documentElement.scrollWidth <= innerWidth`.
-- Test progressive enhancement (`javaScriptEnabled: false`) alongside interactive JavaScript behavior where pages use `<details>` or anchor navigation.
-- Wait for visible state (`locator.waitFor({ state: 'visible' })`) or URL changes rather than arbitrary sleeps outside brief `~300–500 ms` walkthrough pacing beats.
-
-## Proof and skip reporting
-
-- Write proof captures with `mktemp` outside `$state_dir` (`/tmp/after-desktop.XXXXXX.png` and H.264 `yuv420p` `+faststart` `<= 8 MB` `/tmp/after-desktop.XXXXXX.mp4`).
-- Confirm captured PNGs and transcoded MP4s survive cleanup and remain valid media files.
-- Record any unreachable prerequisite in the feature's `Gotchas` rather than weakening assertions.
+- Run `npm run docs:check --prefix site` before serving, and regenerate derived HTML when sources change (`npm run docs --prefix site` or `UPDATE_PROMPTS=1 cargo test prompts_page`).
+- Read `$origin` from `serve-site.cjs` stdout, run `Doctor`, and intercept external `https://**` requests (`route.abort()`, or stub YouTube embed HTML locally) so runs stay deterministic offline.
+- Verify `javaScriptEnabled: false` alongside JavaScript behavior where `<details>` or anchor reveal applies, and check `document.documentElement.scrollWidth <= innerWidth` at `390×844` mobile.
+- Record any unmet precondition in the feature's `Gotchas` rather than weakening assertions.
 
 ## Feature entry contract
 
