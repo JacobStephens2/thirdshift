@@ -68,7 +68,9 @@ pub fn run(
         ));
     }
     let github = GitHub::new();
-    let mut candidates = github.open_issues_labelled(&repo.slug(), labels::NEEDS_TRIAGE)?;
+    let listed = github.open_candidate_issues(&repo.slug(), labels::NEEDS_TRIAGE)?;
+    logs::listing_disagreement(&repo, &listed);
+    let mut candidates = listed.issues;
     candidates.sort_by_key(|listed| listed.issue.number);
     if config.pickup_order == PickupOrder::HighestFirst {
         candidates.reverse();

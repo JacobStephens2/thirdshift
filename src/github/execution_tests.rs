@@ -462,6 +462,103 @@ cat <<'ISSUES'
 }
 
 #[test]
+fn open_candidate_issues_merges_graphql_pages_handles_many_labels_and_errors() {
+    with_recorded_signal(
+        "github::execution_tests::open_candidate_issues_merges_graphql_pages_handles_many_labels_and_errors",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"exec python3 - "$@" <<'PY'
+import json, sys
+
+args = sys.argv[1:]
+if args[:2] == ['api', '--paginate']:
+    # REST returns #5 (GraphQL omits #5) and omits #7 and #9.
+    print(json.dumps({
+        'html_url': 'https://github.com/acme/widgets/issues/5',
+        'title': 'From REST',
+        'labels': [{'name': 'ready-for-agent'}, {'name': 'bug'}],
+    }))
+elif args[:2] == ['api', 'graphql']:
+    after = next((a[6:] for a in args if a.startswith('after=')), None)
+    if after is None:
+        # Page 1: #9 (with hasNextPage labels triggering issue_labels fallback) + #9 duplicate later.
+        page = {
+            'pageInfo': {'hasNextPage': True, 'endCursor': 'cursor-1'},
+            'nodes': [{
+                'url': 'https://github.com/acme/widgets/issues/9',
+                'title': 'Nine with many labels',
+                'labels': {'pageInfo': {'hasNextPage': True}, 'nodes': [{'name': 'ready-for-agent'}]},
+            }],
+        }
+    else:
+        assert after == 'cursor-1', after
+        # Page 2: duplicate #9 (should be deduplicated) and #7.
+        page = {
+            'pageInfo': {'hasNextPage': False, 'endCursor': None},
+            'nodes': [
+                {
+                    'url': 'https://github.com/acme/widgets/issues/9',
+                    'title': 'Nine duplicate',
+                    'labels': {'pageInfo': {'hasNextPage': False}, 'nodes': [{'name': 'ready-for-agent'}]},
+                },
+                {
+                    'url': 'https://github.com/acme/widgets/issues/7',
+                    'title': 'Seven from GraphQL',
+                    'labels': {'pageInfo': {'hasNextPage': False}, 'nodes': [{'name': 'ready-for-agent'}, {'name': 'bug'}]},
+                },
+            ],
+        }
+    print(json.dumps({'data': {'repository': {'issues': page}}}))
+elif args[:3] == ['issue', 'view', '9']:
+    assert args == ['issue', 'view', '9', '--repo', 'acme/widgets', '--json', 'labels'], args
+    print(json.dumps({'labels': [{'name': 'ready-for-agent'}, {'name': 'enhancement'}]}))
+else:
+    sys.exit(f'unexpected gh args: {args}')
+PY"#,
+            );
+
+            let candidates = GitHub::new()
+                .open_candidate_issues("acme/widgets", crate::labels::READY_FOR_AGENT)
+                .unwrap();
+            assert_eq!(candidates.omitted_by_rest, vec![7, 9]);
+            assert_eq!(candidates.omitted_by_graphql, vec![5]);
+            assert_eq!(
+                candidates.disagreement().as_deref(),
+                Some(
+                    "GitHub ready-for-agent listing disagreement: REST omitted #7 and #9 (found via GraphQL); GraphQL omitted #5 (found via REST)"
+                )
+            );
+            let numbers: Vec<_> = candidates.issues.iter().map(|i| i.issue.number).collect();
+            assert_eq!(numbers, vec![5, 9, 7]);
+            let nine = candidates
+                .issues
+                .iter()
+                .find(|i| i.issue.number == 9)
+                .unwrap();
+            assert!(nine.labels.has(Label::new("enhancement", "")));
+
+            fixture.script(
+                r#"exec python3 - "$@" <<'PY'
+import json, sys
+args = sys.argv[1:]
+if args[:2] == ['api', '--paginate']:
+    sys.exit(0)
+print(json.dumps({'errors': [{'message': 'GraphQL upstream failure'}]}))
+PY"#,
+            );
+            let err = GitHub::new()
+                .open_candidate_issues("acme/widgets", crate::labels::READY_FOR_AGENT)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("gh api graphql returned errors"),
+                "{err:#}"
+            );
+        },
+    );
+}
+
+#[test]
 fn a_transient_private_security_issue_listing_recovers() {
     with_recorded_signal(
         "github::execution_tests::a_transient_private_security_issue_listing_recovers",

@@ -47,7 +47,11 @@ if args[:2] == ['issue', 'view']:
 elif '--paginate' in args:
     pass # --jq .[] returns no items
 elif args[:2] == ['api', 'graphql']:
-    print(json.dumps({'data':{'repository':{'issue':{'subIssues':{'nodes':[], 'pageInfo':{'hasNextPage':False}}}}}}))
+    query = next((arg[6:] for arg in args if arg.startswith('query=')), '')
+    if 'issues(' in query and 'labels: [$label]' in query:
+        print(json.dumps({'data':{'repository':{'issues':{'nodes':[], 'pageInfo':{'hasNextPage':False, 'endCursor':None}}}}}))
+    else:
+        print(json.dumps({'data':{'repository':{'issue':{'subIssues':{'nodes':[], 'pageInfo':{'hasNextPage':False}}}}}}))
 else:
     print('fixture stops at PR selection', file=sys.stderr)
     sys.exit(1)

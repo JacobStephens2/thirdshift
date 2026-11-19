@@ -157,6 +157,32 @@ impl Repo {
     }
 }
 
+/// Write `numbers` as "#7", "#7 and #9" or "#7, #8 and #9".
+pub(crate) fn write_numbers(f: &mut std::fmt::Formatter, numbers: &[u64]) -> std::fmt::Result {
+    for (index, number) in numbers.iter().enumerate() {
+        let separator = if index == 0 {
+            ""
+        } else if index == numbers.len() - 1 {
+            " and "
+        } else {
+            ", "
+        };
+        write!(f, "{separator}#{number}")?;
+    }
+    Ok(())
+}
+
+/// Format `numbers` as "#7", "#7 and #9" or "#7, #8 and #9".
+pub(crate) fn format_numbers(numbers: &[u64]) -> String {
+    struct Joined<'a>(&'a [u64]);
+    impl std::fmt::Display for Joined<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write_numbers(f, self.0)
+        }
+    }
+    Joined(numbers).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
