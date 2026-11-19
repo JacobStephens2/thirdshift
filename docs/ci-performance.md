@@ -71,6 +71,15 @@ nightly's single `cargo test` worker keeps its existing budget; the gates only
 read their architecture's result. Removed macOS jobs are excluded from these
 active bounds.
 
+The browser jobs use the public Ubuntu HTTPS archive and security mirrors for
+APT dependencies instead of the runner image's preferred cloud mirror. In
+[CI 44408586373](https://github.com/JacobStephens2/thirdshift/actions/runs/44408586373/job/135170330532),
+the regional EC2 mirror took 8 minutes 51 seconds to serve 32.1 MB (60.3 kB/s).
+Playwright setup consumed almost the entire `site-test` budget, and the job
+ended during passing tests. Both browser jobs replace the runner's
+`/etc/apt/apt-mirrors.txt` before dependency installation; all dependencies,
+test commands and job limits remain in place.
+
 Release samples: PR runs [40614474450](https://github.com/JacobStephens2/thirdshift/actions/runs/40614474450),
 [40613734215](https://github.com/JacobStephens2/thirdshift/actions/runs/40613734215),
 [40609348838](https://github.com/JacobStephens2/thirdshift/actions/runs/40609348838),
