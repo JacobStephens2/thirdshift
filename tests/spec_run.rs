@@ -1646,11 +1646,30 @@ fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_th
         "using refs/remotes/origin/main as the fixed point",
         "the `thirdshift-tdd` skill",
         "Update PR https://github.com/acme/widgets/pull/2 using the `thirdshift-pr` skill",
+        "refs/remotes/origin/main (matching `Before` captures) and `HEAD` (matching `After` captures)",
+        "gh pr edit --attach",
         "\"Unaddressed findings\"",
         "Include \"Closes #20\"",
         "You run headless",
     ] {
         assert_contains(prompt, part);
+    }
+    let child_calls: Vec<_> = scenario
+        .claude_calls()
+        .into_iter()
+        .filter(|call| call["branch"].as_str() != Some("issue-20"))
+        .collect();
+    assert!(!child_calls.is_empty());
+    for call in child_calls {
+        let child_prompt = call["prompt"].as_str().unwrap();
+        assert_contains(
+            child_prompt,
+            "For Visual evidence, run interactive UI verification locally in this Worktree",
+        );
+        assert!(
+            !child_prompt.contains("gh pr edit --attach"),
+            "{child_prompt}"
+        );
     }
     let last_landed = result.stderr.find("thirdshift: #22 landed").unwrap();
     let reviewing = result.stderr.find("spec-review: session started").unwrap();

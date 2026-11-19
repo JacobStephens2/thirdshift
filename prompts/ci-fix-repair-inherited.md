@@ -18,6 +18,8 @@ Keep disposable command/test logs inside `.validation-logs/` in this worktree, n
 
 Run the affected checks locally. Commit only changed files, and push <branch> only when needed to publish real changes or required upstream reconciliation.
 
+Whenever your commits modify rendered UI files on pull request <pull request URL>, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched.
+
 Compare the failing test or check with the branch's diff against <base>. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.
 Only failures in tests or checks this branch does not touch may go in a "CI notes" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on <base>). Do not change code for those unrelated failures.
 

@@ -386,6 +386,8 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
          \n\
          Run the affected checks locally. Commit only changed files, and push issue-7 only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
+         Whenever your commits modify rendered UI files on pull request https://github.com/acme/widgets/pull/1, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched.\n\
+         \n\
          Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
          Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on main). Do not change code for those unrelated failures.\n\
          \n\
@@ -1377,6 +1379,8 @@ fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fa
          Keep disposable command/test logs inside `.validation-logs/` in this worktree, never in `/tmp`. This directory is excluded from Git and discarded by worktree cleanup. Never stage or commit validation logs. Remove untracked validation logs before committing and before ending the session. Reproduce with the failing test file or filter before running a full suite. Do not run full test suites with `--debug` or verbose trace flags to isolate a failure. Do not use `sleep`/`tail` polling loops; run commands in the foreground with a sufficient timeout. Inspect large logs with bounded streaming tools rather than reading entire files into memory.\n\
          \n\
          Run the affected checks locally. Commit only changed files, and push issue-7 only when needed to publish real changes or required upstream reconciliation.\n\
+         \n\
+         Whenever your commits modify rendered UI files on pull request https://github.com/acme/widgets/pull/1, run interactive UI verification with the `thirdshift-verify-ui` skill and publish missing Visual evidence or refresh stale captures via `gh pr edit --attach` using the `thirdshift-pr` skill; if commits only alter non-UI backend or test files and existing Visual evidence remains accurate, leave existing Visual evidence untouched.\n\
          \n\
          Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
          Only failures in tests or checks this branch does not touch may go in a \"CI notes\" section of the pull request body, with a one-line explanation and evidence that they are unrelated to this branch (for example, an intermittent failure or a failure that also occurs on main). Do not change code for those unrelated failures.\n\

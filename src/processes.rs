@@ -469,6 +469,7 @@ struct IssueRun<'a> {
     issue: &'a IssueUrl,
     branch: &'a str,
     base: &'a str,
+    scope: prompt::TicketScope,
     on_origin: bool,
     selection: &'a Selection,
     logs: &'a session::Logs,
@@ -509,7 +510,46 @@ struct StepRun<'a> {
     selection: Option<&'a Selection>,
     /// The Base branch checked out in the Launch directory.
     base: &'a str,
+    scope: prompt::TicketScope,
     steps: &'a [ResolvedStep],
+}
+
+impl Prepared {
+    fn step_run<'a>(
+        &'a self,
+        process: &'a str,
+        step: &'a ResolvedStep,
+        continuation: Option<(String, String)>,
+        checkout: Option<&'a Worktree>,
+        selection: Option<&'a Selection>,
+        scope: prompt::TicketScope,
+    ) -> StepRun<'a> {
+        StepRun {
+            source: &self.source,
+            process,
+            plan_only: self.plan_only,
+            security_flags: &self.security_flags,
+            security_fix: self.security_fix,
+            goal: self.goal,
+            limits: &self.limits,
+            completed: &self.completed,
+            killed_work: &self.killed_work,
+            issue_branch: names_issue_worktree(
+                step.worktree.as_deref(),
+                self.issue_worktree.as_deref(),
+            ),
+            choice: &step.choice,
+            issue: self.issue.as_ref(),
+            dispatched: self.dispatched.as_ref(),
+            started: self.started,
+            continuation,
+            checkout,
+            selection,
+            base: &self.base,
+            scope,
+            steps: &self.steps,
+        }
+    }
 }
 
 /// Results and start times of Steps that have already finished.
@@ -1185,57 +1225,26 @@ fn run_parallel(
     issue_run: Option<&IssueRun<'_>>,
 ) -> Vec<(Duration, DateTime<Utc>, Result<String>)> {
     let (checkout, continuing) = held_issue_branch(issue_run);
-    let steps = &prepared.steps;
-    let base = prepared.base.as_str();
-    let goal = prepared.goal;
-    let limits = &prepared.limits;
-    let completed = &prepared.completed;
-    let killed_work = &prepared.killed_work;
     let selection = issue_run.map(|run| run.selection);
-    thread::scope(|scope| {
+    let scope = issue_run.map_or(prompt::TicketScope::Standard, |run| run.scope);
+    thread::scope(|thread_scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
             let cwd = step_dir(prepared, step, checkout).to_path_buf();
-            let choice = step.choice.clone();
             let earlier = prior.results.to_vec();
             let began = prior.began.to_vec();
-            let process = process.to_string();
             let results = results.to_path_buf();
             let first = group_start + offset == 0;
-            let issue = prepared.issue.clone();
-            let dispatched = prepared.dispatched.as_ref();
-            let started_at = prepared.started;
             let continuation = step_continuation(prepared, step, continuing.as_ref());
-            let issue_branch =
-                names_issue_worktree(step.worktree.as_deref(), prepared.issue_worktree.as_deref());
-            handles.push(scope.spawn(move || {
+            handles.push(thread_scope.spawn(move || {
                 let started = Instant::now();
                 let began_at = Utc::now();
                 let prior = PriorSteps {
                     results: &earlier,
                     began: &began,
                 };
-                let run = StepRun {
-                    source: &prepared.source,
-                    process: &process,
-                    plan_only: prepared.plan_only,
-                    security_flags: &prepared.security_flags,
-                    security_fix: prepared.security_fix,
-                    goal,
-                    limits,
-                    completed,
-                    killed_work,
-                    issue_branch,
-                    choice: &choice,
-                    issue: issue.as_ref(),
-                    dispatched,
-                    started: started_at,
-                    continuation,
-                    checkout,
-                    selection,
-                    base,
-                    steps,
-                };
+                let run =
+                    prepared.step_run(process, step, continuation, checkout, selection, scope);
                 let outcome = run_step_in(&run, &cwd, step, &prior, &results, first);
                 (started.elapsed(), began_at, outcome)
             }));
@@ -1327,30 +1336,14 @@ fn run_step(
     issue_run: Option<&IssueRun<'_>>,
 ) -> Result<String> {
     let (checkout, continuing) = held_issue_branch(issue_run);
-    let run = StepRun {
-        source: &prepared.source,
+    let run = prepared.step_run(
         process,
-        plan_only: prepared.plan_only,
-        security_flags: &prepared.security_flags,
-        security_fix: prepared.security_fix,
-        goal: prepared.goal,
-        limits: &prepared.limits,
-        completed: &prepared.completed,
-        killed_work: &prepared.killed_work,
-        issue_branch: names_issue_worktree(
-            step.worktree.as_deref(),
-            prepared.issue_worktree.as_deref(),
-        ),
-        choice: &step.choice,
-        issue: prepared.issue.as_ref(),
-        dispatched: prepared.dispatched.as_ref(),
-        started: prepared.started,
-        continuation: step_continuation(prepared, step, continuing.as_ref()),
+        step,
+        step_continuation(prepared, step, continuing.as_ref()),
         checkout,
-        selection: issue_run.map(|run| run.selection),
-        base: &prepared.base,
-        steps: &prepared.steps,
-    };
+        issue_run.map(|run| run.selection),
+        issue_run.map_or(prompt::TicketScope::Standard, |run| run.scope),
+    );
     run_step_in(
         &run,
         step_dir(prepared, step, checkout),
