@@ -131,10 +131,12 @@ pub(super) fn probe(home: &Path) -> Probe {
         Platform::Linux
     };
     let cache = std::env::var_os("PLAYWRIGHT_BROWSERS_PATH")
+        .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| match platform {
             Platform::MacOs => home.join("Library/Caches/ms-playwright"),
             Platform::Linux => std::env::var_os("XDG_CACHE_HOME")
+                .filter(|value| !value.is_empty())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| home.join(".cache"))
                 .join("ms-playwright"),
@@ -195,11 +197,15 @@ fn has_chromium(cache: &Path) -> bool {
 }
 
 /// Inherit the terminal so sudo and package managers can ask their own questions.
-pub(super) fn install(command: &str) -> Result<()> {
+pub(super) fn install(home: &Path, command: &str) -> Result<()> {
     interrupt::install()?;
     interrupt::check()?;
-    let mut child = Command::new("/bin/sh")
+    let working = isolated_working_dir(home)?;
+    let mut shell = Command::new("/bin/sh");
+    absolutize_cache_env(&mut shell);
+    let mut child = shell
         .args(["-c", command])
+        .current_dir(working.path())
         .process_group(0)
         .stdout(std::io::stderr().as_fd().try_clone_to_owned()?)
         .spawn()
@@ -236,6 +242,38 @@ pub(super) fn install(command: &str) -> Result<()> {
         bail!("{command}: {status}");
     }
     Ok(())
+}
+
+/// Create a private working directory under `home/.thirdshift` containing an
+/// empty manifest and `node_modules` directory so `npx` cannot read project
+/// `.npmrc` or local `node_modules` binaries from the launch directory or its
+/// ancestors.
+fn isolated_working_dir(home: &Path) -> Result<tempfile::TempDir> {
+    let state_dir = home.join(".thirdshift");
+    std::fs::create_dir_all(&state_dir)?;
+    let working = tempfile::Builder::new()
+        .prefix("visual-evidence-")
+        .tempdir_in(&state_dir)?;
+    std::fs::write(
+        working.path().join("package.json"),
+        "{\"name\":\"thirdshift-visual-evidence\",\"private\":true}\n",
+    )?;
+    std::fs::create_dir(working.path().join("node_modules"))?;
+    Ok(working)
+}
+
+fn absolutize_cache_env(command: &mut Command) {
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    for var in ["PLAYWRIGHT_BROWSERS_PATH", "XDG_CACHE_HOME"] {
+        if let Some(value) = std::env::var_os(var).filter(|value| !value.is_empty()) {
+            let path = Path::new(&value);
+            if path.is_relative() {
+                command.env(var, cwd.join(path));
+            }
+        }
+    }
 }
 
 /// Return terminal ownership to Setup even when an installer is interrupted.

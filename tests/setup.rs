@@ -1693,6 +1693,340 @@ fn visual_evidence_installer_stops_for_a_signal_sent_only_to_setup() {
     assert!(result.terminal_restored);
 }
 
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
+        let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((triple >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(triple & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+fn serve_local_npm_registry(
+    tarball: Vec<u8>,
+) -> (
+    u16,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::thread::JoinHandle<()>,
+) {
+    use sha2::{Digest, Sha512};
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let integrity = format!("sha512-{}", base64_encode(&Sha512::digest(&tarball)));
+    let metadata = serde_json::json!({
+        "name": "playwright",
+        "dist-tags": { "latest": "0.0.1" },
+        "versions": {
+            "0.0.1": {
+                "name": "playwright",
+                "version": "0.0.1",
+                "bin": { "playwright": "cli.js" },
+                "dist": {
+                    "tarball": format!("http://127.0.0.1:{port}/playwright-0.0.1.tgz"),
+                    "integrity": integrity,
+                }
+            }
+        }
+    })
+    .to_string();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            if thread_stop.load(Ordering::Acquire) {
+                break;
+            }
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let path = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/");
+            let (status, content_type, body): (&str, &str, &[u8]) = if path == "/playwright" {
+                ("200 OK", "application/json", metadata.as_bytes())
+            } else if path == "/playwright-0.0.1.tgz" {
+                ("200 OK", "application/octet-stream", &tarball)
+            } else {
+                ("404 Not Found", "text/plain", b"not found")
+            };
+            let header = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    (port, stop, handle)
+}
+
+fn serve_404_npm_registry() -> (
+    u16,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            if thread_stop.load(Ordering::Acquire) {
+                break;
+            }
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    (port, stop, handle)
+}
+
+#[test]
+fn visual_evidence_installer_uses_isolated_working_directory() {
+    let scenario = Scenario::new();
+    visual_tools(&scenario, "2.103.2", false);
+    for tool in ["sudo", "brew"] {
+        write_executable(
+            &scenario.path(&format!("bin/{tool}")),
+            "#!/bin/sh\nexit 0\n",
+        );
+    }
+    fs::write(
+        scenario.launch_dir().join(".npmrc"),
+        "registry=http://127.0.0.1:1/untrusted\n",
+    )
+    .unwrap();
+    let observed_cwd = scenario.path("npx-cwd");
+    let browser = scenario.path("browser-template");
+    write_executable(&browser, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &scenario.path("bin/npx"),
+        &format!(
+            "#!/bin/sh\npwd -P > '{}'\ntest -f package.json && test -d node_modules || exit 93\ntest ! -e .npmrc || exit 94\nmkdir -p \"$PLAYWRIGHT_BROWSERS_PATH/chromium-999/chrome-linux64\"\ncp '{}' \"$PLAYWRIGHT_BROWSERS_PATH/chromium-999/chrome-linux64/chrome\"\n",
+            observed_cwd.display(),
+            browser.display(),
+        ),
+    );
+    let mut keys = default_setup_keys();
+    keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+    let result = scenario.run_terminal(
+        &["setup"],
+        &[("PLAYWRIGHT_BROWSERS_PATH", "relative-browsers")],
+        &keys,
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let cwd = fs::read_to_string(&observed_cwd).unwrap();
+    let cwd = std::path::Path::new(cwd.trim());
+    assert_ne!(
+        cwd,
+        scenario.launch_dir().canonicalize().unwrap(),
+        "npx ran inside the repository working directory: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("exit status: 93") && !result.stderr.contains("exit status: 94"),
+        "npx working directory was not isolated: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Visual evidence: PASS"),
+        "{}",
+        result.stderr
+    );
+    let remaining: Vec<_> = fs::read_dir(scenario.path("home/.thirdshift"))
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("visual-evidence-")
+        })
+        .collect();
+    assert!(remaining.is_empty(), "{remaining:?}");
+}
+
+#[test]
+fn visual_evidence_installer_ignores_working_directory_npmrc_and_local_playwright() {
+    // Real npx proof-of-concept: an untrusted repository .npmrc or local
+    // node_modules/.bin/playwright must not hijack `npx` when consenting.
+    let has_npx = std::process::Command::new("npx")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let has_tar = std::process::Command::new("tar")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !has_npx || !has_tar {
+        eprintln!("real npx isolation cases require npx and tar; stand-in case still runs");
+        return;
+    }
+
+    // Case 1: Repository clone contains only `.npmrc` (no package.json or node_modules),
+    // and an ancestor directory outside home/.thirdshift also contains package.json + .npmrc.
+    {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, "2.103.2", false);
+        for tool in ["sudo", "brew"] {
+            write_executable(
+                &scenario.path(&format!("bin/{tool}")),
+                "#!/bin/sh\nexit 0\n",
+            );
+        }
+        let marker = scenario.path("hijacked-by-npmrc");
+        let pkg_root = scenario.path("evil-pkg");
+        let pkg = pkg_root.join("package");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"playwright","version":"0.0.1","bin":{"playwright":"cli.js"}}"#,
+        )
+        .unwrap();
+        write_executable(
+            &pkg.join("cli.js"),
+            &format!(
+                "#!/usr/bin/env node\nrequire('fs').writeFileSync({}, 'hijacked');\n",
+                serde_json::to_string(&marker.display().to_string()).unwrap()
+            ),
+        );
+        let tgz = scenario.path("playwright-0.0.1.tgz");
+        let tar_status = std::process::Command::new("tar")
+            .args(["-czf"])
+            .arg(&tgz)
+            .args(["-C"])
+            .arg(&pkg_root)
+            .arg("package")
+            .status()
+            .unwrap();
+        assert!(tar_status.success());
+        let (evil_port, evil_stop, evil_handle) = serve_local_npm_registry(fs::read(&tgz).unwrap());
+        let (safe_port, safe_stop, safe_handle) = serve_404_npm_registry();
+
+        fs::write(
+            scenario.path("home/.npmrc"),
+            format!("registry=http://127.0.0.1:{safe_port}/\nfetch-retries=0\n"),
+        )
+        .unwrap();
+        // Ancestor directory outside home/.thirdshift (simulating shared /tmp ancestor).
+        fs::write(scenario.path("package.json"), r#"{"name":"ancestor"}"#).unwrap();
+        fs::write(
+            scenario.path(".npmrc"),
+            format!("registry=http://127.0.0.1:{evil_port}/\n"),
+        )
+        .unwrap();
+        // Cloned repository root with only `.npmrc`.
+        fs::write(
+            scenario.launch_dir().join(".npmrc"),
+            format!("registry=http://127.0.0.1:{evil_port}/\n"),
+        )
+        .unwrap();
+
+        let mut keys = default_setup_keys();
+        keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+        let result = scenario.run_terminal(&["setup"], &[], &keys);
+
+        evil_stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", evil_port));
+        let _ = evil_handle.join();
+        safe_stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", safe_port));
+        let _ = safe_handle.join();
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            !marker.exists(),
+            "repository or ancestor .npmrc hijacked npx and executed untrusted package code:\n{}",
+            result.stderr
+        );
+    }
+
+    // Case 2: Repository contains local node_modules/.bin/playwright.
+    {
+        let scenario = Scenario::new();
+        visual_tools(&scenario, "2.103.2", false);
+        for tool in ["sudo", "brew"] {
+            write_executable(
+                &scenario.path(&format!("bin/{tool}")),
+                "#!/bin/sh\nexit 0\n",
+            );
+        }
+        let (safe_port, safe_stop, safe_handle) = serve_404_npm_registry();
+        fs::write(
+            scenario.path("home/.npmrc"),
+            format!("registry=http://127.0.0.1:{safe_port}/\nfetch-retries=0\n"),
+        )
+        .unwrap();
+        let marker = scenario.path("hijacked-by-node-modules");
+        for root in [scenario.launch_dir(), scenario.path("")] {
+            let bin_dir = root.join("node_modules/.bin");
+            let pkg_dir = root.join("node_modules/playwright");
+            fs::create_dir_all(&bin_dir).unwrap();
+            fs::create_dir_all(&pkg_dir).unwrap();
+            fs::write(
+                pkg_dir.join("package.json"),
+                r#"{"name":"playwright","version":"0.0.0","bin":{"playwright":"../.bin/playwright"}}"#,
+            )
+            .unwrap();
+            write_executable(
+                &bin_dir.join("playwright"),
+                &format!("#!/bin/sh\nprintf hijacked > '{}'\n", marker.display()),
+            );
+        }
+
+        let mut keys = default_setup_keys();
+        keys.push(TerminalStep::line(VISUAL_INSTALL, "y"));
+        let result = scenario.run_terminal(&["setup"], &[], &keys);
+
+        safe_stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", safe_port));
+        let _ = safe_handle.join();
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            !marker.exists(),
+            "repository node_modules/.bin/playwright hijacked npx:\n{}",
+            result.stderr
+        );
+    }
+}
+
 /// The keystrokes that turn Run notifications on, to `me@example.com` from
 /// the default sender, then `rest`.
 fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {

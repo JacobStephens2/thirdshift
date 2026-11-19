@@ -468,7 +468,7 @@ impl Outside for OnMachine<'_> {
     }
 
     fn install_visual_evidence(&mut self, command: &str) -> Result<()> {
-        visual_evidence::install(command)
+        visual_evidence::install(self.home, command)
     }
 
     fn step(&mut self, line: String) {
