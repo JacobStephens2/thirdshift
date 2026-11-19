@@ -2824,6 +2824,26 @@ skipped. While the repository is at its [Command limit](#the-command-limit), a P
 
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
+After saving the User config and any entered Credentials, `thirdshift setup`
+checks the host tools for pull request **Visual evidence**: `gh >= 2.103.2`,
+`ffmpeg` on `PATH`, and an installed Playwright Chromium executable. It checks
+Playwright's standard cache (`~/.cache/ms-playwright` on Linux,
+`~/Library/Caches/ms-playwright` on macOS), or `PLAYWRIGHT_BROWSERS_PATH` when
+set. A browser folder without an executable does not pass.
+
+Setup prints `Visual evidence: PASS` when all three are present. Otherwise it
+prints `WARN`, names the missing or outdated tools, and shows the exact repair
+commands: Homebrew on macOS; `apt` (including GitHub's package repository for
+an up-to-date `gh`) and Playwright's Chromium installation on Debian/Ubuntu.
+Playwright installation needs Node.js and npm; Setup includes their installation
+when Chromium is missing. On a terminal, one `Install or upgrade Visual evidence
+tools now? [y/N]` prompt offers to run those commands in the foreground.
+Enter or `N` leaves the host unchanged; `y` runs the commands, checks again,
+and reports the updated status. An installer failure or interruption warns and
+keeps the saved User config and Credentials. Without a terminal, Setup only
+reports status and commands, runs no installer, and exits `0`. A passing check
+asks no install question.
+
 Read every setting with its value and default, read one, or set one:
 
 ```sh
