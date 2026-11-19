@@ -104,7 +104,7 @@ pub enum Merge<P = PendingMerge> {
 pub(crate) enum BaseRelationship {
     Behind,
     Current,
-    Merged,
+    Merged(Vec<String>),
 }
 
 /// A conflicted merge left for a conflict Repair: `upstream` as it was when
@@ -470,7 +470,7 @@ impl Worktree {
     }
 
     /// Fetch Base again and compare it to the exact watched head. For heads
-    /// without checks, tell whether they also contain work forked from older Base.
+    /// without checks, identify the older heads combined with the current Base.
     pub(crate) fn relationship_to_base(
         &self,
         base: &str,
@@ -482,8 +482,11 @@ impl Worktree {
             if !operation.contains(head, &origin.commit)? {
                 return Ok(BaseRelationship::Behind);
             }
-            if check_branch_point && operation.has_older_branch_point(head, &origin.commit)? {
-                return Ok(BaseRelationship::Merged);
+            if check_branch_point {
+                let older_heads = operation.heads_merged_with_base(head, &origin.commit)?;
+                if !older_heads.is_empty() {
+                    return Ok(BaseRelationship::Merged(older_heads));
+                }
             }
             Ok(BaseRelationship::Current)
         })

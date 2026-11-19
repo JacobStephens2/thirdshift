@@ -1745,18 +1745,30 @@ impl repair_loop::Outside for RunOutside<'_> {
             use crate::worktree::BaseRelationship;
             let relationship =
                 self.worktree.relationship_to_base(self.base, &watched.commit, !watched.ci_passed)?;
+            let github = GitHub::new();
             match relationship {
                 BaseRelationship::Current => Ok(true),
-                _ if GitHub::new().base_has_merge_queue(self.issue, self.base)? => Ok(true),
+                _ if github.base_has_merge_queue(self.issue, self.base)? => Ok(true),
                 BaseRelationship::Behind => Ok(false),
-                BaseRelationship::Merged => Err(crate::failed_run::MergeHold {
-                    reason: format!(
-                        "CI has not passed on {} after merging in {}; the PR stays ready for review",
-                        ci::short(&watched.commit),
-                        self.base,
-                    ),
+                BaseRelationship::Merged(older_heads) => {
+                    for head in older_heads {
+                        if !github.checks_on(self.issue, &head)?.is_empty() {
+                            return Err(crate::failed_run::MergeHold {
+                                reason: format!(
+                                    "CI has not passed on {} after merging in {}; the PR stays ready for review",
+                                    ci::short(&watched.commit),
+                                    self.base,
+                                ),
+                            }
+                            .into());
+                        }
+                    }
+                    // The repository had no checks on either side of the update.
+                    Ok(!matches!(
+                        self.worktree.relationship_to_base(self.base, &watched.commit, false)?,
+                        BaseRelationship::Behind
+                    ))
                 }
-                .into()),
             }
         })
     }

@@ -683,15 +683,34 @@ impl<'a> Operation<'a> {
         self.succeeds(&["merge-base", "--is-ancestor", ancestor, head])
     }
 
-    pub(super) fn has_older_branch_point(&self, head: &str, base: &str) -> Result<bool> {
-        // Each excluded boundary commit is a parent of work unique to the
-        // head. An older boundary means that work branched off before this
-        // Base was integrated, whichever parent the merge put first.
-        Ok(self
-            .run(&["rev-list", "--boundary", &format!("{base}..{head}")])?
-            .lines()
-            .filter_map(|line| line.strip_prefix('-'))
-            .any(|boundary| boundary != base))
+    pub(super) fn heads_merged_with_base(&self, head: &str, base: &str) -> Result<Vec<String>> {
+        use std::collections::{BTreeSet, HashMap};
+        let history = self.run(&[
+            "rev-list",
+            "--reverse",
+            "--topo-order",
+            "--parents",
+            &format!("{base}..{head}"),
+        ])?;
+        // Visit parents before their children. Commits outside the range
+        // belong to Base's history. An in-range parent without Base was
+        // combined with it here, regardless of the merge's parent order.
+        let mut contains_base = HashMap::from([(base, true)]);
+        let mut combined = BTreeSet::new();
+        for line in history.lines() {
+            let mut parents = line.split_ascii_whitespace();
+            let Some(commit) = parents.next() else {
+                continue;
+            };
+            let current = parents
+                .clone()
+                .any(|parent| contains_base.get(parent) == Some(&true));
+            if current {
+                combined.extend(parents.filter(|parent| contains_base.get(parent) == Some(&false)));
+            }
+            contains_base.insert(commit, current);
+        }
+        Ok(combined.into_iter().map(str::to_owned).collect())
     }
 
     /// Boolean probes are gated but never retried or reinterpreted as errors
