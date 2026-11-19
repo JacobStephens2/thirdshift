@@ -3620,9 +3620,28 @@ fn graphql_response_stops_following_batches_and_warns_while_fresh() {
         "remaining": 499,
         "resetAt": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
     });
+    let head = "a".repeat(40);
+    let base = "b".repeat(40);
+    gh["prs"][0]["headRefOid"] = serde_json::json!(head);
+    gh["prs"][0]["baseRef"] = serde_json::json!({"target": {"oid": base}});
+    gh["prs"][0]["commits"] = serde_json::json!({
+        "nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]
+    });
+    gh["comparisons"] = serde_json::json!({
+        (format!("repos/acme/widgets/compare/{head}...{base}?per_page=1")):
+            {"merge_base_commit": {"sha": base}}
+    });
     scenario.write_gh_state(&gh);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let unexpected_compare = scenario.gh_calls().iter().any(|call| {
+        call.first().is_some_and(|arg| arg == "api")
+            && call.get(1).is_some_and(|arg| arg.contains("/compare/"))
+    });
+    assert!(
+        !unexpected_compare,
+        "read a comparison after reaching the reserve"
+    );
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(
         graphql_calls(&scenario).len(),
@@ -3647,6 +3666,56 @@ fn graphql_response_stops_following_batches_and_warns_while_fresh() {
         text.stdout
     );
     assert_eq!(scenario.gh_calls(), before);
+}
+
+#[test]
+fn failed_base_comparison_preserves_the_last_stale_ci_answer() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+
+    let [fork, head, base, next_base] = ['a', 'b', 'c', 'd'].map(|ch| ch.to_string().repeat(40));
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["headRefOid"] = serde_json::json!(head);
+    gh["prs"][0]["baseRef"] = serde_json::json!({"target": {"oid": base}});
+    gh["prs"][0]["commits"] = serde_json::json!({
+        "nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]
+    });
+    gh["comparisons"] = serde_json::json!({
+        (format!("repos/acme/widgets/compare/{head}...{base}?per_page=1")):
+            {"merge_base_commit": {"sha": fork}},
+        (format!("repos/acme/widgets/compare/{fork}...{base}?per_page=100&page=1")):
+            {"total_commits": 1, "commits": [
+                {"sha": base, "parents": [{"sha": fork}]}
+            ]}
+    });
+    scenario.write_gh_state(&gh);
+
+    let status = || {
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        serde_json::from_str::<Value>(&output.stdout).unwrap()
+    };
+    let before = status();
+    assert_eq!(
+        before["commands"][0]["github_stale_ci"],
+        "1 merge behind main: CI result predates it"
+    );
+
+    age_cache_file(&scenario, 600);
+    gh["prs"][0]["baseRef"]["target"]["oid"] = serde_json::json!(next_base);
+    gh["failing"] = serde_json::json!([format!(
+        "api repos/acme/widgets/compare/{head}...{next_base}?per_page=1"
+    )]);
+    gh["failing_stderr"] = serde_json::json!("HTTP 401: Bad credentials");
+    scenario.write_gh_state(&gh);
+
+    let after = status();
+    assert!(after["github_failure"].as_str().unwrap().contains("401"));
+    assert_eq!(
+        after["commands"][0]["github_stale_ci"],
+        before["commands"][0]["github_stale_ci"]
+    );
 }
 
 #[test]

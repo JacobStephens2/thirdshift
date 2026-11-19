@@ -94,6 +94,15 @@ pub(crate) enum MergeAttempt {
     Refused(anyhow::Error),
 }
 
+#[derive(Debug)]
+struct BaseMergeGate;
+
+impl std::fmt::Display for BaseMergeGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("checking Base freshness for Self-merge")
+    }
+}
+
 /// Ticket accounting binds on resume or creation. Delivery binds lazily on
 /// the first successful observation of the repository's own Issue branch. A wrong Base
 /// branch still binds identity so Failed run salvage can draft that PR.
@@ -663,7 +672,7 @@ impl<A: Adapter> PullRequest<A> {
     pub fn merge(
         &mut self,
         watched: &str,
-        base_current: impl FnOnce() -> Result<bool>,
+        mut base_current: impl FnMut() -> Result<bool>,
     ) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
         self.ensure_spec_pr_allows_merge()?;
@@ -698,11 +707,13 @@ impl<A: Adapter> PullRequest<A> {
             }
             .into());
         }
-        if !base_current()? {
-            return Ok(MergeAttempt::BaseMoved);
-        }
-        let Err(error) = self.adapter.merge(&self.issue, number, watched) else {
-            return Ok(MergeAttempt::Merged);
+        let error = match self.adapter.merge(&self.issue, number, watched, &mut || {
+            base_current().context(BaseMergeGate)
+        }) {
+            Ok(true) => return Ok(MergeAttempt::Merged),
+            Ok(false) => return Ok(MergeAttempt::BaseMoved),
+            Err(error) if error.is::<BaseMergeGate>() => return Err(error),
+            Err(error) => error,
         };
         // Completion never clears or changes the recorded interruption. Only
         // this PR, merged at the watched head and expected branches, counts.
@@ -874,7 +885,13 @@ pub(crate) trait Adapter {
     ) -> Result<String>;
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
     fn base_is_open_pr(&mut self, issue: &IssueUrl, base: &str) -> Result<bool>;
-    fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
+    fn merge(
+        &mut self,
+        issue: &IssueUrl,
+        number: u64,
+        head: &str,
+        base_current: &mut dyn FnMut() -> Result<bool>,
+    ) -> Result<bool>;
     /// The existing Review eligibility read, with its Trusted account and
     /// repository checks.
     fn review_eligibility(
@@ -953,8 +970,14 @@ impl Adapter for GitHub {
     fn base_is_open_pr(&mut self, issue: &IssueUrl, base: &str) -> Result<bool> {
         self.review_base_is_open_pr(issue, base)
     }
-    fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
-        GitHub::merge(self, issue, number, head)
+    fn merge(
+        &mut self,
+        issue: &IssueUrl,
+        number: u64,
+        head: &str,
+        base_current: &mut dyn FnMut() -> Result<bool>,
+    ) -> Result<bool> {
+        self.merge_if_base_current(issue, number, head, base_current)
     }
     fn review_eligibility(
         &mut self,
@@ -1207,7 +1230,16 @@ mod tests {
         fn base_is_open_pr(&mut self, _: &IssueUrl, _: &str) -> Result<bool> {
             Ok(false)
         }
-        fn merge(&mut self, _: &IssueUrl, number: u64, head: &str) -> Result<()> {
+        fn merge(
+            &mut self,
+            _: &IssueUrl,
+            number: u64,
+            head: &str,
+            base_current: &mut dyn FnMut() -> Result<bool>,
+        ) -> Result<bool> {
+            if !base_current()? {
+                return Ok(false);
+            }
             let mut world = self.0.borrow_mut();
             world.merges.push((number, head.to_string()));
             if let Some(signal) = world.merge_signal {
@@ -1217,7 +1249,7 @@ mod tests {
             if world.refused {
                 bail!("merge request failed");
             }
-            Ok(())
+            Ok(true)
         }
         fn review_eligibility(
             &mut self,

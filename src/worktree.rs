@@ -96,9 +96,15 @@ pub enum Preserved {
 #[derive(Debug)]
 pub enum Merge<P = PendingMerge> {
     /// Merged, or nothing to merge, with the selected origin commit.
-    Clean { commit: String, advanced: bool },
+    Clean { commit: String },
     /// Conflicted; the merge is left in progress for a conflict Repair.
     Conflicted(P),
+}
+
+pub(crate) enum BaseRelationship {
+    Behind,
+    Current,
+    Merged,
 }
 
 /// A conflicted merge left for a conflict Repair: `upstream` as it was when
@@ -457,14 +463,29 @@ impl Worktree {
     /// Fetch `origin/<base>` and say whether it has commits the Issue branch
     /// has not merged yet.
     pub fn base_branch_moved(&self, base: &str) -> Result<bool> {
-        self.base_branch_missing_from(base, "HEAD")
-    }
-
-    /// Fetch Base again and compare it to the exact head whose CI was watched.
-    pub fn base_branch_missing_from(&self, base: &str, head: &str) -> Result<bool> {
         self.checkout.ordinary(&self.launch, |operation| {
             let origin = operation.sample_origin(base)?;
-            Ok(!operation.contains(head, &origin.commit)?)
+            Ok(!operation.merged(&origin.commit)?)
+        })
+    }
+
+    /// Fetch Base again and compare it to the exact watched head. For heads
+    /// without checks, distinguish branching from this Base from merging it in.
+    pub(crate) fn relationship_to_base(
+        &self,
+        base: &str,
+        head: &str,
+        check_first_parent: bool,
+    ) -> Result<BaseRelationship> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let origin = operation.sample_origin(base)?;
+            if !operation.contains(head, &origin.commit)? {
+                return Ok(BaseRelationship::Behind);
+            }
+            if check_first_parent && !operation.on_first_parent_chain(head, &origin.commit)? {
+                return Ok(BaseRelationship::Merged);
+            }
+            Ok(BaseRelationship::Current)
         })
     }
 }

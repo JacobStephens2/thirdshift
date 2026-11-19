@@ -1742,25 +1742,22 @@ impl repair_loop::Outside for RunOutside<'_> {
     fn merge(&mut self, watched: &repair_loop::WatchedHead) -> Result<MergeAttempt> {
         self.check_closing_issues()?;
         self.pull_request.merge(&watched.commit, || {
-            let behind = self
-                .worktree
-                .base_branch_missing_from(self.base, &watched.commit)?;
-            if (behind || watched.missing_green_ci)
-                && !GitHub::new().base_has_merge_queue(self.issue, self.base)?
-            {
-                if behind {
-                    return Ok(false);
-                }
-                return Err(crate::failed_run::MergeHold {
+            use crate::worktree::BaseRelationship;
+            let relationship =
+                self.worktree.relationship_to_base(self.base, &watched.commit, !watched.ci_passed)?;
+            match relationship {
+                BaseRelationship::Current => Ok(true),
+                _ if GitHub::new().base_has_merge_queue(self.issue, self.base)? => Ok(true),
+                BaseRelationship::Behind => Ok(false),
+                BaseRelationship::Merged => Err(crate::failed_run::MergeHold {
                     reason: format!(
                         "CI has not passed on {} after merging in {}; the PR stays ready for review",
                         ci::short(&watched.commit),
                         self.base,
                     ),
                 }
-                .into());
+                .into()),
             }
-            Ok(true)
         })
     }
 

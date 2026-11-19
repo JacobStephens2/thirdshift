@@ -451,6 +451,11 @@ pub(super) fn refresh(
                     {
                         kept.failure = Some(format!("{url}: {error:#}"));
                         read_failed = true;
+                        // The comparison is part of this PR observation. Keep
+                        // its previous answer and observation time together.
+                        if kept.states.get(url).is_some_and(Option::is_some) {
+                            continue;
+                        }
                     }
                     if let Some(InboxState::Issue(issue)) = &mut state
                         && !issue.needs_triage

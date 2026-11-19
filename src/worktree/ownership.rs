@@ -683,6 +683,21 @@ impl<'a> Operation<'a> {
         self.succeeds(&["merge-base", "--is-ancestor", ancestor, head])
     }
 
+    pub(super) fn on_first_parent_chain(&self, head: &str, ancestor: &str) -> Result<bool> {
+        // Count the first-parent commits before crossing into the ancestor's
+        // history. The first excluded commit is the ancestor only if it lies
+        // on that chain. Use history so a Continuation reaches the same answer.
+        let count = self
+            .run(&[
+                "rev-list",
+                "--first-parent",
+                "--count",
+                &format!("{ancestor}..{head}"),
+            ])?
+            .parse::<usize>()?;
+        Ok(self.run(&["rev-parse", &format!("{head}~{count}")])? == ancestor)
+    }
+
     /// Boolean probes are gated but never retried or reinterpreted as errors
     /// for completed nonzero exits (including an absent comparison ref).
     fn succeeds(&self, args: &[&str]) -> Result<bool> {
@@ -692,7 +707,6 @@ impl<'a> Operation<'a> {
     /// Merge the exact sampled commit, preserving the readable upstream label
     /// and allowing a merge even when the repository config demands ff-only.
     pub(super) fn merge(&self, origin: OriginCommit, branch: &str) -> Result<Merge> {
-        let advanced = !self.merged(&origin.commit)?;
         let message = format!(
             "Merge remote-tracking branch '{}' into {branch}",
             origin.upstream
@@ -700,7 +714,6 @@ impl<'a> Operation<'a> {
         match self.run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit]) {
             Ok(_) => Ok(Merge::Clean {
                 commit: origin.commit,
-                advanced,
             }),
             Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge { origin })),
             Err(error) => Err(error),

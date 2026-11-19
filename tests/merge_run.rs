@@ -20,6 +20,84 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 #[test]
+fn quota_retry_revalidates_base_before_retrying_self_merge() {
+    let scenario = Scenario::new();
+    let mut state = scenario.gh_state();
+    state["on_merge"] = serde_json::json!({
+        "times": 1,
+        "script": r#"
+other="$(mktemp -d)"
+git clone -q -b main https://github.com/acme/widgets.git "$other"
+git -C "$other" commit --allow-empty -q -m "Advance Base during quota refusal"
+git -C "$other" push -q origin main
+rm -rf "$other"
+"#,
+    });
+    state["refuse_merges"] = serde_json::json!({
+        "times": 1,
+        "error": "GraphQL: secondary rate limit exceeded (HTTP 429)",
+    });
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+
+    let result = scenario.run_with_env(
+        &["merge", &scenario.issue_url(7)],
+        &[("THIRDSHIFT_QUOTA_MINUTE_MS", "1")],
+    );
+
+    assert_eq!(
+        scenario.gh_calls_of("pr", "merge").len(),
+        1,
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "OPEN",
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn continuing_after_a_base_update_still_requires_green_ci() {
+    let scenario = Scenario::new();
+    advance_base_at_review_decision(&scenario, None);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+    let issue = scenario.issue_url(7);
+
+    let first = scenario.run(&["merge", &issue]);
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert!(
+        first.stderr.contains("after merging in main"),
+        "{}",
+        first.stderr
+    );
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+
+    scenario.agent_does("");
+    let second = scenario.run(&["merge", &issue]);
+
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "{}",
+        second.stderr
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["state"],
+        "OPEN",
+        "{}",
+        second.stderr
+    );
+}
+
+#[test]
 fn a_pr_merged_while_the_opening_session_runs_is_reported_as_merged() {
     for merge in [false, true] {
         let scenario = Scenario::new();

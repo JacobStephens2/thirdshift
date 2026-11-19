@@ -123,7 +123,6 @@ pub(super) fn take_to_goal(
         outside,
         base,
         goal,
-        base_advanced: false,
         budgets: Budgets {
             repair_cap,
             ..Budgets::default()
@@ -256,7 +255,7 @@ enum Round {
 
 pub(super) struct WatchedHead {
     pub commit: String,
-    pub missing_green_ci: bool,
+    pub ci_passed: bool,
 }
 
 /// Keeps the PR mergeable and its CI green, within the Delivery's budgets.
@@ -264,7 +263,6 @@ struct RepairLoop<'a, O> {
     outside: &'a mut O,
     base: &'a str,
     goal: Goal,
-    base_advanced: bool,
     budgets: Budgets,
 }
 
@@ -325,14 +323,10 @@ impl<O: Outside> RepairLoop<'_, O> {
                 self.take_in_foreign_commits(std::mem::take(&mut issue_move_counted))?;
             }
             let base_commit = match self.outside.merge_base_branch()? {
-                Merge::Clean { commit, advanced } => {
-                    self.base_advanced |= advanced;
-                    commit
-                }
+                Merge::Clean { commit } => commit,
                 Merge::Conflicted(pending) => {
                     self.repair("conflict", Repair::Conflict(Upstream::BaseBranch))?;
                     self.outside.ensure_merged(&pending)?;
-                    self.base_advanced = true;
                     continue;
                 }
             };
@@ -353,7 +347,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                 Ci::Absent | Ci::Passed => {
                     let watched = WatchedHead {
                         commit: head,
-                        missing_green_ci: self.base_advanced && matches!(ci, Ci::Absent),
+                        ci_passed: matches!(ci, Ci::Passed),
                     };
                     if self.outside.base_branch_moved()? {
                         // Green CI on a head that merges cleanly is enough
@@ -631,10 +625,7 @@ mod tests {
             } else {
                 sticky(&mut self.script.base_commits, "Base branch commit")
             };
-            Ok(Merge::Clean {
-                commit,
-                advanced: false,
-            })
+            Ok(Merge::Clean { commit })
         }
 
         fn merge_new_commits(&mut self, observed: ForeignCommits) -> Result<Merge<&'static str>> {
@@ -650,7 +641,6 @@ mod tests {
             } else {
                 Merge::Clean {
                     commit: observed.origin_head().to_string(),
-                    advanced: true,
                 }
             })
         }

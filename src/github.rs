@@ -1096,8 +1096,7 @@ impl GitHub {
             })
     }
 
-    /// One guarded merge request, with a merge commit and without auto-merge
-    /// or local branch deletion (ADR 0004). Delivery owns reconciliation.
+    /// Whether GitHub has a merge queue for the named Base branch.
     pub fn base_has_merge_queue(&self, issue: &IssueUrl, base: &str) -> Result<bool> {
         let response = self.gh_json(&[
             "api",
@@ -1117,8 +1116,23 @@ impl GitHub {
         Ok(queue["id"].as_str().is_some_and(|id| !id.is_empty()))
     }
 
+    /// A merge commit without auto-merge or local branch deletion (ADR 0004).
     pub fn merge(&self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
-        self.gh(&[
+        self.merge_if_base_current(issue, number, head, &mut || Ok(true))
+            .map(drop)
+    }
+
+    /// Request a guarded merge commit on `head`.
+    /// Delivery owns reconciliation, and guards every attempt, including after
+    /// a quota wait. A refused guard returns false without sending the request.
+    pub(crate) fn merge_if_base_current(
+        &self,
+        issue: &IssueUrl,
+        number: u64,
+        head: &str,
+        base_current: &mut dyn FnMut() -> Result<bool>,
+    ) -> Result<bool> {
+        let args = [
             "pr",
             "merge",
             &number.to_string(),
@@ -1127,7 +1141,12 @@ impl GitHub {
             "--merge",
             "--match-head-commit",
             head,
-        ])
+        ];
+        let Some(output) = self.output_if(&args, None, base_current)? else {
+            return Ok(false);
+        };
+        Self::ensure_success(&args, &output)?;
+        Ok(true)
     }
 
     /// Current check runs and commit statuses on `sha`, with conclusions as
@@ -1376,13 +1395,18 @@ impl GitHub {
     /// it exits non-zero.
     fn gh_stdout(&self, args: &[&str]) -> Result<String> {
         let output = self.output(args)?;
+        Self::ensure_success(args, &output)?;
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    fn ensure_success(args: &[&str], output: &Output) -> Result<()> {
         if !output.status.success() {
             bail!(CommandFailure::rejected(
                 format!("gh {}", args.join(" ")),
-                &output
+                output
             ));
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(())
     }
 
     /// Every item of the `field` list of the GitHub API's `path`, across all its
@@ -1453,12 +1477,26 @@ impl GitHub {
     }
 
     fn output_with_input(&self, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
+        Ok(self
+            .output_if(args, input, || Ok(true))?
+            .expect("an unconditional call always starts gh"))
+    }
+
+    fn output_if(
+        &self,
+        args: &[&str],
+        input: Option<&[u8]>,
+        mut before_attempt: impl FnMut() -> Result<bool>,
+    ) -> Result<Option<Output>> {
         let mut secondary_retries = 0;
         let mut reset_retried = false;
         loop {
+            if !before_attempt()? {
+                return Ok(None);
+            }
             let output = self.raw_output_with_input(args, input)?;
             if output.status.success() {
-                return Ok(output);
+                return Ok(Some(output));
             }
             match quota::Limit::of(args, &output.stderr) {
                 Some(quota::Limit::Primary(resource)) => {
@@ -1467,7 +1505,7 @@ impl GitHub {
                             if !self.wait_for_quota
                                 || !quota::command::wait(reset, resource, self.interruption)?
                             {
-                                return Ok(output);
+                                return Ok(Some(output));
                             }
                         }
                         // The window reset after the request failed: retry
@@ -1478,7 +1516,7 @@ impl GitHub {
                         {
                             reset_retried = true;
                         }
-                        None => return Ok(output),
+                        None => return Ok(Some(output)),
                     }
                 }
                 Some(quota::Limit::Secondary)
@@ -1490,7 +1528,7 @@ impl GitHub {
                     ));
                     self.interruption.pause(quota::wait::minute())?;
                 }
-                _ => return Ok(output),
+                _ => return Ok(Some(output)),
             }
         }
     }

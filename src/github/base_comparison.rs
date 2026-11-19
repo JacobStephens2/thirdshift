@@ -71,7 +71,9 @@ impl GitHub {
     }
 
     fn comparison_page(&self, path: &str) -> Result<Option<Value>> {
-        if QuotaWait::warning(&self.inbox_quotas()?).is_some() {
+        if QuotaWait::warning(&self.quota_waits()?).is_some()
+            || QuotaWait::warning(&self.inbox_quotas()?).is_some()
+        {
             return Ok(None);
         }
         self.gh_json(&["api", path]).map(Some)
