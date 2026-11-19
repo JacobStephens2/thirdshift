@@ -8,6 +8,200 @@ use support::Scenario;
 const NO_FINDINGS: &str = "printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"";
 
 #[test]
+fn author_pass_skips_a_ticket_pr_into_a_claimed_spec_branch() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.origin_has_branch("issue-7", "main", &["Spec"]);
+    scenario.origin_has_branch("issue-8", "issue-7", &["Ticket"]);
+    scenario.github_has_pr("issue-8", "issue-7", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([]);
+    state["labels"]["7"] = json!(["in-progress"]);
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("skipping #1") && result.stderr.contains("Spec #7"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+}
+
+#[test]
+fn author_pass_skips_a_body_closing_issue_reservation_when_github_links_are_empty() {
+    let scenario = Scenario::new();
+    scenario.agent_does(NO_FINDINGS);
+    scenario.origin_has_branch("feature", "main", &["Ticket"]);
+    scenario.github_has_pr("feature", "main", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([]);
+    state["prs"][0]["body"] = json!("Closes #7");
+    scenario.write_gh_state(&state);
+    let reference = "refs/heads/thirdshift/pickup/7";
+    scenario.origin_git(&["update-ref", reference, "refs/heads/feature"]);
+    let token = scenario.origin_git(&["rev-parse", reference]);
+
+    let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("skipping #1")
+            && result.stderr.contains("closing issue #7")
+            && result.stderr.contains("issue reservation"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+    assert_eq!(scenario.origin_git(&["rev-parse", reference]), token);
+}
+
+#[test]
+fn author_pass_checks_spec_reservations_and_canonical_continuation_branches() {
+    for (base, held) in [
+        ("issue-7", true),
+        ("issue-7-branch-2", true),
+        ("issue-7-branch-12", true),
+        ("issue-7-branch-1", false),
+        ("issue-7-branch-02", false),
+        ("issue-7-extra", false),
+        ("issue-07", false),
+        ("main", false),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(NO_FINDINGS);
+        if base != "main" {
+            scenario.origin_has_branch(base, "main", &["Spec"]);
+        }
+        scenario.origin_has_branch("feature", base, &["Ticket"]);
+        scenario.github_has_pr("feature", base, "OPEN");
+        scenario.origin_git(&[
+            "update-ref",
+            "refs/heads/thirdshift/pickup/7",
+            "refs/heads/feature",
+        ]);
+
+        let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+
+        assert_eq!(result.code, Some(0), "{base}: {}", result.stderr);
+        assert_eq!(
+            scenario.claude_calls().is_empty(),
+            held,
+            "{base}: {}",
+            result.stderr
+        );
+        if held {
+            assert!(result.stderr.contains("base Spec #7"), "{}", result.stderr);
+            assert!(
+                result.stderr.contains("issue reservation"),
+                "{}",
+                result.stderr
+            );
+        } else {
+            assert!(scenario.gh_state()["prs"][0]["postedComments"].is_array());
+        }
+    }
+}
+
+#[test]
+fn author_pass_body_fallback_checks_closing_keywords_and_ignores_other_mentions() {
+    for (body, held) in [
+        ("Fixes #7.", true),
+        ("rEsOlVeS:\n#7", true),
+        ("Closes #8; Fixes #7", true),
+        ("Mentions #7", false),
+        ("Encloses #7", false),
+        ("Closes #7-extra", false),
+        ("Closes #+7", false),
+        ("Closes #0", false),
+        ("Closes #18446744073709551616", false),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(NO_FINDINGS);
+        scenario.origin_has_branch("feature", "main", &["Ticket"]);
+        scenario.github_has_pr("feature", "main", "OPEN");
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!([]);
+        state["prs"][0]["body"] = json!(body);
+        state["issues"]["8"] = json!("OPEN");
+        state["labels"]["7"] = json!(["in-progress"]);
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+
+        assert_eq!(result.code, Some(0), "{body}: {}", result.stderr);
+        assert_eq!(
+            scenario.claude_calls().is_empty(),
+            held,
+            "{body}: {}",
+            result.stderr
+        );
+        if held {
+            assert!(
+                result.stderr.contains("closing issue #7"),
+                "{}",
+                result.stderr
+            );
+        } else {
+            assert!(scenario.gh_state()["prs"][0]["postedComments"].is_array());
+        }
+    }
+}
+
+#[test]
+fn author_pass_rechecks_spec_and_body_holds_after_reserving_the_pr() {
+    for base in ["main", "issue-7"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(NO_FINDINGS);
+        if base != "main" {
+            scenario.origin_has_branch(base, "main", &["Spec"]);
+        }
+        scenario.origin_has_branch("feature", base, &["Ticket"]);
+        scenario.github_has_pr("feature", base, "OPEN");
+        let mut state = scenario.gh_state();
+        state["prs"][0]["closingIssuesReferences"] = json!([]);
+        if base == "main" {
+            state["prs"][0]["body"] = json!("Closes #7");
+        }
+        scenario.write_gh_state(&state);
+        scenario.repo_has_hook(
+            &scenario.origin_dir(),
+            "post-receive",
+            r#"#!/bin/sh
+while read old new reference; do
+    if [ "$reference" = refs/thirdshift/reservations/1 ] &&
+       [ "$new" != 0000000000000000000000000000000000000000 ]; then
+        gh fake labels 7 '["in-progress"]'
+    fi
+done
+"#,
+        );
+
+        let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(result.stderr.contains("skipping #1"), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("in-progress Claim"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(
+            scenario.gh_state()["prs"][0]["labels"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn author_pass_skips_release_bumps_into_main_only() {
     for (base, selected) in [("main", 1), ("integration", 0)] {
         let scenario = Scenario::new();

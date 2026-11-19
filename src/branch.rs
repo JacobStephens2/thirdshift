@@ -280,6 +280,26 @@ pub(crate) fn branch_number(issue: &IssueUrl, branch: &str) -> Option<u64> {
     (k >= 2 && branch == branch_name(issue, k)).then_some(k)
 }
 
+/// The issue named by a canonical Issue branch, including numbered continuations.
+pub(crate) fn issue_of_branch(repo: &crate::issue::Repo, branch: &str) -> Option<IssueUrl> {
+    let number: u64 = branch
+        .strip_prefix("issue-")?
+        .split('-')
+        .next()?
+        .parse()
+        .ok()?;
+    if number == 0 {
+        return None;
+    }
+    let issue = IssueUrl::parse(&format!(
+        "https://github.com/{}/issues/{number}",
+        repo.slug()
+    ))
+    .ok()?;
+    branch_number(&issue, branch)?;
+    Some(issue)
+}
+
 fn branch_name(issue: &IssueUrl, number: u64) -> String {
     match number {
         1 => format!("issue-{}", issue.number),
