@@ -9,7 +9,7 @@ use super::super::reading::{Command, Entry, Observation, Snapshot};
 use super::scope::{Filters, Span, Window};
 
 /// Commands that do work. A Pickup run only selects and dispatches one.
-const WORK: [&str; 9] = [
+const WORK: &[&str] = &[
     "Run",
     "Spec run",
     "Base fix",
@@ -432,16 +432,18 @@ fn visit<'a>(
     if !filters.admit(command, account) {
         return;
     }
-    let (Some(bucket), Some((class, outcome))) =
-        (window.bucket(command), classify(command, stopped))
-    else {
+    let (Some(bucket), Some((class, outcome)), Some(kind)) = (
+        window.bucket(command),
+        classify(command, stopped),
+        kind_name(&command.record.kind),
+    ) else {
         return;
     };
     facts.push(Fact {
         counted: Counted {
             bucket,
             account: account.map(str::to_owned),
-            kind: kind_name(&command.record.kind),
+            kind,
             class,
             outcome,
             selector: Observation::Record(command).selector().unwrap_or_default(),
@@ -453,24 +455,21 @@ fn visit<'a>(
 }
 
 /// The stored kinds an outcome row can have: the work Commands, then Pickup runs.
-pub(crate) const COUNTED: [&str; 9] = [
-    WORK[0],
-    WORK[1],
-    WORK[2],
-    WORK[3],
-    WORK[4],
-    WORK[5],
-    WORK[6],
-    WORK[7],
-    "Pickup run",
-];
+pub(crate) const COUNTED: [&str; WORK.len() + 1] = {
+    let mut kinds = ["Pickup run"; WORK.len() + 1];
+    let mut index = 0;
+    while index < WORK.len() {
+        kinds[index] = WORK[index];
+        index += 1;
+    }
+    kinds
+};
 
-fn kind_name(stored: &str) -> &'static str {
+fn kind_name(stored: &str) -> Option<&'static str> {
     COUNTED
         .into_iter()
         .find(|kind| *kind == stored)
         .map(crate::logs::display_name)
-        .expect("only work kinds and Pickup runs are counted")
 }
 
 #[cfg(test)]

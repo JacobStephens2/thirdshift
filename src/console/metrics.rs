@@ -65,7 +65,7 @@ struct MetricsPage {
     trends: Trends,
     error: Option<String>,
     form: Form,
-    kinds: [&'static str; 9],
+    kinds: [&'static str; crate::logs::metrics::COUNTED.len()],
     windows: [(&'static str, MetricsWindow); 4],
     classes: [Class; 4],
     /// The page's own filters and window, as given, for links that keep them.
@@ -130,7 +130,7 @@ struct FleetPage {
     fleet: Fleet,
     error: Option<String>,
     form: Form,
-    kinds: [&'static str; 9],
+    kinds: [&'static str; crate::logs::metrics::COUNTED.len()],
     windows: [(&'static str, MetricsWindow); 4],
     classes: [Class; 4],
     machines: Machines,
