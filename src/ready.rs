@@ -141,12 +141,20 @@ fn search(
         launch,
         github: GitHub::new(),
     };
-    let candidates = reads
+    let listed = reads
         .github
-        .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    Search::new(&reads, candidates, Utc::now(), wait, order, progress::step)
-        .past(past)
-        .first_priority(settling)
+        .open_candidate_issues(&repo.slug(), READY_FOR_AGENT)?;
+    crate::logs::listing_disagreement(repo, &listed);
+    Search::new(
+        &reads,
+        listed.issues,
+        Utc::now(),
+        wait,
+        order,
+        progress::step,
+    )
+    .past(past)
+    .first_priority(settling)
 }
 
 /// Recheck only the selected issue after Pickup reserves it on origin. A

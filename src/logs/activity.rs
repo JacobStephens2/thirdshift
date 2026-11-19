@@ -101,6 +101,18 @@ pub(super) fn last_of_process<'a>(tail: &'a str, name: &str) -> Option<(&'a str,
     })
 }
 
+/// The time and unstamped text of the last listing-disagreement line for
+/// `label` in the tail, so idle repositories do not repeat unchanged lines.
+pub(super) fn last_of_listing_disagreement(
+    tail: &str,
+    label: crate::labels::Label,
+) -> Option<(&str, &str)> {
+    let prefix = format!("GitHub {} listing disagreement: ", label.name());
+    lines(tail)
+        .rev()
+        .find(|(_, text)| text.starts_with(&prefix))
+}
+
 fn lines(tail: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
     tail.lines().filter_map(|line| {
         Some((

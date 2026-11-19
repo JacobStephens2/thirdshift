@@ -275,11 +275,31 @@ impl GitHub {
         connection: &str,
         what: &str,
     ) -> Result<(Value, Vec<Value>)> {
+        self.paged_connection(
+            what,
+            connection,
+            |after| self.issue_query(issue, query, after),
+            |json| &json["data"]["repository"]["issue"][connection],
+        )
+    }
+
+    fn paged_connection(
+        &self,
+        what: &str,
+        connection: &str,
+        mut fetch: impl FnMut(Option<&str>) -> Result<Value>,
+        extract: impl Fn(&Value) -> &Value,
+    ) -> Result<(Value, Vec<Value>)> {
         let mut after = None;
         let mut all = Vec::new();
         loop {
-            let json = self.issue_query(issue, query, after.as_deref())?;
-            let page = &json["data"]["repository"]["issue"][connection];
+            let json = fetch(after.as_deref())?;
+            if json.get("errors").is_some_and(|errors| !errors.is_null()) {
+                bail!(CommandFailure::InvalidResponse(
+                    "gh api graphql returned errors".into()
+                ));
+            }
+            let page = extract(&json);
             all.extend(nodes(page, connection)?.iter().cloned());
             let info = &page["pageInfo"];
             if !info["hasNextPage"].as_bool().with_context(|| {
@@ -392,6 +412,110 @@ impl GitHub {
     /// be a while behind an issue just opened. Pull requests are excluded.
     pub fn open_issues_labelled(&self, repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
         self.issues_labelled(repo, label, "open")
+    }
+
+    /// Open Pass candidate issues labelled `label` in `repo`, taking the
+    /// union of the REST label filter and GraphQL `repository.issues` so a
+    /// stale REST label index cannot hide eligible work, returning any
+    /// disagreement between the two sources in [`LabelledCandidates`].
+    pub fn open_candidate_issues(&self, repo: &str, label: Label) -> Result<LabelledCandidates> {
+        if !valid_repo_slug(repo) {
+            bail!("invalid repository name");
+        }
+        let (owner, name) = repo.split_once('/').expect("validated repository slug");
+        let rest = self.issues_labelled(repo, label, "open")?;
+        let graphql = self.graphql_open_issues_labelled(owner, name, label)?;
+
+        let mut issues = Vec::new();
+        let mut rest_numbers = HashSet::new();
+        for item in rest {
+            if rest_numbers.insert(item.issue.number) {
+                issues.push(item);
+            }
+        }
+
+        let mut graphql_numbers = HashSet::new();
+        let mut omitted_by_rest = Vec::new();
+        for (mut item, more_labels) in graphql {
+            let number = item.issue.number;
+            if !graphql_numbers.insert(number) {
+                continue;
+            }
+            if !rest_numbers.contains(&number) {
+                if more_labels {
+                    item.labels = self.issue_labels(&item.issue)?;
+                }
+                omitted_by_rest.push(number);
+                issues.push(item);
+            }
+        }
+        omitted_by_rest.sort_unstable();
+
+        let mut omitted_by_graphql: Vec<u64> = rest_numbers
+            .into_iter()
+            .filter(|number| !graphql_numbers.contains(number))
+            .collect();
+        omitted_by_graphql.sort_unstable();
+
+        Ok(LabelledCandidates {
+            issues,
+            label,
+            omitted_by_rest,
+            omitted_by_graphql,
+        })
+    }
+
+    fn graphql_open_issues_labelled(
+        &self,
+        owner: &str,
+        repo: &str,
+        label: Label,
+    ) -> Result<Vec<(ListedIssue, bool)>> {
+        let query = format!("query={OPEN_ISSUES_LABELLED_QUERY}");
+        let owner_arg = format!("owner={owner}");
+        let repo_arg = format!("repo={repo}");
+        let label_arg = format!("label={}", label.name());
+        let (_, nodes) = self.paged_connection(
+            "issues",
+            "issues",
+            |after| {
+                let mut args = vec![
+                    "api", "graphql", "-f", &query, "-f", &owner_arg, "-f", &repo_arg, "-f",
+                    &label_arg,
+                ];
+                let cursor;
+                if let Some(after) = after {
+                    cursor = format!("after={after}");
+                    args.extend(["-f", &cursor]);
+                }
+                self.gh_json(&args)
+            },
+            |json| &json["data"]["repository"]["issues"],
+        )?;
+        nodes
+            .iter()
+            .map(|node| {
+                let labels = &node["labels"];
+                let more_labels = labels["pageInfo"]["hasNextPage"].as_bool().context(
+                    CommandFailure::InvalidResponse(
+                        "gh api graphql output has an issue with no labels hasNextPage".into(),
+                    ),
+                )?;
+                Ok((
+                    ListedIssue {
+                        issue: node_issue(node)?,
+                        title: node["title"]
+                            .as_str()
+                            .context(CommandFailure::InvalidResponse(
+                                "gh api graphql output has an issue with no title".into(),
+                            ))?
+                            .to_string(),
+                        labels: named(self::nodes(labels, "labels")?),
+                    },
+                    more_labels,
+                ))
+            })
+            .collect()
     }
 
     /// Every closed issue labelled `label` in the repository `repo`, an
@@ -1542,6 +1666,65 @@ pub struct ListedIssue {
     pub title: String,
     pub labels: Labels,
 }
+
+/// Open candidate issues gathered from REST and GraphQL, together with the
+/// numbers omitted by either source.
+#[derive(Debug, Clone)]
+pub struct LabelledCandidates {
+    pub issues: Vec<ListedIssue>,
+    label: Label,
+    pub(crate) omitted_by_rest: Vec<u64>,
+    pub(crate) omitted_by_graphql: Vec<u64>,
+}
+
+impl LabelledCandidates {
+    /// The label queried across REST and GraphQL.
+    pub(crate) fn label(&self) -> Label {
+        self.label
+    }
+
+    /// One-line description when REST and GraphQL disagreed, naming each
+    /// missing issue lowest number first.
+    pub fn disagreement(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if !self.omitted_by_rest.is_empty() {
+            parts.push(format!(
+                "REST omitted {} (found via GraphQL)",
+                crate::issue::format_numbers(&self.omitted_by_rest)
+            ));
+        }
+        if !self.omitted_by_graphql.is_empty() {
+            parts.push(format!(
+                "GraphQL omitted {} (found via REST)",
+                crate::issue::format_numbers(&self.omitted_by_graphql)
+            ));
+        }
+        (!parts.is_empty()).then(|| {
+            format!(
+                "GitHub {} listing disagreement: {}",
+                self.label,
+                parts.join("; ")
+            )
+        })
+    }
+}
+
+const OPEN_ISSUES_LABELLED_QUERY: &str = "\
+query($owner: String!, $repo: String!, $label: String!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    issues(first: 100, after: $after, labels: [$label], states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        url
+        title
+        labels(first: 100) {
+          pageInfo { hasNextPage }
+          nodes { name }
+        }
+      }
+    }
+  }
+}";
 
 /// An open issue labelled for a Pickup run to take, as the Pickup run reads
 /// what its listing doesn't give.
