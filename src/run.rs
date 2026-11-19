@@ -280,7 +280,7 @@ fn run(
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
-        spec_ticket: matches!(started_by.child(), Some(Kind::Ticket { .. })),
+        scope: crate::prompt::TicketScope::for_child(started_by.child()),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
         spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
@@ -367,7 +367,7 @@ fn start<O: Outside>(
         outside.make_claim()?;
     }
     let is_spec = !tickets.is_empty();
-    let spec_ticket = matches!(started_by.child(), Some(Kind::Ticket { .. }));
+    let scope = crate::prompt::TicketScope::for_child(started_by.child());
     let mut outcome = start_in_worktree(
         outside,
         issue,
@@ -375,7 +375,7 @@ fn start<O: Outside>(
         &selection,
         &base,
         asks.tickets_at_once,
-        spec_ticket,
+        scope,
     );
     if let Err(failed) = &outcome
         && crate::session::limits::plan_usage_paused(&failed.error).is_some()
@@ -438,14 +438,14 @@ fn start_in_worktree<O: Outside>(
     selection: &Selection,
     base: &str,
     parallel: NonZeroUsize,
-    spec_ticket: bool,
+    scope: crate::prompt::TicketScope,
 ) -> Result<Reached, FailedRun> {
     let branch = selection.branch();
     let checkout = match selection {
         Selection::Fresh { .. } => Checkout::Fresh,
         Selection::Continuation { .. } => Checkout::Continuation,
     };
-    let opening = crate::implement::opening(issue, base, selection, spec_ticket);
+    let opening = crate::implement::opening(issue, base, selection, scope);
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
@@ -534,7 +534,7 @@ struct LaunchAndGitHub<'a> {
     issue_branch: Option<String>,
     child: bool,
     /// Child Ticket runs in a Spec run keep UI verification local.
-    spec_ticket: bool,
+    scope: crate::prompt::TicketScope,
     /// Base fixes have their own reproduction flow.
     diagnose_bugs: bool,
     /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
@@ -580,7 +580,7 @@ impl LaunchAndGitHub<'_> {
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
             security_review: self.security_review,
-            spec_ticket: self.spec_ticket,
+            scope: self.scope,
             child_asks: self.child_asks,
             issue: self.issue,
             base,
@@ -1049,7 +1049,7 @@ mod tests {
         Call::Deliver(
             Checkout::Fresh,
             base.to_string(),
-            prompt::fresh(&seven(), base, "issue-7"),
+            prompt::fresh(&seven(), base, "issue-7", prompt::TicketScope::Standard),
         )
     }
 
@@ -1091,7 +1091,12 @@ mod tests {
                 Call::Deliver(
                     Checkout::Fresh,
                     "issue-3".to_string(),
-                    prompt::spec_ticket_fresh(&seven(), "issue-3", "issue-7"),
+                    prompt::fresh(
+                        &seven(),
+                        "issue-3",
+                        "issue-7",
+                        prompt::TicketScope::SpecTicket,
+                    ),
                 ),
             ]
         );
@@ -1541,7 +1546,13 @@ mod tests {
             });
 
             let pr_url = pr_base.map(|_| PR_URL);
-            let prompt = prompt::continuation(&seven(), "main", "issue-7", pr_url);
+            let prompt = prompt::continuation(
+                &seven(),
+                "main",
+                "issue-7",
+                pr_url,
+                prompt::TicketScope::Standard,
+            );
             assert_in_turn(
                 &calls,
                 &[

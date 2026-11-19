@@ -105,7 +105,7 @@ pub(super) fn run(
     let mut target = PullRequest::new(&repository, &branch, base, github);
     let outcome = Delivery {
         security_review: false,
-        spec_ticket: false,
+        scope: crate::prompt::TicketScope::Standard,
         child_asks: &child_asks,
         issue: &repository,
         base,

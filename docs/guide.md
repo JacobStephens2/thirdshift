@@ -2832,7 +2832,7 @@ Playwright's standard cache (`~/.cache/ms-playwright` on Linux,
 set. A browser folder without an executable does not pass.
 
 Setup prints `Visual evidence: PASS` when all three are present. Otherwise it
-prints `WARN`, names the missing or outdated tools, and shows the exact repair
+prints `Visual evidence: WARN (need ...)`, names the missing or outdated tools, and shows the exact repair
 commands: Homebrew on macOS; `apt` (including GitHub's package repository for
 an up-to-date `gh`) and Playwright's Chromium installation on Debian/Ubuntu.
 Playwright installation needs Node.js and npm; Setup includes their installation
@@ -2840,7 +2840,8 @@ when Chromium is missing. On a terminal, one `Install or upgrade Visual evidence
 tools now? [y/N]` prompt offers to run those commands in the foreground.
 Enter or `N` leaves the host unchanged; `y` runs the commands, checks again,
 and reports the updated status. An installer failure or interruption warns and
-keeps the saved User config and Credentials. Without a terminal, Setup only
+keeps the saved User config and Credentials; missing host tools later rely on
+the explicit limitation rule under `## Evidence`. Without a terminal, Setup only
 reports status and commands, runs no installer, and exits `0`. A passing check
 asks no install question.
 
@@ -3077,8 +3078,6 @@ Before running target code, each Security session must enforce:
 - explicit low CPU, memory, process, file-size, disk and wall-clock limits.
 
 If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them. The User config is already saved by then, and the probe result does not stop Setup.
-
-When Setup runs interactively from a terminal, it also runs a post-save **Visual evidence** host probe (`gh >= 2.103.2`, `ffmpeg` on `PATH`, and Playwright headless Chromium). If anything is missing, it prints `Visual evidence: WARN (need ...)` along with the OS-appropriate install or upgrade commands and offers to run them (`Install or upgrade Visual evidence tools now? [y/N] `); declining or a failed install leaves the saved User config intact and relies on the explicit limitation rule under `## Evidence`.
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel`, `pickup.failure_limit`, `pickup.wait_minutes`, `pickup.order`, `harness.routes`, `harness.max_utilization`, `security.harness` and `security.routes` are not asked about; see [Routing by Plan usage](#routing-by-plan-usage). Setup adds a missing `security.harness` at its default, blank, with a comment explaining it; a configured Harness is kept. The answers are written like everything else below: in place, keeping your comments. Ctrl-C, SIGTERM or SIGHUP during the questions or a Model/Effort check exits `1` with `interrupted` and writes nothing: neither the User config nor the Credentials. Ordinary and hidden questions stop without another line of input, and hidden input restores the saved terminal settings, including echo. With notifications off, the Resend key is not asked about and stays as it was, so `--email` on a single Ticket run still works. The Claude setup token is offered independently. Credentials a Ticket run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. If `[security]` falls between Harness sections, Setup moves it after them, keeping its values and comments. One that already lists every setting, down to the commented-out `email.to` line, with Security outside the Harness area is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Ticket run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 

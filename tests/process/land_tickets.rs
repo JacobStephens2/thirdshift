@@ -574,3 +574,54 @@ fn a_spec_branch_whose_tickets_only_wait_hands_the_spec_back() {
     );
     assert_eq!(labels, ["ready-for-agent"]);
 }
+
+#[test]
+fn parallel_implement_child_ticket_keeps_visual_evidence_local() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "gather",
+        &format!("{LAND_TICKETS}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Parallel implement child Ticket"
+[worktrees.ticket]
+kind = "issue-branch"
+[worktrees.check]
+kind = "throwaway"
+[[steps]]
+name = "implement"
+catalogue = "implement"
+worktree = "ticket"
+parallel = "prep"
+[[steps]]
+name = "check"
+command = "true"
+worktree = "check"
+parallel = "prep"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+[[steps]]
+name = "merge"
+catalogue = "self-merge"
+worktree = "ticket"
+"#,
+    );
+    scenario.spec_has_tickets(7, &[(8, &[])]);
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "issue-7"));
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("without calling `gh` or uploading attachments"),
+        "{prompt}"
+    );
+}

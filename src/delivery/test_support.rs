@@ -180,7 +180,7 @@ fn deliver(outside: &mut Scripted, goal: Goal, spec: bool) -> Result<String, Fai
     let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
     let route = Route {
         security_review: outside.reviews_security,
-        spec_ticket: false,
+        scope: prompt::TicketScope::Standard,
         issue: &issue,
         base: "main",
         branch: "issue-7",

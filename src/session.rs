@@ -1793,15 +1793,27 @@ mod tests {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         for (prompt, first_line) in [
             (
-                prompt::fresh(&issue, "main", "issue-7"),
+                prompt::fresh(&issue, "main", "issue-7", prompt::TicketScope::Standard),
                 "$thirdshift-implement https://github.com/acme/widgets/issues/7",
             ),
             (
-                prompt::conflict_repair(&issue, "main", "issue-7", "<pr>"),
+                prompt::conflict_repair(
+                    &issue,
+                    "main",
+                    "issue-7",
+                    "<pr>",
+                    prompt::TicketScope::Standard,
+                ),
                 "$thirdshift-resolving-merge-conflicts",
             ),
             (
-                prompt::review_repair(&issue, "issue-7", "<pr>", "abc123"),
+                prompt::review_repair(
+                    &issue,
+                    "issue-7",
+                    "<pr>",
+                    "abc123",
+                    prompt::TicketScope::Standard,
+                ),
                 "$thirdshift-code-review abc123",
             ),
             (
