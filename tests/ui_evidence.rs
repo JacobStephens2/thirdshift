@@ -32,6 +32,15 @@ fn publish(scenario: &Scenario, action: &str, captures: &[PathBuf]) -> Output {
         ));
     }
     fs::write(&body, markdown).unwrap();
+    publish_with_body(scenario, action, &body, captures)
+}
+
+fn publish_with_body(
+    scenario: &Scenario,
+    action: &str,
+    body: &Path,
+    captures: &[PathBuf],
+) -> Output {
     let environment = scenario.command(&[]);
     Command::new("bash")
         .args(["-c", &recipe(), "publish", action])
@@ -153,6 +162,63 @@ fn pr_recipe_refuses_capture_paths_containing_hash_alt_delimiter() {
         scenario.gh_calls_of("pr", "create").is_empty(),
         "uploaded before rejecting '#' in capture path"
     );
+}
+
+#[test]
+fn pr_recipe_refuses_unsafe_body_file_before_publishing() {
+    for invalid in ["symlink", "directory", "fifo", "unowned", "stdin"] {
+        let scenario = Scenario::new();
+        let valid = scenario.path("good.png");
+        fs::write(&valid, "faux image").unwrap();
+        let secret = scenario.path("secret-body-target");
+        fs::write(&secret, "SECRET-MARKER-body-symlink\n").unwrap();
+        let body = match invalid {
+            "symlink" => {
+                let link = scenario.path("pr-body.md");
+                symlink(&secret, &link).unwrap();
+                link
+            }
+            "directory" => {
+                let dir = scenario.path("body-dir");
+                fs::create_dir(&dir).unwrap();
+                dir
+            }
+            "fifo" => {
+                let fifo = scenario.path("body-fifo");
+                assert!(
+                    Command::new("mkfifo")
+                        .arg(&fifo)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                fifo
+            }
+            "unowned" => {
+                let path = PathBuf::from("/etc/issue");
+                if fs::metadata(&path).unwrap().uid() == fs::metadata(&valid).unwrap().uid() {
+                    continue;
+                }
+                path
+            }
+            "stdin" => PathBuf::from("-"),
+            _ => unreachable!(),
+        };
+
+        let output = publish_with_body(&scenario, "create", &body, &[valid]);
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "accepted {invalid} body file");
+        assert!(error.contains("body"), "{invalid}: {error}");
+        assert!(
+            scenario.gh_calls_of("pr", "create").is_empty(),
+            "published PR with unsafe {invalid} body file"
+        );
+        let state = scenario.gh_state();
+        assert!(
+            !state.to_string().contains("SECRET-MARKER-body-symlink"),
+            "symlink target was published in PR body"
+        );
+    }
 }
 
 #[test]

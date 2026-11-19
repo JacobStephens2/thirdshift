@@ -177,7 +177,7 @@ For changes to rendered HTML, CSS, templates, frontend routes or interactive UI 
 
 Use `thirdshift-verify-ui` (Day shift: `verify-ui`) for exploration and capture rules. Publish only reviewed faux/redacted proof captures, using GitHub attachments so images and native video players inherit repository read permissions (ADR 0034). Keep captures outside git.
 
-Write the final PR body to a temporary file. Place a bold visible flow-and-viewport label immediately above **each** attachment paragraph, including Before or After. Reference the exact absolute capture path in that paragraph: `![After login at desktop 1440×900](/tmp/after-desktop.A1b2C3.png)` for PNG; use the same standalone image-style paragraph for `.mp4`. The CLI turns that video paragraph into a bare uploaded URL so GitHub renders its native player. `gh --attach` rewrites these local references to uploaded URLs in place; without a body reference it appends media at the end, away from its label. Preserve previously uploaded attachment paragraphs when updating unrelated body text.
+Write the final PR body to a `mktemp` temporary file. Place a bold visible flow-and-viewport label immediately above **each** attachment paragraph, including Before or After. Reference the exact absolute capture path in that paragraph: `![After login at desktop 1440×900](/tmp/after-desktop.A1b2C3.png)` for PNG; use the same standalone image-style paragraph for `.mp4`. The CLI turns that video paragraph into a bare uploaded URL so GitHub renders its native player. `gh --attach` rewrites these local references to uploaded URLs in place; without a body reference it appends media at the end, away from its label. Preserve previously uploaded attachment paragraphs when updating unrelated body text.
 
 Save the following Bash block in a `mktemp` script, remove the script on exit, and run it as `bash "$publish_script" create "$PR_BODY" "$capture1" "$capture2"` (any number of captures up to 50). Export `BASE_BRANCH`, `ISSUE_BRANCH`, `PR_TITLE` for create; use `edit` and export `PR_URL` for an existing PR. Set `EVIDENCE_REDACTED=yes` only after visually checking every capture for faux/redacted data. Check that this branch's PR remains open immediately before publishing; stop if merged or closed. Keep the PR Ready for review.
 
@@ -190,6 +190,10 @@ This validates **all** captures before the first irreversible upload, refusing s
   body=${2:?PR body file}
   shift 2
   case "$action" in create|edit) ;; *) echo 'expected create or edit' >&2; exit 1 ;; esac
+  if [ "$body" = - ] || [ -L "$body" ] || [ ! -f "$body" ] || [ ! -O "$body" ]; then
+    printf 'refusing PR body that is not a regular file owned by this user: %s\n' "$body" >&2
+    exit 1
+  fi
   [ "${EVIDENCE_REDACTED:-}" = yes ] || { echo 'review captures for faux/redacted data first' >&2; exit 1; }
   gh --version | awk '
     NR == 1 {
