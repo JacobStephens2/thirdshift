@@ -398,10 +398,19 @@ fn explicit_incomplete_reviews_still_validate_the_entire_private_report() {
     let mut invalid = old_finding();
     invalid["proof_of_concept"]["merge_base_exit_code"] = json!(0);
     let valid = review_script(&json!([old_finding()]), &[]);
-    for script in [
-        format!("{valid}\nrm \"$report\"\n"),
-        format!("{valid}\nprintf '%s' 'Private old vulnerability evidence.' > \"$report\"\n"),
-        review_script(&json!([old_finding(), invalid]), &[]),
+    for (script, expected) in [
+        (
+            format!("{valid}\nrm \"$report\"\n"),
+            "Security review's private report is invalid: the report file cannot be read",
+        ),
+        (
+            format!("{valid}\nprintf '%s' 'Private old vulnerability evidence.' > \"$report\"\n"),
+            "Security review's private report is invalid: invalid JSON",
+        ),
+        (
+            review_script(&json!([old_finding(), invalid]), &[]),
+            "Security review's private report is invalid: finding 2 has a non-positive `merge_base_exit_code`",
+        ),
     ] {
         let scenario = Scenario::new();
         scenario.agent_does_in_session(1, OPENS_PR);
@@ -413,9 +422,8 @@ fn explicit_incomplete_reviews_still_validate_the_entire_private_report() {
         let state = scenario.gh_state();
         assert!(state["advisories"].is_null());
         let body = state["prs"][0]["body"].as_str().unwrap();
-        let generic = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace";
-        assert!(body.contains(generic), "{body}");
-        assert!(result.stderr.contains(generic), "{}", result.stderr);
+        assert!(body.contains(expected), "{body}");
+        assert!(result.stderr.contains(expected), "{}", result.stderr);
         assert_old_finding_stays_private(body, &result);
     }
 }
@@ -591,12 +599,27 @@ fn incomplete_private_reports_hold_self_merge_without_publishing_report_diagnost
     passes_at_base["proof_of_concept"]["merge_base_exit_code"] = json!(0);
     let mut no_test = old_finding();
     no_test["proof_of_concept"]["test"] = json!("");
-    for script in [
-        valid.replace("\"pre_existing_count\":1", "\"pre_existing_count\":0"),
-        format!("{valid}\nrm \"$report\"\n"),
-        format!("{valid}\nprintf '%s' 'Private old vulnerability evidence.' > \"$report\"\n"),
-        review_script(&json!([passes_at_base]), &[]),
-        review_script(&json!([no_test]), &[]),
+    for (script, expected) in [
+        (
+            valid.replace("\"pre_existing_count\":1", "\"pre_existing_count\":0"),
+            "Security review's private report is invalid: it has 1 entries but the final line reports 0",
+        ),
+        (
+            format!("{valid}\nrm \"$report\"\n"),
+            "Security review's private report is invalid: the report file cannot be read",
+        ),
+        (
+            format!("{valid}\nprintf '%s' 'Private old vulnerability evidence.' > \"$report\"\n"),
+            "Security review's private report is invalid: invalid JSON",
+        ),
+        (
+            review_script(&json!([passes_at_base]), &[]),
+            "Security review's private report is invalid: finding 1 has a non-positive `merge_base_exit_code`",
+        ),
+        (
+            review_script(&json!([no_test]), &[]),
+            "Security review's private report is invalid: finding 1 has an empty `test` field",
+        ),
     ] {
         let scenario = Scenario::new();
         scenario.agent_does_in_session(1, OPENS_PR);
@@ -608,7 +631,8 @@ fn incomplete_private_reports_hold_self_merge_without_publishing_report_diagnost
         assert_eq!(state["prs"][0]["state"], "OPEN");
         assert_eq!(state["prs"][0]["isDraft"], false);
         let body = state["prs"][0]["body"].as_str().unwrap();
-        assert!(body.contains("Security review incomplete"));
+        assert!(body.contains(expected), "{body}");
+        assert!(result.stderr.contains(expected), "{}", result.stderr);
         assert!(!body.contains("Private old vulnerability evidence."));
         assert!(
             !result
