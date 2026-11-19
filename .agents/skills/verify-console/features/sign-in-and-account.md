@@ -14,7 +14,7 @@ When `allowed_emails` is configured without `--no-sign-in`, the Console redirect
 - Open `$origin/` in an authenticated Console (`allowed_emails` configured, no `--no-sign-in`).
 - Fill `Email` and `Password` on `/sign-in` and choose `Sign in`.
 - Choose `Console log` (`g` then `c`) in `nav[aria-label="Pages"]` to inspect the `/console-log` Console log list.
-- Choose `Account` in `nav[aria-label="Pages"]` (`g` then `a`) and submit `Sign out this browser`.
+- Choose `Account` in `nav[aria-label="Pages"]` (or press `g` then `a` from Inbox or another JS reader page) and submit `Sign out this browser`.
 
 ## Driving it with Playwright
 
@@ -32,4 +32,5 @@ Preconditions:
 ## Gotchas
 
 - Five consecutive failed password attempts trigger a one-attempt-per-minute slowdown per email address; keep the faux password exact (`browser test password`) or use a fresh `mktemp -d` `HOME`.
+- `/console-log` and `/account` render via `account_base.html` without `console.js`, so `g` jump shortcuts work from `/` and other reader pages rather than from `/console-log` (click `Account` in `nav[aria-label="Pages"]` there).
 - Never commit or screenshot host `verify-env` secrets; keep any host-only test account details strictly faux and redacted from captures.
