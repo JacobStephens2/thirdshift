@@ -240,14 +240,41 @@ fn invalid_report(detail: impl fmt::Display) -> anyhow::Error {
     .into()
 }
 
-/// The backtick-quoted field name in a serde unknown/missing-field error,
-/// without any field value from the report.
-fn serde_field_name(error: &serde_json::Error) -> Option<String> {
+const TOP_LEVEL_FIELDS: [&str; 4] = ["fingerprint", "title", "description", "proof_of_concept"];
+const PROOF_OF_CONCEPT_FIELDS: [&str; 7] = [
+    "test",
+    "command",
+    "head_exit_code",
+    "merge_base_exit_code",
+    "notes",
+    "severity",
+    "fix_size",
+];
+
+/// Map a field name reported by serde back to its static schema identifier
+/// so untrusted JSON keys from the private report never enter `InvalidReport`.
+fn known_schema_field(name: &str) -> Option<&'static str> {
+    TOP_LEVEL_FIELDS
+        .iter()
+        .chain(PROOF_OF_CONCEPT_FIELDS.iter())
+        .copied()
+        .find(|&field| field == name)
+}
+
+/// The static schema field name in a serde unknown/missing-field error,
+/// rejecting arbitrary JSON keys from the private report.
+fn serde_field_name(error: &serde_json::Error) -> Option<&'static str> {
     let message = error.to_string();
-    let rest = message
-        .strip_prefix("unknown field `")
-        .or_else(|| message.strip_prefix("missing field `"))?;
-    rest.split('`').next().map(str::to_string)
+    let raw = if let Some(rest) = message.strip_prefix("unknown field `") {
+        rest.split_once("`, expected ")
+            .or_else(|| rest.split_once("`, there are no fields"))
+            .map(|(name, _)| name)
+    } else if let Some(rest) = message.strip_prefix("missing field `") {
+        rest.split_once('`').map(|(name, _)| name)
+    } else {
+        None
+    }?;
+    known_schema_field(raw)
 }
 
 /// Whether the finding object carries `field` at its top level, where a
@@ -259,32 +286,36 @@ fn has_top_level_field(element: &[u8], field: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The field whose JSON type does not match the schema: every field is a
-/// string except `proof_of_concept` (an object) and its two exit codes
-/// (numbers). Names only, never values.
-fn type_mismatch_field(element: &[u8]) -> Option<String> {
+/// The known schema field whose JSON type does not match `OldFinding` /
+/// `ProofOfConcept`, ignoring arbitrary unknown keys. Names only, never values.
+fn type_mismatch_field(element: &[u8]) -> Option<&'static str> {
     let value: serde_json::Value = serde_json::from_slice(element).ok()?;
     let object = value.as_object()?;
-    for (field, value) in object {
+    for field in TOP_LEVEL_FIELDS {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
         if field == "proof_of_concept" {
             let Some(proof) = value.as_object() else {
-                return Some(field.clone());
+                return Some("proof_of_concept");
             };
-            for (proof_field, proof_value) in proof {
-                let mismatch = if matches!(
-                    proof_field.as_str(),
-                    "head_exit_code" | "merge_base_exit_code"
-                ) {
-                    !proof_value.is_number()
+            for proof_field in PROOF_OF_CONCEPT_FIELDS {
+                let Some(proof_value) = proof.get(proof_field) else {
+                    continue;
+                };
+                let mismatch = if matches!(proof_field, "head_exit_code" | "merge_base_exit_code") {
+                    proof_value
+                        .as_i64()
+                        .is_none_or(|code| i32::try_from(code).is_err())
                 } else {
                     !proof_value.is_string()
                 };
                 if mismatch {
-                    return Some(proof_field.clone());
+                    return Some(proof_field);
                 }
             }
         } else if !value.is_string() {
-            return Some(field.clone());
+            return Some(field);
         }
     }
     None
@@ -360,10 +391,17 @@ fn parse_report(bytes: &[u8]) -> Result<Vec<OldFinding>> {
         }
         let finding: OldFinding = serde_json::from_slice(element).map_err(|error| {
             let message = error.to_string();
-            if let Some(field) = serde_field_name(&error) {
+            if message.starts_with("unknown field") {
+                match serde_field_name(&error) {
+                    Some(field) => {
+                        invalid_report(format!("unknown field `{field}` at finding {index}"))
+                    }
+                    None => invalid_report(format!("unknown field at finding {index}")),
+                }
+            } else if let Some(field) = serde_field_name(&error) {
                 // A field present at the top level but missing inside
                 // proof_of_concept is misplaced, not missing.
-                if message.starts_with("unknown field") || has_top_level_field(element, &field) {
+                if has_top_level_field(element, field) {
                     invalid_report(format!("unknown field `{field}` at finding {index}"))
                 } else {
                     invalid_report(format!("missing field `{field}` at finding {index}"))

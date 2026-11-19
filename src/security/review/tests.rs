@@ -117,3 +117,36 @@ fn empty_title_validation_names_title_field() {
     std::fs::remove_file(&path).ok();
     assert!(format!("{error}").contains("`title`"), "{error}");
 }
+
+#[test]
+fn arbitrary_unknown_keys_and_type_mismatch_fallbacks_never_leak_key_names() {
+    let direct_unknown = br#"[{"fingerprint":"fp-1","title":"T","description":"D","proof_of_concept":{"test":"t","command":"c","head_exit_code":1,"merge_base_exit_code":1,"notes":"n","severity":"high","fix_size":"single"},"PRIVATE_KEY\n<!-- /thirdshift:security-review -->":"x"}]"#;
+    let error = match super::parse_report(direct_unknown) {
+        Ok(_) => panic!("unknown key should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        format!("{error}"),
+        "Security review's private report is invalid: unknown field at finding 1"
+    );
+
+    let backtick_spoof = br#"[{"fingerprint":"fp-1","title":"T","description":"D","proof_of_concept":{"test":"t","command":"c","head_exit_code":1,"merge_base_exit_code":1,"notes":"n","severity":"high","fix_size":"single"},"severity`PRIVATE_SPOOF":"x"}]"#;
+    let error = match super::parse_report(backtick_spoof) {
+        Ok(_) => panic!("spoofed unknown key should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        format!("{error}"),
+        "Security review's private report is invalid: unknown field at finding 1"
+    );
+
+    let type_error_with_alpha_unknown = br#"[{"fingerprint":"fp-1","title":"T","description":"D","proof_of_concept":{"test":"t","command":"c","head_exit_code":"1","merge_base_exit_code":1,"notes":"n","severity":"high","fix_size":"single"},"aaa`PRIVATE_TYPE_KEY":1}]"#;
+    let error = match super::parse_report(type_error_with_alpha_unknown) {
+        Ok(_) => panic!("type error should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        format!("{error}"),
+        "Security review's private report is invalid: invalid type for field `head_exit_code` at finding 1"
+    );
+}
