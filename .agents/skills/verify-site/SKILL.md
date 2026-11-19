@@ -71,11 +71,11 @@ printf '%s' "$home_html" | grep -q 'Your issues become pull requests overnight.'
 Follow `verify-ui` (Factory: `thirdshift-verify-ui`) for the two-phase verification workflow against [features/README.md](features/README.md). Site-specific rules:
 
 1. **Interactive exploration:** resolve Playwright from `$(pwd)/site/node_modules/playwright` (or drive with `@playwright/cli` / `agent-browser` and stop any daemon in `cleanup`). Test both `javaScriptEnabled: true` and `false` where `<details>` or fragment reveal applies, and abort external `https://**` requests (`route.abort()`) or fulfill YouTube embeds locally so runs never contact external origins.
-2. **Clean walkthrough pass:** check the Playwright version in `site/package.json` (`>= 1.59` uses `recordVideo.showActions`; otherwise use the init-script cursor fallback in `verify-ui` / `thirdshift-verify-ui`). Allow expected `https://**` route-abort `requestfailed` events and the missing deploy-only `/commit.txt` request on `/prompts/` (both its 404 `console` error `m.location().url.endsWith('/commit.txt')` and its `net::ERR_ABORTED` `requestfailed` on navigation when `main.js` skips reading the 404 body), asserting zero unexpected `pageerror`, `console` error, or `>= 500` responses.
+2. **Clean walkthrough pass:** inspect `site/package.json` to follow `verify-ui` / `thirdshift-verify-ui` for recording annotations (`showActions` vs init-script fallback). Allow expected `https://**` route-abort `requestfailed` events and the missing deploy-only `/commit.txt` request on `/prompts/` (both its 404 `console` error `m.location().url.endsWith('/commit.txt')` and its `net::ERR_ABORTED` `requestfailed` on navigation when `main.js` skips reading the 404 body), asserting zero unexpected `pageerror`, `console` error, or `>= 500` responses.
 
 ## Evidence
 
-Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Defer `ffmpeg` H.264 (`yuv420p`, `+faststart`, `<= 8 MB`) transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
+Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Defer transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
 
 ## Cleanup
 

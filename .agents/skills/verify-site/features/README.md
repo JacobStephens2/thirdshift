@@ -4,8 +4,7 @@ Maintained source for verifying the `thirdshift` static website (`site/`). Read 
 
 ## Site preconditions
 
-- Run `npm run docs:check --prefix site` before serving, and regenerate derived HTML when sources change (`npm run docs --prefix site` or `UPDATE_PROMPTS=1 cargo test prompts_page`).
-- Read `$origin` from `serve-site.cjs` stdout, run `Doctor`, and intercept external `https://**` requests (`route.abort()`, or stub YouTube embed HTML locally) so runs stay deterministic offline.
+- Follow [../SKILL.md](../SKILL.md) for `docs:check`, `serve-site.cjs`, `Doctor`, offline route stubbing/aborting, and `Cleanup`, and `verify-ui` (Factory: `thirdshift-verify-ui`) for recording/transcoding mechanics.
 - Verify `javaScriptEnabled: false` alongside JavaScript behavior where `<details>` or anchor reveal applies, and check `document.documentElement.scrollWidth <= innerWidth` at `390×844` mobile.
 - Record any unmet precondition in the feature's `Gotchas` rather than weakening assertions.
 

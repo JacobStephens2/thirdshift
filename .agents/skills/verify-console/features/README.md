@@ -4,9 +4,7 @@ Maintained source for verifying user-facing features of the `thirdshift` Console
 
 ## Console preconditions
 
-- Seed an isolated `mktemp -d` `HOME` via `node .agents/skills/verify-console/scripts/seed-home.cjs "$state_dir"` (`--sign-in` for sign-in flows) with `PATH="$state_dir/bin:$PATH"`.
-- Keep `[console] port = 0`, read `$origin` from stdout, run `Doctor` before driving, and drive only the isolated instance (leave personal logs and real GitHub endpoints untouched).
-- Keep default CSP during Phase 1 exploration (filtering only the documented `/waterfall` zoom `style-src 'self'` errors in [waterfall-and-logs.md](./waterfall-and-logs.md)); use `bypassCSP: true` only on Phase 2's `recordVideo` context.
+- Follow [../SKILL.md](../SKILL.md) for isolated `seed-home.cjs` setup, `Doctor`, CSP rules, and `Cleanup`, and `verify-ui` (Factory: `thirdshift-verify-ui`) for recording/transcoding mechanics.
 - Record any unmet seed precondition in the affected feature's `Gotchas` rather than weakening assertions.
 
 ## Feature entry contract

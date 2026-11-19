@@ -1,6 +1,6 @@
 ---
 name: verify-console
-description: "Verify the thirdshift Console web UI and API against isolated faux Command records on an ephemeral port. Use when changing src/console.rs, src/console/, src/config/console.rs, src/config/console/, or console/."
+description: "Verify the thirdshift Console and its HTTP API against isolated faux Command records on an ephemeral port. Use when changing src/console.rs, src/console/, src/config/console.rs, src/config/console/, or console/."
 ---
 
 # Verify Console
@@ -87,11 +87,11 @@ printf '%s' "$sign_in_html" | grep -q 'Sign in'
 Follow `verify-ui` (Factory: `thirdshift-verify-ui`) for the two-phase verification workflow against [features/README.md](features/README.md). Console-specific rules:
 
 1. **Interactive exploration:** resolve Playwright from `$(pwd)/console/node_modules/playwright` (or drive with `@playwright/cli` / `agent-browser` and stop any daemon in `cleanup`). Keep default CSP enabled during exploration so real CSP regressions surface; on `/waterfall`, clicking `Zoom timeline around this call` / `Zoom out to whole Command` runs `Idiomorph.morph` on inline-styled bars (`src/console/assets/spans.js`), emitting expected `style-src 'self'` console errors — filter those `/waterfall` inline-style zoom messages only when zooming while keeping strict zero-error checks across all other Console routes.
-2. **Clean walkthrough pass:** check the Playwright version in `console/package.json` (`>= 1.59` uses `recordVideo.showActions`; otherwise use the init-script cursor fallback in `verify-ui` / `thirdshift-verify-ui`). Pass `bypassCSP: true` on the Phase 2 recording context only so the Console's `style-src 'self'` CSP does not block Playwright's `showActions` overlay.
+2. **Clean walkthrough pass:** inspect `console/package.json` to follow `verify-ui` / `thirdshift-verify-ui` for recording annotations (`showActions` vs init-script fallback), and pass `bypassCSP: true` on the Phase 2 recording context only so the Console's `style-src 'self'` CSP does not block Playwright's `showActions` overlay.
 
 ## Evidence
 
-Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Record only faux `seed-home.cjs` state (never capture real `~/.thirdshift/console-accounts.json` or live host data), then defer `ffmpeg` H.264 (`yuv420p`, `+faststart`, `<= 8 MB`) transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
+Create proof paths outside `$state_dir` via `mktemp` (for example `/tmp/after-desktop.XXXXXX.png` and `/tmp/after-desktop.XXXXXX.mp4`) so `Cleanup` preserves them. Record only faux `seed-home.cjs` state (never capture real `~/.thirdshift/console-accounts.json` or live host data), then defer transcoding, capture pairing, and `gh --attach` PR publishing (ADR 0034) to `verify-ui` (Factory: `thirdshift-verify-ui`) and `pr` (Factory: `thirdshift-pr`).
 
 ## Cleanup
 

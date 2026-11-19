@@ -7,7 +7,7 @@ The homepage (`/`) introduces thirdshift, lets readers copy the install command,
 - `home-install-copy` copies the curl command (or selects it when clipboard access is denied) and toggles `Show the full command`.
 - `home-reading-folds` toggles `How bug issues are handled` and `Skills and Processes in detail`.
 - `home-press-line` switches `.press-controls` between `Step 1`..`Step 4`, updates lit columns and `.press-term ol`, and toggles `Pause`/`Play`.
-- `home-workflows` expands and collapses the seven `#grows details.workflow` cards without horizontal overflow.
+- `home-workflows` expands and collapses the seven `#grows .workflow-grid details.workflow` cards without horizontal overflow.
 
 ## How to get to it (user POV)
 
