@@ -91,7 +91,7 @@ pub(super) trait Outside {
     /// Fail unless the pull request is open, ready for review and mergeable.
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()>;
     /// Merge the pull request at `head`.
-    fn merge(&mut self, head: &str) -> Result<MergeAttempt>;
+    fn merge(&mut self, watched: &WatchedHead) -> Result<MergeAttempt>;
     /// A reason to hold Self-merge, checked on the head about to be merged.
     /// None lets the merge proceed. The default holds nothing.
     fn merge_hold(&mut self) -> Result<Option<String>> {
@@ -123,6 +123,7 @@ pub(super) fn take_to_goal(
         outside,
         base,
         goal,
+        base_with_green_ci: None,
         budgets: Budgets {
             repair_cap,
             ..Budgets::default()
@@ -150,10 +151,15 @@ pub(super) fn take_to_goal(
         outside.stage(Stage::SelfMerge);
         let error = match outside.merge(&watched)? {
             MergeAttempt::Merged => return Ok(()),
+            MergeAttempt::BaseMoved => {
+                repair_loop.count_base_move("before Self-merge")?;
+                watched = repair_loop.rounds()?;
+                continue;
+            }
             MergeAttempt::Refused(error) => error,
         };
         outside.progress(format!("the merge failed: {error:#}"));
-        match repair_loop.round_after_failed_merge(&watched)? {
+        match repair_loop.round_after_failed_merge(&watched.commit)? {
             Round::NewHead(head) => watched = head,
             Round::NothingToFix => {
                 // Only a PR still ready and mergeable is left ready.
@@ -243,9 +249,21 @@ impl Budgets {
 /// What a round of the Repair loop after a failed merge came to.
 enum Round {
     /// A head whose CI was found green or absent, to try the merge on.
-    NewHead(String),
+    NewHead(WatchedHead),
     /// The same head, with no Repair and no upstream move: a policy refusal.
     NothingToFix,
+}
+
+pub(super) struct WatchedHead {
+    pub commit: String,
+    pub ci: WatchedCi,
+}
+
+#[derive(PartialEq, Eq)]
+pub(super) enum WatchedCi {
+    Green,
+    Absent,
+    MissingAfterBaseUpdate,
 }
 
 /// Keeps the PR mergeable and its CI green, within the Delivery's budgets.
@@ -253,6 +271,7 @@ struct RepairLoop<'a, O> {
     outside: &'a mut O,
     base: &'a str,
     goal: Goal,
+    base_with_green_ci: Option<String>,
     budgets: Budgets,
 }
 
@@ -304,7 +323,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// absent. Fails if assessment reports a Declined CI fix, or a Repair
     /// beyond `MAX_REPAIRS`, or a round beyond `MAX_UPSTREAM_MOVES`, would be
     /// needed.
-    fn rounds(&mut self) -> Result<String> {
+    fn rounds(&mut self) -> Result<WatchedHead> {
         let base = self.base;
         let mut issue_move_counted = false;
         loop {
@@ -335,6 +354,24 @@ impl<O: Outside> RepairLoop<'_, O> {
                     issue_move_counted = true;
                 }
                 Ci::Absent | Ci::Passed => {
+                    // Remember observed green CI even if a later force-push
+                    // removes its Base from the current Base history.
+                    let watched_ci = if matches!(ci, Ci::Passed) {
+                        self.base_with_green_ci = Some(base_commit);
+                        WatchedCi::Green
+                    } else if self
+                        .base_with_green_ci
+                        .as_ref()
+                        .is_some_and(|checked_base| checked_base != &base_commit)
+                    {
+                        WatchedCi::MissingAfterBaseUpdate
+                    } else {
+                        WatchedCi::Absent
+                    };
+                    let watched = WatchedHead {
+                        commit: head,
+                        ci: watched_ci,
+                    };
                     if self.outside.base_branch_moved()? {
                         // Green CI on a head that merges cleanly is enough
                         // for review; only a Self-merge needs the moved Base
@@ -344,9 +381,9 @@ impl<O: Outside> RepairLoop<'_, O> {
                                 self.outside.progress(format!(
                                     "origin/{base} moved while CI ran; leaving the PR for \
                                      review on {}, which merges cleanly",
-                                    ci::short(&head)
+                                    ci::short(&watched.commit)
                                 ));
-                                return Ok(head);
+                                return Ok(watched);
                             }
                             self.outside.stage(Stage::RepairLoopRound);
                         }
@@ -354,7 +391,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                     } else if self.goal == Goal::ReadyForReview
                         || self.outside.new_commits_on_origin()?.commits().is_empty()
                     {
-                        return Ok(head);
+                        return Ok(watched);
                     }
                 }
                 Ci::Failed(failed) => {
@@ -433,7 +470,7 @@ impl<O: Outside> RepairLoop<'_, O> {
             self.count_base_move("since the merge was tried")?;
         }
         let head = self.rounds()?;
-        Ok(if head == watched && self.budgets == before {
+        Ok(if head.commit == watched && self.budgets == before {
             Round::NothingToFix
         } else {
             Round::NewHead(head)
@@ -737,11 +774,11 @@ mod tests {
             Ok(())
         }
 
-        fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
+        fn merge(&mut self, watched: &WatchedHead) -> Result<MergeAttempt> {
             if let Some(error) = self.script.merge_gate_error {
                 bail!(error);
             }
-            self.did.push(Did::Merge(head.to_string()));
+            self.did.push(Did::Merge(watched.commit.clone()));
             match self.script.merges.pop_front().expect("no merge scripted") {
                 Some(error) => Ok(MergeAttempt::Refused(anyhow!(error))),
                 None => Ok(MergeAttempt::Merged),

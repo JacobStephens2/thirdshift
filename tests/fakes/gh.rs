@@ -490,6 +490,9 @@ fn pr_create(state: &mut Json, flags: &Flags) {
 /// By head branch, its newest PR, or by number. `--jq .<field>` prints that
 /// one field raw, as gh does for a string.
 fn pr_view(state: &mut Json, positional: &[String], flags: &Flags) {
+    if flag(flags, "json") == Some("reviewDecision") {
+        run_hook(state, "on_review_decision", &[]);
+    }
     let name = &positional[0];
     let at = selected_pr(state, name);
     let pr = &prs(state)[at];
@@ -1482,6 +1485,10 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         return;
     }
     let path = &positional[0];
+    if let Some(comparison) = state.get("comparisons").and_then(|all| all.get(path)) {
+        println!("{comparison}");
+        return;
+    }
     if path == "rate_limit" {
         let reset = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2397,6 +2404,22 @@ fn record_run(state: &mut Json, mut run: Json) {
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
+    if query.contains("mergeQueue(branch:") {
+        let base = variables.get("base").expect("merge queue query has a base");
+        let queue = if state.get("merge_queue_base").and_then(Json::as_str) == Some(base) {
+            object([("id", string("queue"))])
+        } else {
+            Null
+        };
+        println!(
+            "{}",
+            object([(
+                "data",
+                object([("repository", object([("mergeQueue", queue)]))])
+            )])
+        );
+        return;
+    }
     if scoring::packet(state, &query, &variables) {
         return;
     }
@@ -2698,6 +2721,9 @@ fn inbox_states(state: &Json, query: &str) {
                             ("state", pr.at("state").clone()),
                             ("mergedAt", at("mergedAt")),
                             ("closedAt", at("closedAt")),
+                            ("baseRefName", at("base")),
+                            ("baseRef", at("baseRef")),
+                            ("headRefOid", at("headRefOid")),
                             (
                                 "mergeable",
                                 if subject.contains("mergeable") {

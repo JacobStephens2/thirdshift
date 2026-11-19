@@ -101,6 +101,12 @@ pub enum Merge<P = PendingMerge> {
     Conflicted(P),
 }
 
+pub(crate) enum BaseRelationship {
+    Behind,
+    Current,
+    Merged(Vec<String>),
+}
+
 /// A conflicted merge left for a conflict Repair: `upstream` as it was when
 /// the merge began, pinned to `commit` because another Run's fetch may move
 /// the shared remote-tracking ref before the Repair finishes.
@@ -114,6 +120,15 @@ pub struct PendingMerge {
 struct OriginCommit {
     upstream: String,
     commit: String,
+}
+
+impl OriginCommit {
+    fn merge_message(&self, branch: &str) -> String {
+        format!(
+            "Merge remote-tracking branch '{}' into {branch}",
+            self.upstream
+        )
+    }
 }
 
 /// A read-only observation of Foreign commits. Its facts share one origin
@@ -460,6 +475,29 @@ impl Worktree {
         self.checkout.ordinary(&self.launch, |operation| {
             let origin = operation.sample_origin(base)?;
             Ok(!operation.merged(&origin.commit)?)
+        })
+    }
+
+    /// Fetch Base again and compare it to the exact watched head. For heads
+    /// without checks, identify the older heads combined with Base.
+    pub(crate) fn relationship_to_base(
+        &self,
+        base: &str,
+        head: &str,
+        check_branch_point: bool,
+    ) -> Result<BaseRelationship> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let origin = operation.sample_origin(base)?;
+            if !operation.contains(head, &origin.commit)? {
+                return Ok(BaseRelationship::Behind);
+            }
+            if check_branch_point {
+                let older_heads = operation.heads_merged_with_base(head, &origin, &self.branch)?;
+                if !older_heads.is_empty() {
+                    return Ok(BaseRelationship::Merged(older_heads));
+                }
+            }
+            Ok(BaseRelationship::Current)
         })
     }
 }

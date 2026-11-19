@@ -86,11 +86,21 @@ impl std::fmt::Display for SpecPrChanged {
 
 impl std::error::Error for SpecPrChanged {}
 
-/// A gate error is terminal (`Err`); only a refused request can return to
-/// the Repair loop. A successful guarded command needs no additional read.
+/// A gate error is terminal (`Err`). A refused request or moved Base returns
+/// to the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
     Merged,
+    BaseMoved,
     Refused(anyhow::Error),
+}
+
+#[derive(Debug)]
+struct SelfMergeGate;
+
+impl std::fmt::Display for SelfMergeGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("checking Self-merge eligibility")
+    }
 }
 
 /// Ticket accounting binds on resume or creation. Delivery binds lazily on
@@ -659,8 +669,51 @@ impl<A: Adapter> PullRequest<A> {
     /// request. A blocking review is a terminal policy refusal. GitHub guards
     /// its head; a retarget between the gate and server merge remains a remote
     /// race because the request has no expected-base precondition.
-    pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
+    pub fn merge(
+        &mut self,
+        watched: &str,
+        mut base_current: impl FnMut() -> Result<bool>,
+    ) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
+        let number = self
+            .identified
+            .as_ref()
+            .expect("gate captured identity")
+            .number;
+        self.check_merge_policy(number)?;
+        let issue = self.issue.clone();
+        // The request's transport retries after quota waits. Use another
+        // handle so the gate can re-observe the captured PR before a retry.
+        let mut transport = self.adapter.clone();
+        let mut first_attempt = true;
+        let error = match transport.merge(&issue, number, watched, &mut || {
+            let mut gate = || {
+                if !std::mem::take(&mut first_attempt) {
+                    self.ensure_ready_and_mergeable()?;
+                    self.check_merge_policy(number)?;
+                }
+                base_current()
+            };
+            gate().context(SelfMergeGate)
+        }) {
+            Ok(true) => return Ok(MergeAttempt::Merged),
+            Ok(false) => return Ok(MergeAttempt::BaseMoved),
+            Err(error) if error.is::<SelfMergeGate>() => return Err(error),
+            Err(error) => error,
+        };
+        // Completion never clears or changes the recorded interruption. Only
+        // this PR, merged at the watched head and expected branches, counts.
+        if let Ok(Some(snapshot)) = self.observe(true)
+            && snapshot.pr.state == PrState::Merged
+            && snapshot.pr.base == self.base
+            && snapshot.head_commit == watched
+        {
+            return Ok(MergeAttempt::Merged);
+        }
+        Ok(MergeAttempt::Refused(error))
+    }
+
+    fn check_merge_policy(&mut self, number: u64) -> Result<()> {
         self.ensure_spec_pr_allows_merge()?;
         if let Some(reason) = &self.merge_hold {
             return Err(crate::failed_run::MergeHold {
@@ -677,11 +730,6 @@ impl<A: Adapter> PullRequest<A> {
             }
             .into());
         }
-        let number = self
-            .identified
-            .as_ref()
-            .expect("gate captured identity")
-            .number;
         if self.adapter.review_blocks_merge(&self.issue, number) {
             return Err(PolicyRefusal::ReviewRequired {
                 pr_url: self
@@ -693,19 +741,7 @@ impl<A: Adapter> PullRequest<A> {
             }
             .into());
         }
-        let Err(error) = self.adapter.merge(&self.issue, number, watched) else {
-            return Ok(MergeAttempt::Merged);
-        };
-        // Completion never clears or changes the recorded interruption. Only
-        // this PR, merged at the watched head and expected branches, counts.
-        if let Ok(Some(snapshot)) = self.observe(true)
-            && snapshot.pr.state == PrState::Merged
-            && snapshot.pr.base == self.base
-            && snapshot.head_commit == watched
-        {
-            return Ok(MergeAttempt::Merged);
-        }
-        Ok(MergeAttempt::Refused(error))
+        Ok(())
     }
 
     /// After Worktree preservation, finish on the captured identity. Before
@@ -838,7 +874,7 @@ impl<A: Adapter> PullRequest<A> {
 
 /// The existing GitHub transport and a scripted test adapter vary here.
 /// Selection and transition policy stay in PullRequest.
-pub(crate) trait Adapter {
+pub(crate) trait Adapter: Clone {
     fn observe(
         &mut self,
         issue: &IssueUrl,
@@ -866,7 +902,13 @@ pub(crate) trait Adapter {
     ) -> Result<String>;
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
     fn base_is_open_pr(&mut self, issue: &IssueUrl, base: &str) -> Result<bool>;
-    fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
+    fn merge(
+        &mut self,
+        issue: &IssueUrl,
+        number: u64,
+        head: &str,
+        base_current: &mut dyn FnMut() -> Result<bool>,
+    ) -> Result<bool>;
     /// The existing Review eligibility read, with its Trusted account and
     /// repository checks.
     fn review_eligibility(
@@ -945,8 +987,14 @@ impl Adapter for GitHub {
     fn base_is_open_pr(&mut self, issue: &IssueUrl, base: &str) -> Result<bool> {
         self.review_base_is_open_pr(issue, base)
     }
-    fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
-        GitHub::merge(self, issue, number, head)
+    fn merge(
+        &mut self,
+        issue: &IssueUrl,
+        number: u64,
+        head: &str,
+        base_current: &mut dyn FnMut() -> Result<bool>,
+    ) -> Result<bool> {
+        self.merge_if_base_current(issue, number, head, base_current)
     }
     fn review_eligibility(
         &mut self,
@@ -1199,7 +1247,16 @@ mod tests {
         fn base_is_open_pr(&mut self, _: &IssueUrl, _: &str) -> Result<bool> {
             Ok(false)
         }
-        fn merge(&mut self, _: &IssueUrl, number: u64, head: &str) -> Result<()> {
+        fn merge(
+            &mut self,
+            _: &IssueUrl,
+            number: u64,
+            head: &str,
+            base_current: &mut dyn FnMut() -> Result<bool>,
+        ) -> Result<bool> {
+            if !base_current()? {
+                return Ok(false);
+            }
             let mut world = self.0.borrow_mut();
             world.merges.push((number, head.to_string()));
             if let Some(signal) = world.merge_signal {
@@ -1209,7 +1266,7 @@ mod tests {
             if world.refused {
                 bail!("merge request failed");
             }
-            Ok(())
+            Ok(true)
         }
         fn review_eligibility(
             &mut self,
@@ -2033,7 +2090,7 @@ mod tests {
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            assert!(pr.merge("watched").is_err());
+            assert!(pr.merge("watched", || Ok(true)).is_err());
             assert!(world.borrow().merges.is_empty());
         }
     }
@@ -2094,7 +2151,7 @@ mod tests {
                 base: "release".to_string(),
             });
             pr.mark_ready(None).unwrap();
-            let attempt = pr.merge("watched");
+            let attempt = pr.merge("watched", || Ok(true));
             assert_eq!(world.borrow().selected.last().unwrap().0, "20");
             match said {
                 None => {
@@ -2119,7 +2176,10 @@ mod tests {
             ..World::default()
         });
         pr.mark_ready(None).unwrap();
-        assert!(matches!(pr.merge("watched").unwrap(), MergeAttempt::Merged));
+        assert!(matches!(
+            pr.merge("watched", || Ok(true)).unwrap(),
+            MergeAttempt::Merged
+        ));
         assert_eq!(world.borrow().merges, [(12, "watched".to_string())]);
         assert!(
             world
@@ -2167,7 +2227,7 @@ mod tests {
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            let attempt = pr.merge("watched").unwrap();
+            let attempt = pr.merge("watched", || Ok(true)).unwrap();
             assert_eq!(
                 matches!(attempt, MergeAttempt::Merged),
                 change == "none",
@@ -2218,7 +2278,7 @@ mod tests {
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            let attempt = pr.merge("watched").unwrap();
+            let attempt = pr.merge("watched", || Ok(true)).unwrap();
             assert_eq!(matches!(attempt, MergeAttempt::Merged), confirmed);
             if let MergeAttempt::Refused(error) = attempt {
                 assert_eq!(error.to_string(), "interrupted");

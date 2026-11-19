@@ -285,6 +285,7 @@ fn with_base_fix_in_the_user_config_the_base_fix_still_starts_none_of_its_own() 
 #[test]
 fn a_merge_run_self_merges_once_its_base_fix_has_merged() {
     let scenario = Scenario::new();
+    scenario.checks_pass_after_merging_base(&["issue-7"], "main");
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
     scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
 

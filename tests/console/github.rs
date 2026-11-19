@@ -296,6 +296,48 @@ fn ready_rows_show_current_ci_and_status_reuses_it() {
 }
 
 #[test]
+fn ready_rows_flag_stale_green_ci_with_a_first_parent_count() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("ready for review"), 0);
+    pr_is(&scenario, "OPEN");
+    let [fork, head, first, side, tip, current] =
+        ['a', 'b', 'c', 'd', 'e', 'f'].map(|ch| ch.to_string().repeat(40));
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["headRefOid"] = json!(head);
+    gh["prs"][0]["baseRef"] = json!({"target": {"oid": tip}});
+    gh["prs"][0]["commits"] =
+        json!({"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]});
+    gh["comparisons"] = json!({
+        (format!("repos/acme/widgets/compare/{head}...{tip}?per_page=1")):
+            {"merge_base_commit": {"sha": fork}},
+        (format!("repos/acme/widgets/compare/{fork}...{tip}?per_page=100&page=1")):
+            {"total_commits": 3, "commits": [
+                {"sha": first, "parents": [{"sha": fork}]},
+                {"sha": side, "parents": [{"sha": fork}]},
+                {"sha": tip, "parents": [{"sha": first}, {"sha": side}]}
+            ]},
+        (format!("repos/acme/widgets/compare/{current}...{tip}?per_page=1")):
+            {"merge_base_commit": {"sha": tip}}
+    });
+    scenario.write_gh_state(&gh);
+
+    let console = start(&scenario);
+    let mut stream = events(&console);
+    wait_for(&console, &mut stream, "ready for review");
+    let ready = || group(&console.get("/").text().unwrap(), "ready for review");
+    let note = "2 merges behind main: CI result predates them";
+    wait_until(|| ready().contains("CI green"));
+    assert!(ready().contains(note), "{}", ready());
+
+    gh["prs"][0]["headRefOid"] = json!(current);
+    scenario.write_gh_state(&gh);
+    wait_until(|| !ready().contains(note));
+    assert!(ready().contains("CI green"));
+}
+
+#[test]
 fn github_merge_wakes_open_inbox_and_status_reuses_the_answer() {
     let scenario = Scenario::new();
     let home = scenario.path("home");

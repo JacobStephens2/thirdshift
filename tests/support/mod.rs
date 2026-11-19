@@ -1379,6 +1379,32 @@ test -f {root}/{COPY_REPLACED}
         fs::remove_dir_all(&seed).unwrap();
     }
 
+    /// Report green CI when this branch is checked after bringing in Base.
+    pub fn checks_pass_after_merging_base(&self, branches: &[&str], base: &str) {
+        let merges = branches
+            .iter()
+            .map(|branch| {
+                format!(r#""Merge remote-tracking branch 'origin/{base}' into {branch}""#)
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        let mut state = self.gh_state();
+        state["on_ci_read"] = json!({
+            "times": 20,
+            "seen": [],
+            "script": format!(
+                r#"
+case "$(git show -s --format=%s "$FAKE_CI_SHA")" in
+  {merges})
+    gh fake checks "$FAKE_CI_SHA" '[{{"name":"test","conclusion":"success"}}]'
+    ;;
+esac
+"#
+            ),
+        });
+        self.write_gh_state(&state);
+    }
+
     /// Add a PR from `head` into `base` in `state` (`OPEN`, `CLOSED` or
     /// `MERGED`) to the fake GitHub and return its URL.
     pub fn github_has_pr(&self, head: &str, base: &str, state: &str) -> String {

@@ -97,16 +97,39 @@ pub(super) struct CommandAnswer {
     /// The row's own pull request, absent when none has been resolved.
     #[serde(rename = "github_state", skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
-    #[serde(rename = "github_ci", skip_serializing_if = "Option::is_none")]
-    pub ci: Option<crate::github::InboxCi>,
-    #[serde(rename = "github_mergeable", skip_serializing_if = "Option::is_none")]
-    pub mergeable: Option<crate::github::InboxMergeable>,
+    #[serde(flatten)]
+    pub checks: PullRequestChecks,
     /// Merge or close time, when the pull request stopped waiting.
     #[serde(rename = "github_at", skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
     /// Row-specific facts and observation times, including frozen History.
     #[serde(rename = "github", skip_serializing_if = "Option::is_none")]
     observation: Option<RowAnswer>,
+}
+
+/// The CI and mergeability facts shown together on Ready for review rows.
+#[derive(Default, Deserialize, Serialize)]
+pub(super) struct PullRequestChecks {
+    #[serde(rename = "github_ci", skip_serializing_if = "Option::is_none")]
+    ci: Option<crate::github::InboxCi>,
+    #[serde(rename = "github_mergeable", skip_serializing_if = "Option::is_none")]
+    mergeable: Option<crate::github::InboxMergeable>,
+    #[serde(rename = "github_stale_ci", skip_serializing_if = "Option::is_none")]
+    pub stale_ci: Option<String>,
+}
+
+impl PullRequestChecks {
+    pub fn ci(&self) -> crate::github::InboxCi {
+        self.ci.unwrap_or_default()
+    }
+
+    pub fn has_merge_conflict(&self) -> bool {
+        self.mergeable == Some(crate::github::InboxMergeable::Conflicting)
+    }
+
+    pub fn needs_fix(&self) -> bool {
+        self.ci() == crate::github::InboxCi::Red || self.has_merge_conflict()
+    }
 }
 
 #[derive(Serialize)]
@@ -132,8 +155,11 @@ impl Kept {
         let state = pull_request.and_then(|url| self.pull_request(row, url));
         CommandAnswer {
             state: state.map(|state| state.state.to_string()),
-            ci: state.map(|state| state.ci),
-            mergeable: state.map(|state| state.mergeable),
+            checks: PullRequestChecks {
+                ci: state.map(|state| state.ci),
+                mergeable: state.map(|state| state.mergeable),
+                stale_ci: state.and_then(PullRequestState::stale_ci),
+            },
             at: state
                 .and_then(PullRequestState::event_time)
                 .map(str::to_owned),
@@ -439,6 +465,16 @@ pub(super) fn refresh(
                 for subject in chunk {
                     let url = &subject.url;
                     let mut state = states.get(url).cloned();
+                    if let Some(InboxState::PullRequest(pull)) = &mut state
+                        && let Err(error) = github.refresh_inbox_base(
+                            url,
+                            pull,
+                            kept.states.get(url).and_then(Option::as_ref),
+                        )
+                    {
+                        kept.failure = Some(format!("{url}: {error:#}"));
+                        read_failed = true;
+                    }
                     if let Some(InboxState::Issue(issue)) = &mut state
                         && !issue.needs_triage
                     {

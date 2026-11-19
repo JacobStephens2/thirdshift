@@ -877,7 +877,7 @@ fn a_tickets_run_started_after_thirdshift_was_replaced_can_still_start_its_base_
         ),
     );
     scenario.agent_does_for(22, &agent_lands_with_an_inherited_failure(22, "22.txt"));
-    base_fix_lands_on_the_spec_branch(&scenario, 23);
+    base_fix_lands_on_the_spec_branch(&scenario, 23, "issue-22");
 
     let result = scenario
         .run_copy_replaced_midway(&[&spec_url(&scenario), "base-fix"], |installed| {
@@ -1292,7 +1292,8 @@ fn spec_whose_ticket_inherits_a_failure() -> Scenario {
 
 /// The agent, on the Base fix issue `fix`, the next after the Tickets, commits
 /// a fix and opens its PR into the Spec branch, with `test` green on its head.
-fn base_fix_lands_on_the_spec_branch(scenario: &Scenario, fix: u32) {
+fn base_fix_lands_on_the_spec_branch(scenario: &Scenario, fix: u32, ticket_branch: &str) {
+    scenario.checks_pass_after_merging_base(&[ticket_branch], "issue-20");
     scenario.agent_does_for(
         fix,
         &format!(
@@ -1310,7 +1311,7 @@ gh pr create --base issue-20 --head issue-{fix} --title "Fix CI" --body "Closes 
 #[test]
 fn a_base_fix_and_its_ticket_both_run_the_security_review() {
     let scenario = spec_whose_ticket_inherits_a_failure();
-    base_fix_lands_on_the_spec_branch(&scenario, 22);
+    base_fix_lands_on_the_spec_branch(&scenario, 22, "issue-21");
     scenario.agent_does_for_in_session(22, 2, &security_review_script(&[]));
     scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&[]));
 
@@ -1333,7 +1334,7 @@ fn a_base_fix_and_its_ticket_both_run_the_security_review() {
 #[test]
 fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
     let scenario = spec_whose_ticket_inherits_a_failure();
-    base_fix_lands_on_the_spec_branch(&scenario, 22);
+    base_fix_lands_on_the_spec_branch(&scenario, 22, "issue-21");
 
     let result = scenario.run(&[&spec_url(&scenario), "base-fix"]);
 
@@ -1448,7 +1449,7 @@ fn with_no_base_fix_on_a_spec_a_tickets_run_links_the_checks_and_offers_no_base_
 #[test]
 fn a_ticket_that_landed_after_a_base_fix_says_so_in_the_notification_and_the_checklist() {
     let scenario = spec_whose_ticket_inherits_a_failure();
-    base_fix_lands_on_the_spec_branch(&scenario, 22);
+    base_fix_lands_on_the_spec_branch(&scenario, 22, "issue-21");
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
 
     let result = run_emailing(
@@ -1507,6 +1508,7 @@ const BASE_FIX_23: &str = "https://github.com/acme/widgets/issues/23";
 #[test]
 fn two_tickets_meeting_the_same_inherited_failure_share_one_base_fix() {
     let scenario = two_tickets_with_the_same_inherited_failure();
+    scenario.checks_pass_after_merging_base(&["issue-21", "issue-22"], "issue-20");
     // The Base fix issue is the next after the Tickets.
     scenario.agent_does_for(
         23,
