@@ -46,6 +46,8 @@
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
 //!  "labels"?: {"<number>": ["<label>", ...]},
+//!  "rest_omits"?: [<number>, ...],
+//!  "graphql_omits"?: [<number>, ...],
 //!  "repo_labels"?: ["<label>", ...],
 //!  "issue_urls"?: {"<number>": "<full Issue URL>"},
 //!  "blocked_by"?: {"<number>": [<number>, ...]},
@@ -1634,6 +1636,9 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         assert_eq!(flag(flags, "jq"), Some(".[]"));
         for (n, issue_state) in matching_issues(state, &wanted_state, query.get("labels").copied())
         {
+            if query.contains_key("labels") && is_omitted(state, "rest_omits", n) {
+                continue;
+            }
             let mut issue = issue_fields(state, &n.to_string(), issue_state);
             issue.set("html_url", issue.at("url").clone());
             println!("{issue}");
@@ -2402,6 +2407,10 @@ fn graphql(state: &Json, args: &[&str]) {
         scoring_search(state, &variables);
         return;
     }
+    if query.contains("issues(") && query.contains("labels: [$label]") {
+        repository_issues(state, &variables);
+        return;
+    }
     if (query.contains("pullRequest(number:") || query.contains("issue(number:"))
         && query.contains("rateLimit")
     {
@@ -2536,6 +2545,76 @@ fn scoring_search(state: &Json, variables: &BTreeMap<String, String>) {
                         ])
                     ),
                 ])
+            )])
+        )])
+    );
+}
+
+fn is_omitted(state: &Json, field: &str, issue: i64) -> bool {
+    state
+        .get(field)
+        .map(Json::items)
+        .unwrap_or_default()
+        .iter()
+        .any(|entry| entry.as_i64() == Some(issue))
+}
+
+fn repository_issues(state: &Json, variables: &BTreeMap<String, String>) {
+    check_repo_is(
+        state,
+        Some(&format!("{}/{}", variables["owner"], variables["repo"])),
+    );
+    let label = &variables["label"];
+    let matching: Vec<_> = matching_issues(state, "OPEN", Some(label))
+        .into_iter()
+        .filter(|(n, _)| !is_omitted(state, "graphql_omits", *n))
+        .collect();
+    let offset: usize = variables
+        .get("after")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let end = (offset + 100).min(matching.len());
+    let nodes: Vec<Json> = matching[offset..end]
+        .iter()
+        .map(|(n, issue_state)| {
+            let key = n.to_string();
+            let fields = issue_fields(state, &key, issue_state);
+            let labels = issue_labels(state, &key)
+                .iter()
+                .map(|name| object([("name", name.clone())]))
+                .collect();
+            object([
+                ("url", fields.at("url").clone()),
+                ("title", fields.at("title").clone()),
+                (
+                    "labels",
+                    object([
+                        ("pageInfo", object([("hasNextPage", Bool(false))])),
+                        ("nodes", Array(labels)),
+                    ]),
+                ),
+            ])
+        })
+        .collect();
+    println!(
+        "{}",
+        object([(
+            "data",
+            object([(
+                "repository",
+                object([(
+                    "issues",
+                    object([
+                        (
+                            "pageInfo",
+                            object([
+                                ("hasNextPage", Bool(end < matching.len())),
+                                ("endCursor", string(end.to_string())),
+                            ])
+                        ),
+                        ("nodes", Array(nodes)),
+                    ])
+                )])
             )])
         )])
     );

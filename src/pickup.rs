@@ -85,7 +85,7 @@ impl fmt::Display for Skipped {
                 limit,
             } => {
                 write!(f, "at the Failure limit on {}: ", repo.slug())?;
-                write_numbers(f, failed)?;
+                crate::issue::write_numbers(f, failed)?;
                 let verb = if failed.len() == 1 { "is" } else { "are" };
                 write!(
                     f,
@@ -96,7 +96,7 @@ impl fmt::Display for Skipped {
             Self::NoReadyIssue(repo) => write!(f, "no Ready issue on {}", repo.slug()),
             Self::NoneReservable { repo, tried } => {
                 write!(f, "no Ready issue on {} it can reserve, past ", repo.slug())?;
-                write_numbers(f, tried)?;
+                crate::issue::write_numbers(f, tried)?;
                 f.write_str("; check ")?;
                 for (index, number) in tried.iter().enumerate() {
                     let separator = if index == 0 { "" } else { ", " };
@@ -111,21 +111,6 @@ impl fmt::Display for Skipped {
             }
         }
     }
-}
-
-/// `numbers` as "#7", "#7 and #9" or "#7, #8 and #9".
-fn write_numbers(f: &mut fmt::Formatter, numbers: &[u64]) -> fmt::Result {
-    for (index, number) in numbers.iter().enumerate() {
-        let separator = if index == 0 {
-            ""
-        } else if index == numbers.len() - 1 {
-            " and "
-        } else {
-            ", "
-        };
-        write!(f, "{separator}#{number}")?;
-    }
-    Ok(())
 }
 
 /// The line on Ready issue `number`, passed over because another run

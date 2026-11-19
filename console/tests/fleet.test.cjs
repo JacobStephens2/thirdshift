@@ -7,6 +7,7 @@ const { tmpdir, hostname } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 const { createServer } = require('node:http');
 
 const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
@@ -128,33 +129,56 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   assert.equal(await page.locator('.command').count(), 1, 'local machine filter');
   await page.goto(caller.origin);
   await remoteRows.first().waitFor();
-  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
-  await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
-  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  let releaseRefresh;
+  const refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
+  const holdRefresh = async route => {
+    const request = route.request();
+    if (new URL(request.url()).pathname === '/' && request.method() === 'GET' && !request.isNavigationRequest() && !request.redirectedFrom()) await refreshGate;
+    await route.continue();
+  };
+  await page.route(`${caller.origin}/**`, holdRefresh);
+  const undo = page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true });
+  try {
+    await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
+    await undo.waitFor();
+    assert.equal(await undo.isDisabled(), true, 'Undo waits for the Dismiss refresh before accepting another action');
+  } finally {
+    releaseRefresh();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+  // Wait for the owning machine's dismissed row, beyond optimistic removal.
+  await remoteRows.locator('form[action="/dismiss/undo"]').waitFor({ state: 'attached' });
+  await undo.click();
+  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  // Verify Undo survived a reload before starting a fresh notification baseline.
+  await page.reload();
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
   await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
-  // The enabled observer establishes its baseline through a real Inbox read.
-  await page.waitForFunction(() => localStorage.getItem('thirdshift:console:notification-count'));
+  // Establish the restored two-row baseline through a real Inbox read.
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:notification-count'))?.count === 2);
+  assert.equal(await page.evaluate(() => notices.length), 0, 'restoring the baseline does not notify');
   const remotePath = join(homes[1], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const added = JSON.parse(await readFile(remotePath, 'utf8'));
   added.tickets[1].state = 'merged';
   added.kind = 'Process'; added.process_name = 'custom-build';
-  await writeFile(remotePath, JSON.stringify(added));
+  await replaceRecord(remotePath, JSON.stringify(added));
   await remoteRows.locator('.subject[title="Process custom-build on acme/widgets"]').waitFor();
   await remoteRows.locator(':scope > .row-head > .ticket-progress').getByText('2 / 2 Tickets complete', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => notices.length), 0, 'a metadata update keeps the Needs you count unchanged');
   added.name = 'another-remote-command'; added.cause = 'Another remote problem';
-  await writeFile(remotePath.replace('1-fixture', '2-fixture'), JSON.stringify(added));
+  await replaceRecord(remotePath.replace('1-fixture', '2-fixture'), JSON.stringify(added));
   await page.waitForFunction(() => notices.length === 1);
   assert.match(await page.evaluate(() => notices[0].title), /^3 need you/);
   assert.match(await page.evaluate(() => notices[0].options.body), /^remote-workstation/);
   // The owning machine's Ready row keeps its PR facts and qualified links.
   const pr = 'https://github.com/acme/widgets/pull/2174';
   const subjects = { [pr]: { state: 'Open', ci: 'red', mergeable: 'conflicting', title: 'Ready on the Fleet machine' } };
-  await writeFile(join(homes[1], '.thirdshift/logs/github-inbox.json'), JSON.stringify({ version: 1, subjects }));
+  await replaceRecord(join(homes[1], '.thirdshift/logs/github-inbox.json'), JSON.stringify({ version: 1, subjects }));
   await writeFile(join(homes[1], '.thirdshift/logs/github-inbox.changed'), 'Fleet copy');
   added.name = 'fixture'; added.outcome = 'ready for review'; added.cause = null; added.pull_request = pr;
-  await writeFile(remotePath, JSON.stringify(added));
+  await replaceRecord(remotePath, JSON.stringify(added));
   const ready = page.locator('[data-group="ready for review"] > .commands > .command[data-machine="remote-workstation-with-a-long-name"]');
   await ready.getByText('Ready on the Fleet machine', { exact: true }).waitFor({ state: 'attached' });
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -180,22 +204,27 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       const box = await copy.boundingBox();
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      // Opened, the Fleet machines list still fits a long machine name.
+      await page.locator('#fleet-machines > summary').click();
+      await page.locator('#fleet-machines li').filter({ hasText: 'remote-workstation-with-a-long-name' }).waitFor();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
   await page.goto(caller.origin);
   await ready.getByRole('button', { name: 'Copy', exact: true }).waitFor();
   cli(homes[1], ['console', 'token', 'revoke', 'caller']);
-  await page.locator('[data-reachability="refused"]').waitFor();
+  // The folded Fleet machines list still follows each machine's reachability.
+  await page.locator('[data-reachability="refused"]').waitFor({ state: 'attached' });
   assert.equal(await remoteRows.count(), 2, 'refused keeps the last good rows');
   remote.process.kill();
   await remote.exited;
-  await page.locator('[data-reachability="unreachable"]').waitFor();
+  await page.locator('[data-reachability="unreachable"]').waitFor({ state: 'attached' });
   await remoteRows.first().locator('.machine-tag').waitFor();
   await waitUntil(() => remoteRows.evaluateAll(rows => rows.every(row => row.classList.contains('stale'))), 'last good rows turn grey');
   assert.deepEqual(await files(homes[0]), before, 'remote answers stay in memory');
 });
 
-test('Fleet makes no requests without a page and a slow or old machine cannot block a good one', async t => {
+test('Fleet makes no requests without a page, a slow or old machine cannot block a good one, and the machines list starts folded', async t => {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-idle-'));
   const root = join(home, '.thirdshift');
   await mkdir(root);
@@ -240,11 +269,40 @@ test('Fleet makes no requests without a page and a slow or old machine cannot bl
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.goto(origin);
-  await page.locator('.fleet-machines li').filter({ hasText: /^good · ok/ }).waitFor();
+  const fold = page.locator('#fleet-machines');
+  const summary = fold.locator('summary');
+  const machineLines = fold.locator('.fleet-machines li');
+  const isOpen = () => fold.evaluate(node => node.open);
+  const good = machineLines.filter({ hasText: /^good · ok/ });
+  await good.waitFor({ state: 'attached' });
+  // Checked first: the slow machine's read fails after three seconds.
+  assert.equal(await machineLines.filter({ hasText: /^slow/ }).count(), 0, 'good answer arrives before the slow timeout');
+  assert.equal(await isOpen(), false, 'the Fleet machines list starts folded, and a live update keeps it folded');
+  assert.equal(await good.isVisible(), false);
+  assert.match(await summary.textContent(), /^Fleet machines\s*\d+$/);
+  await summary.click();
+  await good.waitFor();
   await page.locator('[data-reachability="needs update"]').waitFor();
   assert.match(await page.locator('.active-runs strong').textContent(), /^3 active runs/);
-  assert.match(await page.locator('.fleet-machines li').filter({ hasText: /^good/ }).textContent(), /3 active/);
-  assert.equal(await page.locator('.fleet-machines li').filter({ hasText: /^slow/ }).count(), 0, 'good answer arrives before the slow timeout');
+  assert.match(await good.textContent(), /3 active/);
+  document.active_runs = 4;
+  await good.filter({ hasText: /4 active/ }).waitFor();
+  assert.equal(await isOpen(), true, 'a live update keeps the opened list open');
+  await summary.focus();
+  await page.keyboard.press('Space');
+  await good.waitFor({ state: 'hidden' });
+  await page.keyboard.press('Enter');
+  await good.waitFor();
+  await page.reload();
+  assert.equal(await isOpen(), false, 'each page load starts folded');
+  const phone = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  await phone.goto(origin);
+  const local = phone.locator('#fleet-machines .fleet-machines li').first();
+  assert.equal(await local.isVisible(), false, 'folded without JavaScript');
+  await phone.locator('#fleet-machines summary').click();
+  await local.waitFor();
+  assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await phone.close();
   await page.close();
   await new Promise(resolve => setTimeout(resolve, 400));
   const stopped = requests;

@@ -2122,3 +2122,63 @@ fn older_command_records_without_release_url_read_and_omit_when_absent() {
     let serialized = serde_json::to_value(&parsed).unwrap();
     assert!(serialized.get("release_url").is_none(), "{serialized}");
 }
+
+#[test]
+fn listing_disagreement_logs_once_per_repo_label_and_keeps_idle_pass_skip_history() {
+    let memory = Scripted::default();
+    let repo = issue().repo();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::PickupRun);
+    record.configured(&config(true));
+
+    let msg_ready =
+        "GitHub ready-for-agent listing disagreement: REST omitted #2814 (found via GraphQL)";
+    record.listing_disagreement(&repo, crate::labels::READY_FOR_AGENT, msg_ready);
+    // Repeated lookup for the same (repo, label) in the same Pass is deduplicated.
+    record.listing_disagreement(&repo, crate::labels::READY_FOR_AGENT, msg_ready);
+    // Distinct label in the same Pass still logs.
+    let msg_triage =
+        "GitHub needs-triage listing disagreement: REST omitted #9 (found via GraphQL)";
+    record.listing_disagreement(&repo, crate::labels::NEEDS_TRIAGE, msg_triage);
+    record.skipped(Pass::Pickup, &repo, "no Ready issue on acme/widgets");
+
+    // Held quiet skip leaves terminal empty, while activity.log receives one line per unique disagreement.
+    assert!(memory.terminal().is_empty(), "{:?}", memory.terminal());
+    let activity = memory.file(ACTIVITY);
+    assert_eq!(activity.matches(msg_ready).count(), 1, "{activity}");
+    assert_eq!(activity.matches(msg_triage).count(), 1, "{activity}");
+    assert!(
+        activity.contains("Pickup run skipped: no Ready issue on acme/widgets"),
+        "{activity}"
+    );
+    assert_eq!(
+        activity::last_of(&activity, Kind::Pass(Pass::Pickup)).map(|(_, line)| line),
+        Some("Pickup run skipped: no Ready issue on acme/widgets")
+    );
+
+    // Across subsequent idle Passes, unchanged disagreements deduplicate in
+    // activity.log (ADR-0011) while still printing once per Pass when non-quiet,
+    // and changed disagreements are appended.
+    let mut second_pass = Record::new(memory.clone());
+    second_pass.begin(Begin::PickupRun);
+    second_pass.configured(&config(false));
+    second_pass.listing_disagreement(&repo, crate::labels::READY_FOR_AGENT, msg_ready);
+    second_pass.skipped(Pass::Pickup, &repo, "no Ready issue on acme/widgets");
+    let msg_changed = "GitHub ready-for-agent listing disagreement: REST omitted #2814 and #2815 (found via GraphQL)";
+    let mut third_pass = Record::new(memory.clone());
+    third_pass.begin(Begin::PickupRun);
+    third_pass.configured(&config(false));
+    third_pass.listing_disagreement(&repo, crate::labels::READY_FOR_AGENT, msg_changed);
+    third_pass.skipped(Pass::Pickup, &repo, "no Ready issue on acme/widgets");
+
+    let activity = memory.file(ACTIVITY);
+    assert_eq!(activity.matches(msg_ready).count(), 1, "{activity}");
+    assert_eq!(activity.matches(msg_changed).count(), 1, "{activity}");
+    assert_eq!(
+        activity
+            .matches("Pickup run skipped: no Ready issue on acme/widgets")
+            .count(),
+        1,
+        "{activity}"
+    );
+}

@@ -497,6 +497,15 @@ pub(crate) fn activity_for(repo: &Repo, message: impl Display) {
     record().activity_for(repo, message);
 }
 
+/// Record a GitHub candidate-listing disagreement in `candidates` once per
+/// Pass on stderr and Command output for `repo`, and once per change in the
+/// repository's Activity log.
+pub(crate) fn listing_disagreement(repo: &Repo, candidates: &crate::github::LabelledCandidates) {
+    if let Some(message) = candidates.disagreement() {
+        record().listing_disagreement(repo, candidates.label(), &message);
+    }
+}
+
 /// Record how the command ended, `outcome` in short: show any lines held
 /// from the terminal, then write the Activity log's end line, if it started
 /// work. A skipped pass never calls it, so that under

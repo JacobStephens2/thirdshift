@@ -168,6 +168,240 @@ fn an_issue_whose_run_ended_ready_for_review_with_no_label_left_is_not_taken_aga
     assert_eq!(scenario.issue_labels(7), ["bug"]);
 }
 
+#[test]
+fn a_ready_issue_omitted_by_rest_is_found_via_graphql_and_the_disagreement_is_logged() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 2814, &["bug"]);
+    let mut gh = scenario.gh_state();
+    gh["rest_omits"] = serde_json::json!([2814]);
+    scenario.write_gh_state(&gh);
+    scenario.agent_does_for(2814, &agent_fixes_bug(2814, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert!(
+        result.stderr.contains("taking Ready issue #2814"),
+        "stderr:\n{}",
+        result.stderr
+    );
+    let pr = pr_from(&scenario, "issue-2814");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(scenario.issue_labels(2814), ["bug"]);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    let activity = activity_log(&scenario);
+    let disagreement_lines: Vec<_> = activity
+        .lines()
+        .filter(|line| line.contains("#2814") && line.contains("REST") && line.contains("GraphQL"))
+        .collect();
+    assert_eq!(disagreement_lines.len(), 1, "activity:\n{activity}");
+    let stderr_disagreements: Vec<_> = result
+        .stderr
+        .lines()
+        .filter(|line| line.contains("#2814") && line.contains("REST") && line.contains("GraphQL"))
+        .collect();
+    assert_eq!(stderr_disagreements.len(), 1, "stderr:\n{}", result.stderr);
+}
+
+#[test]
+fn a_pickup_pass_adds_at_most_one_github_request_and_keeps_missing_issues_to_one_graphql_query() {
+    // When REST and GraphQL agree on an empty candidate list, Pickup makes
+    // only one extra GitHub request (`api graphql`) beyond the REST baseline.
+    let idle = Scenario::new();
+    let idle_result = idle.run(&["pickup"]);
+    assert_skipped(&idle, &idle_result, NO_READY_ISSUE);
+    let listing = |state: &str, label: &str| {
+        vec![
+            "api".to_string(),
+            "--paginate".into(),
+            "--jq".into(),
+            ".[]".into(),
+            format!(
+                "repos/acme/widgets/issues?state={state}&labels={label}&sort=created&direction=desc&per_page=100"
+            ),
+        ]
+    };
+    let calls = idle.gh_calls();
+    assert_eq!(calls.len(), 8, "calls: {calls:?}");
+    assert_eq!(
+        &calls[..7],
+        &[
+            vec!["api".to_string(), "rate_limit".into()],
+            vec![
+                "api".to_string(),
+                "user".into(),
+                "--hostname".into(),
+                "github.com".into(),
+            ],
+            vec![
+                "api".to_string(),
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
+            ],
+            listing("closed", IN_PROGRESS),
+            listing("closed", AGENT_FAILED),
+            listing("open", AGENT_FAILED),
+            listing("open", READY_FOR_AGENT),
+        ]
+    );
+    assert_eq!(&calls[7][..2], &["api", "graphql"]);
+    assert!(
+        calls[7].iter().any(|arg| arg == "label=ready-for-agent"),
+        "graphql call: {:?}",
+        calls[7]
+    );
+
+    // Multiple omitted issues reuse the single GraphQL response for title and
+    // labels instead of issuing per-issue REST lookups.
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 2814, &["bug"]);
+    ready_issue(&scenario, 2815, &["bug"]);
+    let mut gh = scenario.gh_state();
+    gh["rest_omits"] = serde_json::json!([2815, 2814]);
+    scenario.write_gh_state(&gh);
+    scenario.agent_does_for(2814, &agent_fixes_bug(2814, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-2814");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    let graphql_listing_calls = scenario
+        .gh_calls()
+        .into_iter()
+        .filter(|call| {
+            call.starts_with(&["api".into(), "graphql".into()])
+                && call.iter().any(|arg| arg == "label=ready-for-agent")
+        })
+        .count();
+    assert_eq!(graphql_listing_calls, 1);
+    let expected = "GitHub ready-for-agent listing disagreement: REST omitted #2814 and #2815 (found via GraphQL)";
+    assert_eq!(activity_log(&scenario).matches(expected).count(), 1);
+    assert_eq!(result.stderr.matches(expected).count(), 1);
+}
+
+#[test]
+fn listing_disagreements_log_once_per_pass_across_retries_and_in_quiet_skips() {
+    // Within one Pass, passing over a reserved issue reloads candidates but logs
+    // the listing disagreement only once.
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &["bug"]);
+    ready_issue(&scenario, 2814, &["bug"]);
+    reserved_by_another_host(&scenario, 7);
+    let mut gh = scenario.gh_state();
+    gh["rest_omits"] = serde_json::json!([2814]);
+    scenario.write_gh_state(&gh);
+    scenario.agent_does_for(2814, &agent_fixes_bug(2814, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-2814");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert!(
+        result.stderr.contains(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
+    let expected =
+        "GitHub ready-for-agent listing disagreement: REST omitted #2814 (found via GraphQL)";
+    assert_eq!(
+        activity_log(&scenario).matches(expected).count(),
+        1,
+        "activity:\n{}",
+        activity_log(&scenario)
+    );
+    assert_eq!(
+        result.stderr.matches(expected).count(),
+        1,
+        "stderr:\n{}",
+        result.stderr
+    );
+
+    // Even when the omitted issue is ineligible (`no Ready issue`) and
+    // `activity.quiet_skips` silences stderr, the first Pass records the
+    // disagreement in `activity.log` without breaking skip deduplication;
+    // unchanged consecutive idle passes do not repeat it (ADR-0011), while a
+    // changed disagreement writes a new line, and non-quiet stderr prints once
+    // per Pass.
+    let quiet = Scenario::new();
+    quiet.user_config_is("[activity]\nquiet_skips = true\n");
+    quiet.issue_is(2814, "OPEN");
+    quiet.issue_labelled(2814, &[READY_FOR_AGENT, "needs-info"]);
+    let mut gh = quiet.gh_state();
+    gh["rest_omits"] = serde_json::json!([2814]);
+    quiet.write_gh_state(&gh);
+
+    for _ in 0..2 {
+        let skipped = quiet.run(&["pickup"]);
+        assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+        assert!(skipped.stdout.is_empty(), "stdout: {}", skipped.stdout);
+        assert!(skipped.stderr.is_empty(), "stderr: {}", skipped.stderr);
+    }
+    let activity = activity_log(&quiet);
+    assert_eq!(
+        activity.matches(expected).count(),
+        1,
+        "activity:\n{activity}"
+    );
+    assert_eq!(
+        activity
+            .matches("Pickup run skipped: no Ready issue on acme/widgets")
+            .count(),
+        1,
+        "activity:\n{activity}"
+    );
+
+    quiet.issue_is(2815, "OPEN");
+    quiet.issue_labelled(2815, &[READY_FOR_AGENT, "needs-info"]);
+    let mut gh = quiet.gh_state();
+    gh["rest_omits"] = serde_json::json!([2814, 2815]);
+    quiet.write_gh_state(&gh);
+    let updated = quiet.run(&["pickup"]);
+    assert_eq!(updated.code, Some(0), "stderr: {}", updated.stderr);
+    assert!(updated.stderr.is_empty(), "stderr: {}", updated.stderr);
+    let changed = "GitHub ready-for-agent listing disagreement: REST omitted #2814 and #2815 (found via GraphQL)";
+    let activity = activity_log(&quiet);
+    assert_eq!(
+        activity.matches(changed).count(),
+        1,
+        "activity:\n{activity}"
+    );
+
+    // Turning off quiet_skips emits the disagreement once per Pass on stderr
+    // while keeping activity.log deduplicated.
+    quiet.user_config_is("[activity]\nquiet_skips = false\n");
+    let non_quiet = quiet.run(&["pickup"]);
+    assert_eq!(non_quiet.code, Some(0), "stderr: {}", non_quiet.stderr);
+    assert_eq!(
+        non_quiet.stderr.matches(changed).count(),
+        1,
+        "stderr:\n{}",
+        non_quiet.stderr
+    );
+    assert_eq!(
+        activity_log(&quiet).matches(changed).count(),
+        1,
+        "activity:\n{}",
+        activity_log(&quiet)
+    );
+}
+
+#[test]
+fn a_ready_issue_omitted_by_graphql_is_still_found_via_rest_and_logged() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 2814, &["bug"]);
+    let mut gh = scenario.gh_state();
+    gh["graphql_omits"] = serde_json::json!([2814]);
+    scenario.write_gh_state(&gh);
+    scenario.agent_does_for(2814, &agent_fixes_bug(2814, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-2814");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    let expected =
+        "GitHub ready-for-agent listing disagreement: GraphQL omitted #2814 (found via REST)";
+    assert_eq!(activity_log(&scenario).matches(expected).count(), 1);
+    assert_eq!(result.stderr.matches(expected).count(), 1);
+}
+
 /// With Ready issues #7 and #9, `pickup` with `extra` takes `taken` and
 /// leaves `left` labelled `ready-for-agent` with no branch on origin.
 fn pickup_takes(extra: &[&str], taken: u32, left: u32) {

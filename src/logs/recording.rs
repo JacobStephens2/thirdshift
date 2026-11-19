@@ -1,7 +1,7 @@
 //! One Command's owned recording implementation. Production and tests use
 //! these same operations; only the effects adapter differs.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -36,6 +36,7 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
+    reported_disagreements: HashSet<(String, &'static str)>,
     /// The User config's warnings, until the Activity log of the command's
     /// repository has them.
     config_warnings: Vec<String>,
@@ -90,6 +91,7 @@ struct Started {
 enum History<'a> {
     Kind(Kind),
     ProcessSkip(&'a str),
+    ListingDisagreement(crate::labels::Label),
 }
 
 impl Started {
@@ -175,6 +177,7 @@ impl<O: Outside> Record<O> {
             command_log: Log::NotKept,
             activity_started: None,
             activity_warned: false,
+            reported_disagreements: HashSet::new(),
             config_warnings: Vec::new(),
             command_record: None,
             preflight_repo: None,
@@ -559,6 +562,28 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn activity_for(&mut self, repo: &Repo, message: impl Display) {
         self.activity_write(&self.root(repo), &message.to_string(), None);
+    }
+
+    pub(super) fn listing_disagreement(
+        &mut self,
+        repo: &Repo,
+        label: crate::labels::Label,
+        message: &str,
+    ) {
+        if !self
+            .reported_disagreements
+            .insert((repo.slug(), label.name()))
+        {
+            return;
+        }
+        self.step(format_args!("{message}"));
+        if let Some(root) = self.root_if_configured(repo) {
+            self.activity_write_with_history(
+                &root,
+                message,
+                Some(History::ListingDisagreement(label)),
+            );
+        }
     }
 
     pub(super) fn ended(&mut self, outcome: impl Display) {
@@ -1149,6 +1174,9 @@ impl<O: Outside> Record<O> {
             let last = match history {
                 History::Kind(kind) => activity::last_of(whole, kind),
                 History::ProcessSkip(name) => activity::last_of_process(whole, name),
+                History::ListingDisagreement(label) => {
+                    activity::last_of_listing_disagreement(whole, label)
+                }
             };
             if last.map(|(_, text)| text) == Some(line) {
                 return Ok(());
