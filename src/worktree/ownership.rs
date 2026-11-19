@@ -676,7 +676,11 @@ impl<'a> Operation<'a> {
     }
 
     pub(super) fn merged(&self, rev: &str) -> Result<bool> {
-        self.succeeds(&["merge-base", "--is-ancestor", rev, "HEAD"])
+        self.contains("HEAD", rev)
+    }
+
+    pub(super) fn contains(&self, head: &str, ancestor: &str) -> Result<bool> {
+        self.succeeds(&["merge-base", "--is-ancestor", ancestor, head])
     }
 
     /// Boolean probes are gated but never retried or reinterpreted as errors
@@ -688,6 +692,7 @@ impl<'a> Operation<'a> {
     /// Merge the exact sampled commit, preserving the readable upstream label
     /// and allowing a merge even when the repository config demands ff-only.
     pub(super) fn merge(&self, origin: OriginCommit, branch: &str) -> Result<Merge> {
+        let advanced = !self.merged(&origin.commit)?;
         let message = format!(
             "Merge remote-tracking branch '{}' into {branch}",
             origin.upstream
@@ -695,6 +700,7 @@ impl<'a> Operation<'a> {
         match self.run(&["merge", "--no-edit", "--ff", "-m", &message, &origin.commit]) {
             Ok(_) => Ok(Merge::Clean {
                 commit: origin.commit,
+                advanced,
             }),
             Err(_) if self.merge_in_progress()? => Ok(Merge::Conflicted(PendingMerge { origin })),
             Err(error) => Err(error),

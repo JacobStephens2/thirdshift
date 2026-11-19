@@ -24,6 +24,7 @@ struct Metadata {
     count: usize,
     github_ci: Option<crate::github::InboxCi>,
     github_mergeable: Option<crate::github::InboxMergeable>,
+    github_stale_ci: Option<String>,
     #[serde(flatten)]
     departure: Option<Departure>,
     dismissal: Option<crate::logs::dismiss::DismissalView>,
@@ -218,6 +219,9 @@ impl Row {
             println!("  {}", meta.github_ci.unwrap_or_default().label());
             if meta.github_mergeable == Some(crate::github::InboxMergeable::Conflicting) {
                 println!("  Merge conflict");
+            }
+            if let Some(note) = &meta.github_stale_ci {
+                println!("  {note}");
             }
         }
         if let Some(departure) = &meta.departure {

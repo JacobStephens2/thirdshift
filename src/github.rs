@@ -26,6 +26,7 @@ pub(crate) use quota::{Quota, QuotaWait};
 
 mod advisories;
 mod base_ci;
+mod base_comparison;
 pub(crate) mod release;
 pub(crate) use base_ci::{BaseCiAction, TipCi};
 pub(crate) mod review;
@@ -1097,6 +1098,25 @@ impl GitHub {
 
     /// One guarded merge request, with a merge commit and without auto-merge
     /// or local branch deletion (ADR 0004). Delivery owns reconciliation.
+    pub fn base_has_merge_queue(&self, issue: &IssueUrl, base: &str) -> Result<bool> {
+        let response = self.gh_json(&[
+            "api",
+            "graphql",
+            "-f",
+            "query=query($owner: String!, $repo: String!, $base: String!) { repository(owner: $owner, name: $repo) { mergeQueue(branch: $base) { id } } }",
+            "-f",
+            &format!("owner={}", issue.owner),
+            "-f",
+            &format!("repo={}", issue.repo),
+            "-f",
+            &format!("base={base}"),
+        ])?;
+        let queue = response["data"]["repository"]
+            .get("mergeQueue")
+            .context("GitHub did not report whether Base has a merge queue")?;
+        Ok(queue["id"].as_str().is_some_and(|id| !id.is_empty()))
+    }
+
     pub fn merge(&self, issue: &IssueUrl, number: u64, head: &str) -> Result<()> {
         self.gh(&[
             "pr",
@@ -1976,7 +1996,7 @@ impl InboxSubject {
             ),
             Self::PullRequest => (
                 "pullRequest",
-                "url title state mergedAt closedAt mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+                "url title state mergedAt closedAt mergeable headRefOid baseRefName baseRef { target { oid } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
             ),
         }
     }
@@ -2045,6 +2065,8 @@ pub(crate) struct PullRequestState {
     pub ci: InboxCi,
     #[serde(default)]
     pub mergeable: InboxMergeable,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_comparison: Option<base_comparison::BaseComparison>,
 }
 
 /// Mergeability is independent of head CI. Old or computing answers imply no conflict.
@@ -2109,16 +2131,24 @@ impl PullRequestState {
         self.merged_at.as_deref().or(self.closed_at.as_deref())
     }
 
+    pub fn stale_ci(&self) -> Option<String> {
+        self.base_comparison.as_ref()?.stale_ci()
+    }
+
     fn from_json(url: &str, json: &Value) -> Result<Self> {
         let state = parse_pr_state(json["state"].as_str(), url)?;
+        let ci = InboxCi::from_json(json);
         let at = |name: &str| json[name].as_str().map(String::from);
         Ok(PullRequestState {
             state,
             title: at("title"),
             merged_at: at("mergedAt"),
             closed_at: at("closedAt"),
-            ci: InboxCi::from_json(json),
+            ci,
             mergeable: InboxMergeable::from_json(json),
+            base_comparison: (state == PrState::Open && ci == InboxCi::Green)
+                .then(|| base_comparison::BaseComparison::from_json(json))
+                .flatten(),
         })
     }
 }

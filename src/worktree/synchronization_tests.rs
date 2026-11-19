@@ -32,7 +32,7 @@ fn foreign_origin() -> (tempfile::TempDir, Git, Worktree, String) {
 
 fn clean_commit(merge: Merge) -> String {
     match merge {
-        Merge::Clean { commit } => commit,
+        Merge::Clean { commit, .. } => commit,
         Merge::Conflicted(_) => panic!("merge should be clean"),
     }
 }
@@ -917,7 +917,7 @@ fn a_base_merge_keeps_its_selected_commit_when_the_shared_ref_rewinds() {
     let base = commit(&launch, "Base advances");
     launch.run(&["push", "-q", "origin", "main"]).unwrap();
 
-    let Merge::Clean { commit } = worktree.merge_base_branch("main").unwrap() else {
+    let Merge::Clean { commit, .. } = worktree.merge_base_branch("main").unwrap() else {
         panic!("Base branch merge should be clean");
     };
     launch

@@ -101,6 +101,8 @@ pub(super) struct CommandAnswer {
     pub ci: Option<crate::github::InboxCi>,
     #[serde(rename = "github_mergeable", skip_serializing_if = "Option::is_none")]
     pub mergeable: Option<crate::github::InboxMergeable>,
+    #[serde(rename = "github_stale_ci", skip_serializing_if = "Option::is_none")]
+    pub stale_ci: Option<String>,
     /// Merge or close time, when the pull request stopped waiting.
     #[serde(rename = "github_at", skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
@@ -134,6 +136,7 @@ impl Kept {
             state: state.map(|state| state.state.to_string()),
             ci: state.map(|state| state.ci),
             mergeable: state.map(|state| state.mergeable),
+            stale_ci: state.and_then(PullRequestState::stale_ci),
             at: state
                 .and_then(PullRequestState::event_time)
                 .map(str::to_owned),
@@ -439,6 +442,16 @@ pub(super) fn refresh(
                 for subject in chunk {
                     let url = &subject.url;
                     let mut state = states.get(url).cloned();
+                    if let Some(InboxState::PullRequest(pull)) = &mut state
+                        && let Err(error) = github.refresh_inbox_base(
+                            url,
+                            pull,
+                            kept.states.get(url).and_then(Option::as_ref),
+                        )
+                    {
+                        kept.failure = Some(format!("{url}: {error:#}"));
+                        read_failed = true;
+                    }
                     if let Some(InboxState::Issue(issue)) = &mut state
                         && !issue.needs_triage
                     {

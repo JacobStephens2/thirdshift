@@ -86,10 +86,11 @@ impl std::fmt::Display for SpecPrChanged {
 
 impl std::error::Error for SpecPrChanged {}
 
-/// A gate error is terminal (`Err`); only a refused request can return to
-/// the Repair loop. A successful guarded command needs no additional read.
+/// A gate error is terminal (`Err`). A refused request or moved Base returns
+/// to the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
     Merged,
+    BaseMoved,
     Refused(anyhow::Error),
 }
 
@@ -659,7 +660,11 @@ impl<A: Adapter> PullRequest<A> {
     /// request. A blocking review is a terminal policy refusal. GitHub guards
     /// its head; a retarget between the gate and server merge remains a remote
     /// race because the request has no expected-base precondition.
-    pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
+    pub fn merge(
+        &mut self,
+        watched: &str,
+        base_current: impl FnOnce() -> Result<bool>,
+    ) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
         self.ensure_spec_pr_allows_merge()?;
         if let Some(reason) = &self.merge_hold {
@@ -692,6 +697,9 @@ impl<A: Adapter> PullRequest<A> {
                     .clone(),
             }
             .into());
+        }
+        if !base_current()? {
+            return Ok(MergeAttempt::BaseMoved);
         }
         let Err(error) = self.adapter.merge(&self.issue, number, watched) else {
             return Ok(MergeAttempt::Merged);
@@ -2033,7 +2041,7 @@ mod tests {
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            assert!(pr.merge("watched").is_err());
+            assert!(pr.merge("watched", || Ok(true)).is_err());
             assert!(world.borrow().merges.is_empty());
         }
     }
@@ -2094,7 +2102,7 @@ mod tests {
                 base: "release".to_string(),
             });
             pr.mark_ready(None).unwrap();
-            let attempt = pr.merge("watched");
+            let attempt = pr.merge("watched", || Ok(true));
             assert_eq!(world.borrow().selected.last().unwrap().0, "20");
             match said {
                 None => {
@@ -2119,7 +2127,10 @@ mod tests {
             ..World::default()
         });
         pr.mark_ready(None).unwrap();
-        assert!(matches!(pr.merge("watched").unwrap(), MergeAttempt::Merged));
+        assert!(matches!(
+            pr.merge("watched", || Ok(true)).unwrap(),
+            MergeAttempt::Merged
+        ));
         assert_eq!(world.borrow().merges, [(12, "watched".to_string())]);
         assert!(
             world
@@ -2167,7 +2178,7 @@ mod tests {
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            let attempt = pr.merge("watched").unwrap();
+            let attempt = pr.merge("watched", || Ok(true)).unwrap();
             assert_eq!(
                 matches!(attempt, MergeAttempt::Merged),
                 change == "none",
@@ -2218,7 +2229,7 @@ mod tests {
                 ..World::default()
             });
             pr.mark_ready(None).unwrap();
-            let attempt = pr.merge("watched").unwrap();
+            let attempt = pr.merge("watched", || Ok(true)).unwrap();
             assert_eq!(matches!(attempt, MergeAttempt::Merged), confirmed);
             if let MergeAttempt::Refused(error) = attempt {
                 assert_eq!(error.to_string(), "interrupted");

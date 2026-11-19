@@ -253,6 +253,94 @@ fn the_merge_is_a_merge_commit_of_exactly_the_watched_head() {
     );
 }
 
+fn advance_base_at_review_decision(scenario: &Scenario, queue_base: Option<&str>) {
+    let mut state = scenario.gh_state();
+    state["merge_queue_base"] = serde_json::json!(queue_base);
+    state["on_review_decision"] = serde_json::json!({
+        "times": 1,
+        "script": r#"
+other="$(mktemp -d)"
+git clone -q -b main https://github.com/acme/widgets.git "$other"
+git -C "$other" commit --allow-empty -q -m 'Advance Base'
+git -C "$other" push -q origin main
+rm -rf "$other"
+"#,
+    });
+    scenario.write_gh_state(&state);
+}
+
+#[test]
+fn base_moving_at_the_merge_gate_needs_green_ci_on_the_new_head() {
+    let scenario = Scenario::new();
+    advance_base_at_review_decision(&scenario, Some("develop"));
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        on_ci_read(
+            2,
+            r#"gh fake checks "$FAKE_CI_SHA" '[{"name":"test","conclusion":"success"}]'"#,
+        ),
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let merged_head = assert_issue_7_merged_into(&scenario, "main");
+    let base_move = sha_of(&scenario, "main", "Advance Base");
+    assert_eq!(
+        scenario
+            .origin_git(&["merge-base", &merged_head, &base_move])
+            .trim(),
+        base_move,
+        "the merged head missed the Base commit that arrived after CI"
+    );
+    assert!(
+        result
+            .stderr
+            .contains(&format!("CI passed on {}", &merged_head[..7]))
+    );
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+}
+
+#[test]
+fn missing_ci_after_a_base_update_holds_self_merge() {
+    let scenario = Scenario::new();
+    advance_base_at_review_decision(&scenario, None);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("after merging in main; the PR stays ready for review")
+    );
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn a_merge_queue_keeps_the_existing_self_merge_path_when_base_moves_at_the_gate() {
+    let scenario = Scenario::new();
+    advance_base_at_review_decision(&scenario, Some("main"));
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success"}]"#),
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        result.stderr.matches("waiting up to 0s for CI on").count(),
+        1
+    );
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+}
+
 #[test]
 fn the_merge_flag_also_starts_a_merge_run() {
     let scenario = Scenario::new();

@@ -78,6 +78,7 @@ pub(crate) struct Row {
     pub pull_request: String,
     pub ci: Option<crate::github::InboxCi>,
     pub merge_conflict: bool,
+    pub stale_ci: Option<String>,
     pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
@@ -212,6 +213,7 @@ impl Row {
         title: Option<&str>,
         ci: Option<crate::github::InboxCi>,
         mergeable: Option<crate::github::InboxMergeable>,
+        stale_ci: Option<String>,
     ) {
         if self.pull_request.is_empty() {
             return;
@@ -229,6 +231,7 @@ impl Row {
             .into();
         self.ci = Some(ci.unwrap_or_default());
         self.merge_conflict = mergeable == Some(crate::github::InboxMergeable::Conflicting);
+        self.stale_ci = stale_ci;
         self.fix_command = if self.ci == Some(crate::github::InboxCi::Red) || self.merge_conflict {
             pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
         } else {
@@ -465,6 +468,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         process_name: Option<String>,
         github_ci: Option<crate::github::InboxCi>,
         github_mergeable: Option<crate::github::InboxMergeable>,
+        github_stale_ci: Option<String>,
         #[serde(default)]
         children: Vec<serde_json::Value>,
         #[serde(default)]
@@ -628,6 +632,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         pull_request: facts.pull_request.unwrap_or_default(),
         ci: None,
         merge_conflict: false,
+        stale_ci: None,
         ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
             complete: facts
                 .tickets
@@ -687,7 +692,12 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .find_map(|child| child.ticket_progress);
     }
     if ready {
-        row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
+        row.present_ready(
+            ready_title,
+            facts.github_ci,
+            facts.github_mergeable,
+            facts.github_stale_ci,
+        );
     } else if group == Some(Group::NeedsYou) {
         row.present_needs_you_target(&facts.kind, &facts.repository);
     }
@@ -892,6 +902,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 pull_request: String::new(),
                 ci: None,
                 merge_conflict: false,
+                stale_ci: None,
                 ticket_progress: None,
                 tickets: Vec::new(),
                 children: Vec::new(),
@@ -945,7 +956,12 @@ pub(super) fn from_read(
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)
                             .and_then(|pr| pr.title.as_deref());
-                        row.present_ready(title, item.github.ci, item.github.mergeable);
+                        row.present_ready(
+                            title,
+                            item.github.ci,
+                            item.github.mergeable,
+                            item.github.stale_ci.clone(),
+                        );
                     }
                     // Needs you may replace the subject with its pull request
                     // after `present` checked the recorded issue link.
