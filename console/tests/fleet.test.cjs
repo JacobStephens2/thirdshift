@@ -180,6 +180,10 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       const box = await copy.boundingBox();
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      // Opened, the Fleet machines list still fits a long machine name.
+      await page.locator('#fleet-machines > summary').click();
+      await page.locator('#fleet-machines li').filter({ hasText: 'remote-workstation-with-a-long-name' }).waitFor();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
   await page.goto(caller.origin);
@@ -196,7 +200,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   assert.deepEqual(await files(homes[0]), before, 'remote answers stay in memory');
 });
 
-test('Fleet makes no requests without a page and a slow or old machine cannot block a good one', async t => {
+test('Fleet makes no requests without a page, a slow or old machine cannot block a good one, and the machines list starts folded', async t => {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-idle-'));
   const root = join(home, '.thirdshift');
   await mkdir(root);
@@ -242,23 +246,25 @@ test('Fleet makes no requests without a page and a slow or old machine cannot bl
   const page = await browser.newPage();
   await page.goto(origin);
   const fold = page.locator('#fleet-machines');
+  const summary = fold.locator('summary');
+  const machineLines = fold.locator('.fleet-machines li');
   const isOpen = () => fold.evaluate(node => node.open);
-  const good = fold.locator('.fleet-machines li').filter({ hasText: /^good · ok/ });
-  assert.equal(await isOpen(), false, 'the Fleet machines list starts folded');
-  assert.match(await fold.locator('summary').textContent(), /^Fleet machines\s*\d+$/);
+  const good = machineLines.filter({ hasText: /^good · ok/ });
   await good.waitFor({ state: 'attached' });
-  assert.equal(await isOpen(), false, 'a live update keeps the folded list folded');
+  // Checked first: the slow machine's read fails after three seconds.
+  assert.equal(await machineLines.filter({ hasText: /^slow/ }).count(), 0, 'good answer arrives before the slow timeout');
+  assert.equal(await isOpen(), false, 'the Fleet machines list starts folded, and a live update keeps it folded');
   assert.equal(await good.isVisible(), false);
-  await fold.locator('summary').click();
+  assert.match(await summary.textContent(), /^Fleet machines\s*\d+$/);
+  await summary.click();
   await good.waitFor();
   await page.locator('[data-reachability="needs update"]').waitFor();
   assert.match(await page.locator('.active-runs strong').textContent(), /^3 active runs/);
   assert.match(await good.textContent(), /3 active/);
-  assert.equal(await fold.locator('.fleet-machines li').filter({ hasText: /^slow/ }).count(), 0, 'good answer arrives before the slow timeout');
   document.active_runs = 4;
   await good.filter({ hasText: /4 active/ }).waitFor();
   assert.equal(await isOpen(), true, 'a live update keeps the opened list open');
-  await fold.locator('summary').focus();
+  await summary.focus();
   await page.keyboard.press('Space');
   await good.waitFor({ state: 'hidden' });
   await page.keyboard.press('Enter');
