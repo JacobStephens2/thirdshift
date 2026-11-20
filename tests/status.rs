@@ -579,6 +579,86 @@ fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
     );
 }
 
+/// Carriage return and erase-to-end, applied the way a terminal applies them
+/// to one printed line. A later title must not remove the validated URL.
+fn visible_status_line(raw: &str) -> String {
+    let mut visible: Vec<char> = Vec::new();
+    let mut column = 0usize;
+    let mut chars = raw.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\n' => break,
+            '\r' => column = 0,
+            '\u{1b}' if chars.peek() == Some(&'[') => {
+                chars.next();
+                let mut params = String::new();
+                let command = loop {
+                    match chars.next() {
+                        Some(next) if next.is_ascii_alphabetic() => break Some(next),
+                        Some(next) => params.push(next),
+                        None => break None,
+                    }
+                };
+                if command == Some('K') {
+                    let mode = if params.is_empty() {
+                        0
+                    } else {
+                        params.parse().unwrap_or(255)
+                    };
+                    if mode == 2 {
+                        visible.clear();
+                        column = 0;
+                    } else if mode == 0 && column < visible.len() {
+                        visible.truncate(column);
+                    }
+                }
+            }
+            other => {
+                if column < visible.len() {
+                    visible[column] = other;
+                } else {
+                    while visible.len() < column {
+                        visible.push(' ');
+                    }
+                    visible.push(other);
+                }
+                column += 1;
+            }
+        }
+    }
+    visible.into_iter().collect()
+}
+
+fn ready_review_summary(stdout: &str) -> String {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let index = lines
+        .iter()
+        .position(|line| *line == "Ready for review:")
+        .unwrap_or_else(|| panic!("no Ready for review section:\n{stdout}"));
+    visible_status_line(lines.get(index + 1).copied().unwrap_or(""))
+}
+
+#[test]
+fn a_ready_for_review_heading_keeps_its_validated_url_when_the_title_sends_terminal_controls() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now().to_rfc3339();
+    write_record(&scenario, 8, &now, Some(&now));
+    change_record(&scenario, 8, |record| {
+        record["pull_request"] = "https://github.com/acme/widgets/pull/8".into();
+        // Display text only. It names no host this test contacts.
+        record["pull_request_title"] =
+            "\r\u{1b}[Khttps://github.com/evil.example/not-a-host/pull/1".into();
+    });
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    let visible = ready_review_summary(&text.stdout);
+    assert!(
+        visible.contains("https://github.com/acme/widgets/pull/8"),
+        "validated pull request left the visible heading: {visible:?}\nraw stdout:\n{}",
+        text.stdout
+    );
+}
+
 #[test]
 fn ready_commands_leave_ready_for_review_on_a_later_local_start_or_the_configured_age() {
     let scenario = Scenario::new();

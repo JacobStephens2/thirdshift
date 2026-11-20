@@ -316,25 +316,34 @@ pub(super) fn print_ready(rows: Vec<&Row>, tags: bool) {
             continue;
         };
         let newest = group.members[0];
+        // The title follows the validated URL on this line. Document text can
+        // carry a carriage return or escape, which a terminal would use to
+        // erase that URL, so render it as visible text first.
+        let title = newest
+            .pull_request_title
+            .as_deref()
+            .unwrap_or("(title unavailable)");
         println!(
             "{} · {} · {} · {} Command{}",
             pr.label,
             pr.url,
-            newest
-                .pull_request_title
-                .as_deref()
-                .unwrap_or("(title unavailable)"),
+            crate::cronjobs::report_line(title),
             group.members.len(),
             if group.members.len() == 1 { "" } else { "s" },
         );
         for member in group.members {
             member.print_indented(true, "  ");
             if let Command::Record(record) = &member.command {
-                println!("    Command: {}", member.selector);
+                println!(
+                    "    Command: {}",
+                    crate::cronjobs::report_line(&member.selector)
+                );
                 println!(
                     "    Started {} · Ended {}",
-                    record.facts.started_at,
-                    record.facts.ended_at.as_deref().unwrap_or("unknown")
+                    crate::cronjobs::report_line(&record.facts.started_at),
+                    crate::cronjobs::report_line(
+                        record.facts.ended_at.as_deref().unwrap_or("unknown")
+                    )
                 );
             }
         }
