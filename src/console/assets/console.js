@@ -49,7 +49,7 @@ document.addEventListener("toggle", event => {
 document.addEventListener("focusin", event => {
   const row = event.target.closest(".command");
   if (row) select(row, { scroll: false });
-  else if (event.target.matches('#inbox > .group > summary')) select(event.target, { scroll: false });
+  else if (event.target.matches('#inbox > .group > summary, .review-group > details > summary')) select(event.target, { scroll: false });
 });
 document.addEventListener("click", event => {
   if (!event.target.closest('a, button, input, select, textarea')) {
@@ -64,6 +64,16 @@ function growth() {
   return new Map([...document.querySelectorAll(".command")].map(row => [row.id, logLengths(row)]));
 }
 
+function refreshedTarget(id, wasSummary, reviewGroupId) {
+  const node = id ? document.getElementById(id) : null;
+  const reviewGroup = reviewGroupId ? document.getElementById(reviewGroupId) : null;
+  if (node && !node.matches('.review-group') && (!reviewGroup || reviewGroup.contains(node))) {
+    return wasSummary ? node.querySelector(':scope > summary') : node;
+  }
+  const group = reviewGroup ?? node;
+  return group?.matches('.review-group') ? group.querySelector(':scope > details > summary') : group;
+}
+
 function morph(html) {
   const next = new DOMParser().parseFromString(html, "text/html");
   const current = document.getElementById("inbox");
@@ -72,9 +82,11 @@ function morph(html) {
   const active = document.activeElement;
   const focused = active?.id || active?.closest("details")?.id;
   const wasSummary = active?.matches("summary");
+  const focusedReview = active?.closest('.review-group')?.id;
   const position = [scrollX, scrollY];
   const selection = selected?.id || selected?.closest('details')?.id;
   const selectedSummary = selected?.matches('summary');
+  const selectedReview = selected?.closest('.review-group')?.id;
   const previousGrowth = growth();
   const filters = new Map([...current.querySelectorAll('.machine-filter select')]
     .map(input => [input.name, input.value]));
@@ -96,12 +108,10 @@ function morph(html) {
     if ([...input.options].some(option => option.value === value)) input.value = value;
   }
   updateStarts(next);
-  const focusedNode = document.getElementById(focused);
-  (wasSummary ? focusedNode?.querySelector("summary") : focusedNode)?.focus({ preventScroll: true });
+  refreshedTarget(focused, wasSummary, focusedReview)?.focus({ preventScroll: true });
   // Focus cannot enter a folded section. Keep the logical row selected so
   // it remains selected, and regains focus, when that section is reopened.
-  const selectedNode = document.getElementById(selection);
-  select(selectedSummary ? selectedNode?.querySelector('summary') : selectedNode, { scroll: false });
+  select(refreshedTarget(selection, selectedSummary, selectedReview), { scroll: false });
   window.scrollTo(...position);
   document.title = next.title;
   document.querySelector('link[rel="icon"]').href = next.querySelector('link[rel="icon"]').getAttribute("href");
@@ -233,7 +243,7 @@ function hideOptimisticallyDismissedRows() {
     const state = dismissals.get(dismissalKey(form));
     if (!state?.optimistic || !state.pending || state.action !== form.action) continue;
     const fresh = form.closest('.command');
-    if (!fresh) continue;
+    if (!fresh || fresh.closest('.review-members')) continue;
     const hadSelection = state.optimistic.hadSelection;
     state.optimistic = snapshotRow(fresh);
     state.optimistic.hadSelection = hadSelection;
@@ -268,7 +278,7 @@ function removeDismissalNotice(command) {
   }
 }
 
-function dismissalNotice(form, subject) {
+function dismissalNotice(form, subject, owner) {
   const command = dismissalKey(form);
   removeDismissalNotice(command);
   const notices = document.querySelector('#dismissal-notices');
@@ -282,11 +292,12 @@ function dismissalNotice(form, subject) {
   if (form.elements.machine) undo.append(form.elements.machine.cloneNode(true));
   const button = document.createElement('button');
   button.textContent = 'Undo';
+  if (owner) button.setAttribute('aria-label', `Undo dismissal on ${owner}`);
   const status = document.createElement('span');
   status.setAttribute('role', 'status');
   undo.append(button, status);
   notices.append(notice);
-  notice.append(`Dismissed ${subject} · `, undo);
+  notice.append(`Dismissed ${subject}${owner ? ` · ${owner}` : ''} · `, undo);
   showDismissal();
   // Keep Undo reachable while someone is using it, saving it, or retrying it.
   function expire() {
@@ -458,7 +469,7 @@ async function loadPeek(url) {
 }
 
 function items() {
-  return [...document.querySelectorAll('main .group > summary, main .command, main .log-row')]
+  return [...document.querySelectorAll('main .group > summary, .review-group > details > summary, main .command, main .log-row')]
     .filter(element => {
       for (let parent = element.parentElement; parent; parent = parent.parentElement) {
         if (parent.hidden || (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild)) return false;
@@ -562,16 +573,17 @@ document.addEventListener('submit', async event => {
   const undo = new URL(form.action).pathname === '/dismiss/undo';
   const row = form.closest('.one-line .command');
   const subject = row?.querySelector(':scope > .row-head > .subject').textContent;
-  const visible = row ? items().filter(item => item.matches('.command')) : [];
-  const next = visible[(visible.indexOf(row) + 1) % visible.length];
+  const member = row?.closest('.review-members');
   const state = {
     action: form.action, pending: true,
     message: undo ? 'Taking back dismissal…' : 'Dismissing…'
   };
   dismissals.set(command, state);
-  if (row && !undo) {
+  if (row && !member && !undo) {
     state.optimistic = snapshotRow(row);
     if (selected === row) {
+      const visible = items().filter(item => item.matches('.command'));
+      const next = visible[(visible.indexOf(row) + 1) % visible.length];
       state.optimistic.hadSelection = true;
       const nextRow = next !== row ? document.getElementById(next?.id) : null;
       select(nextRow);
@@ -587,7 +599,7 @@ document.addEventListener('submit', async event => {
     });
     if (!response.ok) throw new Error(await response.text());
     saved = true;
-    if (row && !undo) dismissalNotice(form, subject);
+    if (row && !undo) dismissalNotice(form, subject, member ? row.dataset.machine : null);
     if (undo) removeDismissalNotice(command);
     pendingPeek?.abort();
     pendingPeek = null;

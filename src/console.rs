@@ -1323,6 +1323,7 @@ struct InboxPage {
     hidden_sections: Vec<String>,
     cli: &'static str,
     inbox: Inbox,
+    review_groups: Vec<status::ReadyGroup<Row>>,
     title: &'static str,
     archive: Option<status::Archive>,
     outcome: String,
@@ -1402,7 +1403,46 @@ impl InboxPage {
     }
 
     fn ready_for_review(&self) -> usize {
-        self.inbox.sections[1].rows.len()
+        self.review_groups.len()
+    }
+
+    fn row_count(&self, section: &status::Section) -> usize {
+        if section.is_ready() {
+            self.ready_for_review()
+        } else {
+            section.rows.len()
+        }
+    }
+
+    fn review_owners(&self, members: &[Row]) -> Vec<String> {
+        let mut owners = std::collections::BTreeSet::new();
+        for member in members {
+            owners.insert(match &member.account {
+                Some(account) => format!("{} · {account}", member.machine),
+                None => member.machine.clone(),
+            });
+        }
+        owners.into_iter().collect()
+    }
+
+    fn review_warnings(&self, members: &[Row]) -> Vec<&'static str> {
+        use crate::github::InboxCi;
+        let mut warnings = Vec::new();
+        for ci in [InboxCi::Red, InboxCi::Unknown] {
+            if members.iter().any(|member| member.ci == Some(ci)) {
+                warnings.push(ci.label());
+            }
+        }
+        if members.iter().any(|member| member.merge_conflict) {
+            warnings.push("Merge conflict");
+        }
+        if members
+            .iter()
+            .any(|member| member.stale || member.stale_ci.is_some() || member.stale_github)
+        {
+            warnings.push("Stale or unavailable facts");
+        }
+        warnings
     }
 
     fn urgent(&self) -> bool {
@@ -1412,11 +1452,27 @@ impl InboxPage {
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            id: &row.id,
+            review_member: false,
             start: self.start.as_ref(),
             csrf: &self.csrf,
             can_copy,
             can_act: self.page.can_act(),
             can_security: self.page.can_security(),
+        }
+    }
+
+    fn review_single<'a>(&'a self, row: &'a Row, id: &'a str) -> RowTemplate<'a> {
+        RowTemplate {
+            id,
+            ..self.row(row, true)
+        }
+    }
+
+    fn review_member<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+        RowTemplate {
+            review_member: true,
+            ..self.row(row, true)
         }
     }
 }
@@ -1425,6 +1481,8 @@ impl InboxPage {
 #[template(path = "console/row.html")]
 struct RowTemplate<'a> {
     row: &'a Row,
+    id: &'a str,
+    review_member: bool,
     start: Option<&'a start_controls::Form>,
     csrf: &'a str,
     can_copy: bool,
@@ -1445,9 +1503,15 @@ impl RowTemplate<'_> {
         }
     }
 
+    fn command_file(&self) -> &str {
+        self.row.selector.rsplit('/').next().unwrap_or_default()
+    }
+
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            id: &row.id,
+            review_member: false,
             start: self.start,
             csrf: self.csrf,
             can_copy: false,
@@ -1590,6 +1654,7 @@ async fn render_page(
                         .retain(|reference| reference.repository.eq_ignore_ascii_case(&repository));
                 }
             }
+            let review_groups = inbox.take_ready_groups();
             let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
@@ -1603,6 +1668,7 @@ async fn render_page(
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
                 inbox,
+                review_groups,
                 title,
                 archive: archive_page
                     .map(|page| {

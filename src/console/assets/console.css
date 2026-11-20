@@ -292,6 +292,16 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 .one-line [data-group="done"] .command-kind { display: block; }
 .one-line .command { margin: 0; border-radius: 0; border-bottom: 1px solid var(--rule); }
 .one-line .command:last-child { border-bottom: 0; }
+.review-group { border-bottom: 1px solid var(--rule); padding: 8px 10px; overflow-wrap: anywhere; }
+.review-group:last-child { border-bottom: 0; }
+.review-heading, .review-owners, .review-warnings { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.review-heading h4, .review-warnings { margin: 0; }
+.review-heading time, .review-owners { font-size: .85em; color: var(--dim); }
+.review-warnings span { color: var(--tag-urgent-text); background: var(--tag-urgent-bg); padding: 0 4px; border-radius: var(--radius); }
+.review-group > details > summary { width: fit-content; cursor: pointer; margin-top: 4px; }
+.review-group > details > summary.is-selected { outline: 2px solid var(--head); }
+.review-members { list-style: none; padding: 0; margin: 4px 0 0; border-inline-start: 1px solid var(--rule); }
+.one-line .review-members > .command > :is(.member-command, .row-actions) { display: block; margin: 0 10px 6px; }
 @media (scripting: enabled) {
   .one-line .command { position: relative; padding: 0; cursor: pointer; }
   .one-line .command > :not(.row-head) { display: none; }

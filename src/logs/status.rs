@@ -3,13 +3,15 @@
 pub(crate) mod fleet;
 mod inbox;
 pub mod inspect;
+mod ready;
 mod target;
 mod text;
 pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::validate_remote;
 pub(crate) use inbox::{Archive, ArchivePage};
-pub(crate) use inbox::{Inbox, Row, issue_url, subject, subject_link_matches};
+pub(crate) use inbox::{Inbox, Row, Section, issue_url, subject, subject_link_matches};
+pub(crate) use ready::ReadyGroup;
 pub(crate) use target::GitHubTarget;
 pub(crate) use watching::{Process, watching};
 
@@ -284,8 +286,12 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
                 continue;
             }
             println!("{}:", group.title());
-            for item in items {
-                item.print(tags);
+            if group == Group::ReadyForReview {
+                text::print_ready(items, tags);
+            } else {
+                for item in items {
+                    item.print(tags);
+                }
             }
             for item in references {
                 item.print_reference(tags);
@@ -305,6 +311,37 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         }
     }
     Ok(())
+}
+
+/// Exact Command selector from a status Document, including older peer rows
+/// that supplied the log path in place of the record path.
+fn document_selector(value: &serde_json::Value) -> String {
+    if let Some(selector) = value["selector"].as_str() {
+        return selector.to_owned();
+    }
+    let path = value["record_path"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            let log = value["command_log"].as_str()?;
+            Some(if value["source"] == "command_record" {
+                std::path::Path::new(log)
+                    .with_extension("command.json")
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                log.to_owned()
+            })
+        });
+    match (path, value["name"].as_str().filter(|name| !name.is_empty())) {
+        (Some(path), Some(name)) => format!("{path}::{name}"),
+        (Some(path), None) => path,
+        (None, _) => String::new(),
+    }
+}
+
+fn stale_github_answer(age_seconds: Option<u64>, failed: bool) -> bool {
+    age_seconds.map_or(failed, |age| age >= super::github::FRESH_FOR.as_secs())
 }
 
 /// The Inbox's total of outer Command trees with live work, in every group.

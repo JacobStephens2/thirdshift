@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use std::path::Path;
 
-use super::{age, ticket_text};
+use super::{age, ready, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
@@ -30,6 +30,12 @@ pub(crate) struct Section {
     pub title: &'static str,
     pub rows: Vec<Row>,
     pub references: Vec<LandingReference>,
+}
+
+impl Section {
+    pub fn is_ready(&self) -> bool {
+        self.group == "ready for review"
+    }
 }
 
 pub(crate) struct LandingReference {
@@ -80,6 +86,7 @@ pub(crate) struct Row {
     pub ci: Option<crate::github::InboxCi>,
     pub merge_conflict: bool,
     pub stale_ci: Option<String>,
+    pub stale_github: bool,
     pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
@@ -291,6 +298,23 @@ impl Row {
 }
 
 impl Inbox {
+    /// Called after machine and repository filtering, once per HTML render.
+    pub fn take_ready_groups(&mut self) -> Vec<ready::ReadyGroup<Row>> {
+        let section = self
+            .sections
+            .iter_mut()
+            .find(|section| section.is_ready())
+            .expect("Inbox has a Ready for review section");
+        ready::group(std::mem::take(&mut section.rows), |row| ready::Member {
+            repository: &row.repository,
+            pull_request: &row.pull_request,
+            order: row.order,
+            machine: &row.machine,
+            account: row.account.as_deref(),
+            selector: &row.selector,
+        })
+    }
+
     pub(super) fn add_reservations(
         &mut self,
         values: &[serde_json::Value],
@@ -337,6 +361,7 @@ impl Inbox {
         document: &super::fleet::Document,
         entry: &crate::config::console::fleet::Entry,
         stale: bool,
+        failed: bool,
     ) -> Result<()> {
         let rows = document
             .commands
@@ -347,6 +372,7 @@ impl Inbox {
             .iter()
             .map(|row| row.id.clone())
             .collect::<std::collections::BTreeSet<_>>();
+        let stale_github = document.github_answer_is_stale();
         for (value, mut row) in document.commands.iter().zip(rows) {
             let checked = super::text::Row::read(value)?;
             let Some(section) = self
@@ -361,7 +387,12 @@ impl Inbox {
             // A received document chooses `issue.url` independently, so keep
             // the href only when it names that same GitHub issue or pull request.
             bind_subject_link(&mut row);
-            row.tag_machine(&entry.name, &entry.address, stale);
+            row.tag_machine(
+                &entry.name,
+                &entry.address,
+                stale || (section.is_ready() && failed),
+            );
+            row.stale_github = stale_github && section.is_ready();
             let subject = row.subject.clone();
             section.rows.push(row);
             // Local rows were already ordered; merge with the same Needs you
@@ -447,7 +478,6 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         started_at: String,
         ended_at: Option<String>,
         outcome: Option<String>,
-        command_log: Option<std::path::PathBuf>,
         cause: Option<String>,
         pull_request: Option<String>,
         release_url: Option<String>,
@@ -479,33 +509,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     let live = facts.state == "live";
     // A child Ticket shares its outer Command log, but owns a different
     // record. Use the owning observation's path rather than the log stem.
-    let selector = value["selector"]
-        .as_str()
-        .map(String::from)
-        .or_else(|| {
-            value["record_path"].as_str().map(|path| {
-                if facts.name.is_empty() {
-                    path.to_owned()
-                } else {
-                    format!("{path}::{}", facts.name)
-                }
-            })
-        })
-        .or_else(|| {
-            facts.command_log.as_ref().map(|path| {
-                let path = if value["source"] == "command_record" {
-                    path.with_extension("command.json")
-                } else {
-                    path.clone()
-                };
-                if facts.name.is_empty() {
-                    path.to_string_lossy().into_owned()
-                } else {
-                    format!("{}::{}", path.display(), facts.name)
-                }
-            })
-        })
-        .unwrap_or_default();
+    let selector = super::document_selector(value);
     let process =
         (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
     let live_target = live && matches!(facts.kind.as_str(), "Fix run" | "Review run");
@@ -519,9 +523,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
     let subject_url = issue_url(facts.issue.as_ref());
     let ready = value["group"] == "ready for review";
-    let ready_title = value["github"]["subjects"]
-        [facts.pull_request.as_deref().unwrap_or_default()]["facts"]["title"]
-        .as_str();
+    let ready_title = ready::title(value, facts.pull_request.as_deref().unwrap_or_default());
     let group: Option<Group> = value
         .get("group")
         .map(|group| serde_json::from_value(group.clone()))
@@ -627,6 +629,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         ci: None,
         merge_conflict: false,
         stale_ci: None,
+        stale_github: false,
         ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
             complete: facts
                 .tickets
@@ -892,6 +895,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 ci: None,
                 merge_conflict: false,
                 stale_ci: None,
+                stale_github: false,
                 ticket_progress: None,
                 tickets: Vec::new(),
                 children: Vec::new(),
@@ -917,6 +921,8 @@ pub(super) fn from_read(
         .iter()
         .filter_map(|item| item.command.selector())
         .collect();
+    let stale_github =
+        super::stale_github_answer(kept.age.map(|age| age.as_secs()), kept.failure.is_some());
     let sections = Group::ORDER
         .into_iter()
         .filter(|group| *group != Group::History)
@@ -944,8 +950,16 @@ pub(super) fn from_read(
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)
-                            .and_then(|pr| pr.title.as_deref());
+                            .and_then(|pr| pr.title.as_deref())
+                            .filter(|title| !title.trim().is_empty())
+                            .or_else(|| match item.command {
+                                Observation::Record(command) => {
+                                    command.record.pull_request_title.as_deref()
+                                }
+                                Observation::History(_) => None,
+                            });
                         row.present_ready(title, &item.github.checks);
+                        row.stale_github = stale_github;
                     }
                     // Needs you may replace the subject with its pull request
                     // after `present` checked the recorded issue link.
@@ -1320,6 +1334,7 @@ mod tests {
                     last_contact: None,
                 },
                 false,
+                false,
             )
             .unwrap();
         let rows = &inbox.sections[0].rows;
@@ -1668,6 +1683,7 @@ mod tests {
                     scopes: Vec::new(),
                     last_contact: None,
                 },
+                false,
                 false,
             )
             .unwrap();

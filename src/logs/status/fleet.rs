@@ -27,6 +27,19 @@ pub(crate) struct Document {
     other: Map<String, Value>,
 }
 
+impl Document {
+    pub(super) fn github_answer_is_stale(&self) -> bool {
+        super::stale_github_answer(
+            self.other
+                .get("github_answer_age_seconds")
+                .and_then(Value::as_u64),
+            self.other
+                .get("github_failure")
+                .is_some_and(Value::is_string),
+        )
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Machine {
     pub name: String,
