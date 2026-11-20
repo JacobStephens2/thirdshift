@@ -91,7 +91,7 @@ export function showFolder(group) {
     ?? links.find(link => link.dataset.group === 'overview');
   if (current) {
     const slug = new URL(current.href).searchParams.get('section');
-    for (const sectionInput of document.querySelectorAll('.inbox-filter [name="section"]')) {
+    for (const sectionInput of document.querySelectorAll('[data-inbox-filter] [name="section"]')) {
       sectionInput.value = slug;
     }
   }

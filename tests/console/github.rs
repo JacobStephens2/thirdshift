@@ -217,8 +217,8 @@ fn mergeability_changes_wake_ready_rows_independently_of_ci() {
             }
             let page = console.get("/").text().unwrap();
             let ready = group(&page, "ready for review");
-            if ready.contains("Merge conflict") == conflict {
-                assert!(ready.contains("CI green"), "{ready}");
+            if ready.contains("class=\"merge-conflict\"") == conflict {
+                assert!(ready.contains("data-ci=\"CI green\""), "{ready}");
                 assert!(ready.contains("acme/widgets#10"), "{ready}");
                 assert_eq!(row["group"], "ready for review", "{row}");
                 assert_eq!(row["github_ci"], "green", "{row}");
@@ -271,10 +271,11 @@ fn ready_rows_show_current_ci_and_status_reuses_it() {
         gh["prs"][0]["commits"] = json!({"nodes": [{"commit": {"statusCheckRollup": rollup}}]});
         scenario.write_gh_state(&gh);
         // Only a CI change occurs: it must wake an already open Inbox.
+        let badge = format!("data-ci=\"{label}\"");
         loop {
             assert!(sse_event(&mut stream).contains("event: commands"));
             let page = console.get("/").text().unwrap();
-            if group(&page, "ready for review").contains(label) {
+            if group(&page, "ready for review").contains(&badge) {
                 break;
             }
         }
