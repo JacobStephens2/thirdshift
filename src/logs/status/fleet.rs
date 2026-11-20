@@ -20,11 +20,50 @@ pub(crate) struct Document {
     pub active_runs: usize,
     // Keep the owning machine's Command-specific metadata intact. Fleet merging
     // never re-evaluates its GitHub facts, collapse decisions or account ownership.
-    pub commands: Vec<Value>,
+    pub(super) commands: Vec<Observation>,
     #[serde(default)]
     pub machines: Vec<Machine>,
     #[serde(flatten)]
     other: Map<String, Value>,
+}
+
+impl Document {
+    pub(super) fn github_answer_is_stale(&self) -> bool {
+        super::stale_github_answer(
+            self.other
+                .get("github_answer_age_seconds")
+                .and_then(Value::as_u64),
+            self.other
+                .get("github_failure")
+                .is_some_and(Value::is_string),
+        )
+    }
+
+    fn tag_commands(&mut self, name: Option<&str>) -> Result<()> {
+        let stale_github = self.github_answer_is_stale();
+        let name = name.unwrap_or(&self.hostname);
+        for command in &mut self.commands {
+            command.stale_github = stale_github;
+            tag(&mut command.value, &self.hostname, name)?;
+        }
+        Ok(())
+    }
+}
+
+/// Carry the owning machine's freshness through the Fleet merge in memory.
+/// The wire representation remains the original Command object.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct Observation {
+    pub value: Value,
+    #[serde(skip)]
+    stale_github: bool,
+}
+
+impl Observation {
+    pub fn text_row(&self) -> Result<super::text::Row> {
+        super::text::Row::read(&self.value, self.stale_github)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -49,8 +88,8 @@ pub(crate) enum Reachability {
 
 pub(super) fn local(value: Value, now: DateTime<Utc>) -> Result<Document> {
     let mut document: Document = serde_json::from_value(value)?;
+    document.tag_commands(None)?;
     let hostname = &document.hostname;
-    tag(&mut document.commands, hostname, hostname)?;
     document.machines = vec![Machine {
         name: hostname.clone(),
         hostname: Some(hostname.clone()),
@@ -62,18 +101,14 @@ pub(super) fn local(value: Value, now: DateTime<Utc>) -> Result<Document> {
     Ok(document)
 }
 
-fn tag(rows: &mut [Value], machine: &str, name: &str) -> Result<()> {
-    for row in rows {
-        let fields = row.as_object_mut().context("invalid Command")?;
-        fields.insert("machine".into(), machine.into());
-        fields.insert("machine_name".into(), name.into());
-        for field in ["children", "dispatched", "collapsed"] {
-            if let Some(nested) = fields.get_mut(field) {
-                tag(
-                    nested.as_array_mut().context("invalid Command tree")?,
-                    machine,
-                    name,
-                )?;
+fn tag(row: &mut Value, machine: &str, name: &str) -> Result<()> {
+    let fields = row.as_object_mut().context("invalid Command")?;
+    fields.insert("machine".into(), machine.into());
+    fields.insert("machine_name".into(), name.into());
+    for field in ["children", "dispatched", "collapsed"] {
+        if let Some(nested) = fields.get_mut(field) {
+            for child in nested.as_array_mut().context("invalid Command tree")? {
+                tag(child, machine, name)?;
             }
         }
     }
@@ -152,7 +187,7 @@ pub(crate) fn fetch_and_merge(
     let mut rows = local
         .commands
         .into_iter()
-        .map(|value| Ok((super::text::Row::read(&value)?.order(), value)))
+        .map(|command| Ok((command.text_row()?.order(), command)))
         .collect::<Result<Vec<_>>>()?;
     rows.sort_by_key(|(order, _)| *order);
     local.commands = rows.into_iter().map(|(_, value)| value).collect();
@@ -216,13 +251,14 @@ pub(crate) fn fetch_for_person(
             (NeedsUpdate, "incompatible Inbox response".into())
         }
     })?;
-    tag(&mut document.commands, &document.hostname, &entry.name)
+    document
+        .tag_commands(Some(&entry.name))
         .map_err(|_| (NeedsUpdate, "invalid Inbox Command tree".into()))?;
     if document.version != VERSION
         || document
             .commands
             .iter()
-            .any(|row| !row.is_object() || super::text::Row::read(row).is_err())
+            .any(|command| command.text_row().is_err())
     {
         return Err((NeedsUpdate, "unsupported Inbox version or rows".into()));
     }

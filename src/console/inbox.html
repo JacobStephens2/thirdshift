@@ -50,7 +50,7 @@
     <details id="fleet-machines"><summary>Fleet machines <span class="count">{{ machines.len() }}</span></summary>
     <ul class="fleet-machines" aria-label="Fleet machines">{% for item in machines %}<li data-reachability="{{ item.reachability }}"><a href="{{ item.address }}">{{ item.name }}</a> · {{ item.reachability }} · {{ item.age }} · {{ item.active_runs }} active{% if !item.error.is_empty() %} · {{ item.error }}{% endif %}</li>{% endfor %}</ul>
     </details>
-    <nav class="folders" aria-label="Inbox sections"><a href="{{ self.folder_url("overview") }}" data-group="overview"{% if self.folder() == "overview" %} aria-current="page"{% endif %}><span>Overview</span></a>{% for section in inbox.sections %}<a href="{{ self.folder_url(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
+    <nav class="folders" aria-label="Inbox sections"><a href="{{ self.folder_url("overview") }}" data-group="overview"{% if self.folder() == "overview" %} aria-current="page"{% endif %}><span>Overview</span></a>{% for section in sections %}<a href="{{ self.folder_url(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
     {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
     <p class="active-runs" role="status"><strong>{{ self.active_runs() }}</strong> <span>Each outer Command counts once, in any section: a Spec run's Tickets, and the run a Pass dispatched, are part of its run.</span></p>
@@ -75,7 +75,7 @@
     {% endif %}
     {% match inbox.github_quota_wait %}{% when Some with (wait) %}<p class="github-quota-wait" role="status">{{ wait|readable }}</p>{% when None %}{% endmatch %}
     {% match inbox.plan_usage_banner %}{% when Some with (banner) %}<p class="plan-usage-exhausted" role="status">{{ banner|readable }}</p>{% when None %}{% endmatch %}
-    {% for section in inbox.sections %}
+    {% for section in sections %}
     <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.folded_in_overview(section.group) %} data-overview-folded{% endif %}{% if !self.shown(section.group) %} hidden{% endif %}{% if self.opens(section.group) %} open{% endif %}>
       <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>
       {# Retention is each owning machine's inbox.days, which Fleet machines may set differently, so no length is shown. #}
@@ -83,7 +83,16 @@
       {% else if section.group == "resolved" %}<p class="section-help">Older Commands with nothing waiting for you, kept here until their retention period ends. Retention counts from when the Command ended or its waiting work was dealt with: dismissed, settled on GitHub or handed to a later Command on the same issue or pull request. Its length is <code>inbox.days</code> in the owning machine's User config. After it, rows stay in the owning machine's <a href="/history">History</a>.</p>{% endif %}
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
-      <ul class="commands">{% for item in section.rows %}{{ self.row(item, true)|safe }}{% endfor %}</ul>
+      <ul class="commands">
+        {%- for item in section.rows -%}
+        {%- match item -%}
+        {%- when status::DisplayRow::Command with (row) -%}{{ self.row(row, true)|safe }}
+        {%- when status::DisplayRow::PullRequest with (pr, members) -%}
+        {%- if members.len() > 1 -%}{% include "console/review_group.html" %}
+        {%- else -%}{{ self.review_single(members[0], pr.id.as_str())|safe }}{%- endif -%}
+        {%- endmatch -%}
+        {%- endfor -%}
+      </ul>
       {% for reference in section.references %}<p>{{ reference.text|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}

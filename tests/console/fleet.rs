@@ -302,6 +302,95 @@ fn status_merges_paired_inboxes_without_regrouping_their_rows() {
 }
 
 #[test]
+fn status_groups_ready_pull_requests_in_text_and_keeps_json_commands() {
+    let local = tempfile::tempdir().unwrap();
+    let remote = tempfile::tempdir().unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    for home in [&local, &remote] {
+        configure(home.path());
+    }
+    let urls = [
+        "https://github.com/Acme/Widgets/pull/116/",
+        "https://github.com/acme/widgets/pull/116",
+    ];
+    for (home, number, url) in [(&local, 71, urls[0]), (&remote, 72, urls[1])] {
+        let mut ready = record(home.path(), number, Some("ready for review"), 0);
+        ready["pull_request"] = json!(url);
+        write_record(home.path(), number, &ready);
+        let ci = if number == 71 { "green" } else { "red" };
+        fs::write(
+            home.path().join(".thirdshift/logs/github-inbox.json"),
+            json!({"version": 1, "subjects": {(url): {"state": "Open", "ci": ci, "title": "Keep search filters in the URL"}}}).to_string(),
+        ).unwrap();
+    }
+    let remote_console = Console::start(binary, remote.path());
+    let token = tokens::create(remote.path(), "watcher", &[]);
+    assert!(
+        add(local.path(), "remote", &remote_console.address, &token)
+            .status
+            .success()
+    );
+
+    let text = |args: &[&str]| {
+        let output = Command::new(binary)
+            .arg("status")
+            .args(args)
+            .env("HOME", local.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for (args, expected_members) in [
+        (&[][..], 2),
+        (&["--local"][..], 1),
+        (&["--machine", "remote"][..], 1),
+    ] {
+        let output = text(args);
+        let headings: Vec<_> = output
+            .lines()
+            .filter(|line| line.starts_with("acme/widgets#116 · "))
+            .collect();
+        assert_eq!(headings.len(), 1, "expected one PR heading in:\n{output}");
+        assert_eq!(
+            output.matches("-fixture.command.json").count(),
+            expected_members,
+            "{output}"
+        );
+    }
+
+    let status = api::cli(local.path(), &["status", "--json"]);
+    assert_eq!(status["version"], 2);
+    assert_eq!(status["active_runs"], 0);
+    let rows = status["commands"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{status}");
+    for (number, url) in [(71, urls[0]), (72, urls[1])] {
+        let row = rows
+            .iter()
+            .find(|row| row["issue"]["number"] == number)
+            .unwrap();
+        assert_eq!(row["pull_request"], url);
+        assert_eq!(row["group"], "ready for review");
+        assert_eq!(row["model"], "gpt-6");
+        assert_eq!(row["github_ci"], if number == 71 { "green" } else { "red" });
+        assert!(
+            row["record_path"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{number}-fixture.command.json"))
+        );
+    }
+    let local_console = Console::start(binary, local.path());
+    let local_status = api::json(local_console.get("/api/v1/status"));
+    let remote_status = api::json(remote_console.get("/api/v1/status"));
+    for (status, url) in [(local_status, urls[0]), (remote_status, urls[1])] {
+        assert_eq!(status["version"], 2);
+        assert_eq!(status["commands"].as_array().unwrap().len(), 1);
+        assert_eq!(status["commands"][0]["pull_request"], url);
+    }
+}
+
+#[test]
 fn status_scopes_remote_rows_and_shows_the_fleet_active_run_breakdown() {
     let local_home = tempfile::tempdir().unwrap();
     let remote_home = tempfile::tempdir().unwrap();

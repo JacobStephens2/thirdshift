@@ -7,11 +7,16 @@ use crate::logs::command_record::{CommandRecord, Issue};
 use crate::logs::github::PullRequestChecks;
 use crate::logs::reading::{CurrentStage, Departure, Group, Health, NeedsYouKind};
 
+use super::ready;
+
 pub(super) struct Row {
     pub group: Group,
     pub landing: bool,
     meta: Metadata,
     command: Command,
+    selector: String,
+    pull_request_title: Option<String>,
+    stale_github: bool,
 }
 
 #[derive(Deserialize)]
@@ -193,14 +198,40 @@ impl Command {
 }
 
 impl Row {
-    pub fn read(value: &Value) -> Result<Self> {
+    pub fn read(value: &Value, stale_github: bool) -> Result<Self> {
         let meta: Metadata = serde_json::from_value(value.clone())?;
+        let pull_request = value["pull_request"].as_str().unwrap_or_default();
         Ok(Self {
             group: meta.group,
             landing: meta.landing,
             command: Command::read(value)?,
+            selector: super::document_selector(value),
+            pull_request_title: super::ready::title(value, pull_request).map(str::to_owned),
+            stale_github,
             meta,
         })
+    }
+
+    fn ready_member(&self) -> ready::Member<'_> {
+        let (repository, pull_request, account) = match &self.command {
+            Command::Record(record) => (
+                record.facts.repository.as_str(),
+                record.facts.pull_request.as_deref().unwrap_or_default(),
+                record.view.account.as_deref(),
+            ),
+            Command::History(history) => {
+                (history.repository.as_str(), "", history.account.as_deref())
+            }
+            Command::Reservation(row) => (row.repository.as_str(), "", None),
+        };
+        ready::Member {
+            repository,
+            pull_request,
+            order: self.order(),
+            machine: &self.meta.machine,
+            account,
+            selector: &self.selector,
+        }
     }
 
     pub fn order(&self) -> crate::logs::reading::RowOrder {
@@ -209,32 +240,39 @@ impl Row {
     }
 
     pub fn print(&self, tags: bool) {
+        self.print_indented(tags, "");
+    }
+
+    fn print_indented(&self, tags: bool, indent: &str) {
         let meta = &self.meta;
         let state = self
             .group
             .state_word(meta.needs_you_kind, meta.stopping, self.command.state());
         self.command
-            .print(state, "", tags.then_some(meta.machine.as_str()));
+            .print(state, indent, tags.then_some(meta.machine.as_str()));
         if self.group == Group::ReadyForReview {
-            println!("  {}", meta.github_checks.ci().label());
+            println!("{indent}  {}", meta.github_checks.ci().label());
             if meta.github_checks.has_merge_conflict() {
-                println!("  Merge conflict");
+                println!("{indent}  Merge conflict");
             }
             if let Some(note) = &meta.github_checks.stale_ci {
-                println!("  {note}");
+                println!("{indent}  {note}");
+            }
+            if self.stale_github {
+                println!("{indent}  Stale GitHub facts");
             }
         }
         if let Some(departure) = &meta.departure {
-            println!("  {}", departure.line());
+            println!("{indent}  {}", departure.line());
         }
         if let Some(dismissal) = &meta.dismissal {
-            println!("  {}", dismissal.line());
+            println!("{indent}  {}", dismissal.line());
         }
         if meta.count > 1
             && let Command::Record(record) = &self.command
         {
             println!(
-                "  {} Commands with this cause: {}",
+                "{indent}  {} Commands with this cause: {}",
                 meta.count,
                 record.facts.cause.as_deref().unwrap_or_default()
             );
@@ -267,6 +305,47 @@ impl Row {
                     .map(|kind| kind.title())
                     .unwrap_or("Needs you")
             );
+        }
+    }
+}
+
+pub(super) fn print_ready(rows: Vec<&Row>, tags: bool) {
+    for group in ready::group(rows, |row| row.ready_member()) {
+        let Some(pr) = group.pull_request else {
+            group.members[0].print(tags);
+            continue;
+        };
+        let newest = group.members[0];
+        // The title follows the validated URL on this line. Document text can
+        // carry a carriage return or escape, which a terminal would use to
+        // erase that URL, so render it as visible text first.
+        let title = newest
+            .pull_request_title
+            .as_deref()
+            .unwrap_or("(title unavailable)");
+        println!(
+            "{} · {} · {} · {} Command{}",
+            pr.label,
+            pr.url,
+            crate::cronjobs::report_line(title),
+            group.members.len(),
+            if group.members.len() == 1 { "" } else { "s" },
+        );
+        for member in group.members {
+            member.print_indented(true, "  ");
+            if let Command::Record(record) = &member.command {
+                println!(
+                    "    Command: {}",
+                    crate::cronjobs::report_line(&member.selector)
+                );
+                println!(
+                    "    Started {} · Ended {}",
+                    crate::cronjobs::report_line(&record.facts.started_at),
+                    crate::cronjobs::report_line(
+                        record.facts.ended_at.as_deref().unwrap_or("unknown")
+                    )
+                );
+            }
         }
     }
 }

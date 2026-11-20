@@ -369,6 +369,82 @@ fn other_account_live_actions_never_signal_or_write_and_details_never_cache_ther
 }
 
 #[test]
+fn overlapping_ready_commands_share_a_pr_row_with_other_account_commands() {
+    let machine = Machine::new();
+    machine.setting("conductor");
+    let started = (chrono::Local::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let ended = (chrono::Local::now() - chrono::Duration::hours(1)).to_rfc3339();
+    for (owner, number, pull_request) in [
+        ("serving", 71, "https://github.com/acme/widgets/pull/116"),
+        ("serving", 72, "https://github.com/Acme/Widgets/pull/116/"),
+        ("conductor", 73, "https://github.com/acme/widgets/pull/116"),
+    ] {
+        let home = machine.home(owner);
+        let mut ready = record(&home, number, Some("ready for review"), 0);
+        ready["pull_request"] = json!(pull_request);
+        ready["started_at"] = json!(started);
+        ready["ended_at"] = json!(ended);
+        write_record(&home, number, &ready);
+    }
+
+    let status = machine.run(&["status", "--local"]);
+    assert!(status.status.success(), "{status:?}");
+    let text = String::from_utf8(status.stdout).unwrap();
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("acme/widgets#116 · "))
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(
+        text.contains("3 Commands") && text.contains("[conductor]"),
+        "{text}"
+    );
+
+    let console = Console::start_command({
+        let mut cmd = machine.command();
+        cmd.args(["console", "--no-sign-in"]);
+        cmd
+    });
+    let status = api::json(console.get("/api/v1/status"));
+    assert_eq!(status["version"], 2);
+    let rows = status["commands"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{status}");
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["account"] == "conductor")
+            .count(),
+        1
+    );
+    assert!(
+        rows.iter().all(|row| row["group"] == "ready for review"),
+        "{status}"
+    );
+
+    let html = console.get("/?section=ready-for-review").text().unwrap();
+    let ready = section(&html, "ready for review");
+    assert!(
+        ready.contains("Ready for review <span class=\"count\">1</span>"),
+        "{ready}"
+    );
+    assert!(ready.contains("3 contributing Commands"), "{ready}");
+    assert_eq!(
+        ready.matches("aria-label=\"Dismiss Command on ").count(),
+        2,
+        "{ready}"
+    );
+    let foreign = ready
+        .split("<li class=\"command\"")
+        .find(|row| row.contains("class=\"account-tag\""))
+        .unwrap();
+    assert!(
+        foreign.contains("conductor") && !foreign.contains("action=\"/dismiss\""),
+        "{foreign}"
+    );
+}
+
+#[test]
 fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
     let machine = Machine::new();
     let foreign = machine.home("conductor");

@@ -1315,14 +1315,15 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 
 #[derive(Template)]
 #[template(path = "console/inbox.html")]
-struct InboxPage {
+struct InboxPage<'a> {
     page: PageContext,
     targets: Vec<fleet_control::Target>,
     start: Option<start_controls::Form>,
     csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
-    inbox: Inbox,
+    inbox: &'a Inbox,
+    sections: Vec<status::DisplaySection<'a>>,
     title: &'static str,
     archive: Option<status::Archive>,
     outcome: String,
@@ -1338,7 +1339,7 @@ struct InboxPage {
     machines: Vec<fleet_inbox::Machine>,
 }
 
-impl InboxPage {
+impl InboxPage<'_> {
     fn hidden(&self, group: &str) -> bool {
         self.hidden_sections
             .iter()
@@ -1347,8 +1348,7 @@ impl InboxPage {
 
     /// An explicit visible section filters the Inbox; otherwise show Overview.
     fn folder(&self) -> &'static str {
-        self.inbox
-            .sections
+        self.sections
             .iter()
             .find(|section| !self.hidden(section.group) && slug(section.group) == self.section)
             .map_or("overview", |section| section.group)
@@ -1390,7 +1390,7 @@ impl InboxPage {
         )
     }
     fn needs_you(&self) -> usize {
-        self.inbox.sections[0].rows.len()
+        self.sections[0].rows.len()
     }
 
     fn idle(&self) -> bool {
@@ -1402,21 +1402,68 @@ impl InboxPage {
     }
 
     fn ready_for_review(&self) -> usize {
-        self.inbox.sections[1].rows.len()
+        self.sections[1].rows.len()
+    }
+
+    fn review_owners(&self, members: &[&Row]) -> Vec<String> {
+        let mut owners = std::collections::BTreeSet::new();
+        for member in members {
+            owners.insert(match &member.account {
+                Some(account) => format!("{} · {account}", member.machine),
+                None => member.machine.clone(),
+            });
+        }
+        owners.into_iter().collect()
+    }
+
+    fn review_warnings(&self, members: &[&Row]) -> Vec<&'static str> {
+        use crate::github::InboxCi;
+        let mut warnings = Vec::new();
+        for ci in [InboxCi::Red, InboxCi::Unknown] {
+            if members.iter().any(|member| member.ci == Some(ci)) {
+                warnings.push(ci.label());
+            }
+        }
+        if members.iter().any(|member| member.merge_conflict) {
+            warnings.push("Merge conflict");
+        }
+        if members
+            .iter()
+            .any(|member| member.stale || member.stale_ci.is_some() || member.stale_github)
+        {
+            warnings.push("Stale or unavailable facts");
+        }
+        warnings
     }
 
     fn urgent(&self) -> bool {
-        !self.inbox.sections[0].rows.is_empty()
+        self.needs_you() > 0
     }
 
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            id: &row.id,
+            review_member: false,
             start: self.start.as_ref(),
             csrf: &self.csrf,
             can_copy,
             can_act: self.page.can_act(),
             can_security: self.page.can_security(),
+        }
+    }
+
+    fn review_single<'a>(&'a self, row: &'a Row, id: &'a str) -> RowTemplate<'a> {
+        RowTemplate {
+            id,
+            ..self.row(row, true)
+        }
+    }
+
+    fn review_member<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+        RowTemplate {
+            review_member: true,
+            ..self.row(row, true)
         }
     }
 }
@@ -1425,6 +1472,8 @@ impl InboxPage {
 #[template(path = "console/row.html")]
 struct RowTemplate<'a> {
     row: &'a Row,
+    id: &'a str,
+    review_member: bool,
     start: Option<&'a start_controls::Form>,
     csrf: &'a str,
     can_copy: bool,
@@ -1448,6 +1497,8 @@ impl RowTemplate<'_> {
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            id: &row.id,
+            review_member: false,
             start: self.start,
             csrf: self.csrf,
             can_copy: false,
@@ -1602,7 +1653,8 @@ async fn render_page(
                 targets,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
-                inbox,
+                inbox: &inbox,
+                sections: inbox.display_sections(),
                 title,
                 archive: archive_page
                     .map(|page| {

@@ -79,9 +79,15 @@ impl GitHubTarget {
     }
 }
 
-fn non_empty(text: Option<&str>) -> Option<String> {
+fn non_empty(text: Option<&str>) -> Option<&str> {
     text.filter(|value| !value.trim().is_empty())
-        .map(str::to_owned)
+}
+
+pub(super) fn preferred_pr_title<'a>(
+    kept: Option<&'a str>,
+    recorded: Option<&'a str>,
+) -> Option<&'a str> {
+    non_empty(kept).or_else(|| non_empty(recorded))
 }
 
 pub(super) fn is_safe_github_url(raw: &str) -> bool {
@@ -122,7 +128,7 @@ fn issue_target(issue: Option<&Issue>, repository: &str) -> Option<TargetLink> {
     if issue.number == 0 {
         return None;
     }
-    let title = non_empty(issue.title.as_deref());
+    let title = non_empty(issue.title.as_deref()).map(str::to_owned);
     if let Some(parsed) = validated_issue_url(&issue.url, repository, issue.number) {
         return Some(TargetLink {
             label: format!("{}#{}", parsed.repo_slug(), parsed.number),
@@ -169,7 +175,7 @@ fn merge_pull_request(prs: &mut Vec<TargetLink>, seen: &mut BTreeSet<String>, li
     prs.push(link);
 }
 
-fn kept_pr_title(url: &str, rows: &[&str], kept: Option<&Kept>) -> Option<String> {
+fn kept_pr_title<'a>(url: &str, rows: &[&str], kept: Option<&'a Kept>) -> Option<&'a str> {
     let kept = kept?;
     for row in rows {
         if let Some(title) = kept
@@ -215,8 +221,11 @@ impl<'a> PrSource<'a> for CommandPrSource<'a> {
         {
             rows.push(sel);
         }
-        kept_pr_title(parsed_url, &rows, self.kept)
-            .or_else(|| non_empty(self.command.record.pull_request_title.as_deref()))
+        preferred_pr_title(
+            kept_pr_title(parsed_url, &rows, self.kept),
+            self.command.record.pull_request_title.as_deref(),
+        )
+        .map(str::to_owned)
     }
 
     fn dispatched(&self) -> Vec<Self> {
@@ -246,8 +255,11 @@ impl<'a> PrSource<'a> for DetailsPrSource<'a> {
     }
 
     fn pr_title(&self, parsed_url: &str, _outer_row: Option<&str>) -> Option<String> {
-        non_empty(self.subjects[parsed_url]["facts"]["title"].as_str())
-            .or_else(|| non_empty(self.node["pull_request_title"].as_str()))
+        preferred_pr_title(
+            self.subjects[parsed_url]["facts"]["title"].as_str(),
+            self.node["pull_request_title"].as_str(),
+        )
+        .map(str::to_owned)
     }
 
     fn dispatched(&self) -> Vec<Self> {

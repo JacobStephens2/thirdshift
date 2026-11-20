@@ -155,10 +155,12 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
         }
     }
     let text = scenario.run(&["status"]);
+    let machine = text.stdout.lines().next().expect("status names the host");
+    let dispatched_prefix = format!("    [{machine}] Ticket run acme/widgets#7");
     let dispatched = text
         .stdout
         .lines()
-        .find(|line| line.starts_with("  Ticket run acme/widgets#7"))
+        .find(|line| line.starts_with(&dispatched_prefix))
         .expect(&text.stdout);
     assert!(dispatched.ends_with("ready for review"), "{dispatched}");
 }
@@ -315,8 +317,12 @@ fn pickup_row_after(change: impl FnOnce(&mut Value)) -> String {
     fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = scenario.run(&["status"]);
     assert_eq!(text.code, Some(0), "{}", text.stderr);
-    text.stdout
-        .lines()
+    // Ready Commands are indented under the PR heading with their machine tag.
+    let mut lines = text.stdout.lines();
+    let machine = lines.next().expect("status names the host");
+    let ready_member_prefix = format!("  [{machine}] ");
+    lines
+        .map(|line| line.strip_prefix(&ready_member_prefix).unwrap_or(line))
         .find(|line| line.starts_with("Pickup run "))
         .expect(&text.stdout)
         .to_string()
@@ -570,6 +576,86 @@ fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
             "Resolved:",
             "History:"
         ]
+    );
+}
+
+/// Carriage return and erase-to-end, applied the way a terminal applies them
+/// to one printed line. A later title must not remove the validated URL.
+fn visible_status_line(raw: &str) -> String {
+    let mut visible: Vec<char> = Vec::new();
+    let mut column = 0usize;
+    let mut chars = raw.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\n' => break,
+            '\r' => column = 0,
+            '\u{1b}' if chars.peek() == Some(&'[') => {
+                chars.next();
+                let mut params = String::new();
+                let command = loop {
+                    match chars.next() {
+                        Some(next) if next.is_ascii_alphabetic() => break Some(next),
+                        Some(next) => params.push(next),
+                        None => break None,
+                    }
+                };
+                if command == Some('K') {
+                    let mode = if params.is_empty() {
+                        0
+                    } else {
+                        params.parse().unwrap_or(255)
+                    };
+                    if mode == 2 {
+                        visible.clear();
+                        column = 0;
+                    } else if mode == 0 && column < visible.len() {
+                        visible.truncate(column);
+                    }
+                }
+            }
+            other => {
+                if column < visible.len() {
+                    visible[column] = other;
+                } else {
+                    while visible.len() < column {
+                        visible.push(' ');
+                    }
+                    visible.push(other);
+                }
+                column += 1;
+            }
+        }
+    }
+    visible.into_iter().collect()
+}
+
+fn ready_review_summary(stdout: &str) -> String {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let index = lines
+        .iter()
+        .position(|line| *line == "Ready for review:")
+        .unwrap_or_else(|| panic!("no Ready for review section:\n{stdout}"));
+    visible_status_line(lines.get(index + 1).copied().unwrap_or(""))
+}
+
+#[test]
+fn a_ready_for_review_heading_keeps_its_validated_url_when_the_title_sends_terminal_controls() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now().to_rfc3339();
+    write_record(&scenario, 8, &now, Some(&now));
+    change_record(&scenario, 8, |record| {
+        record["pull_request"] = "https://github.com/acme/widgets/pull/8".into();
+        // Display text only. It names no host this test contacts.
+        record["pull_request_title"] =
+            "\r\u{1b}[Khttps://github.com/evil.example/not-a-host/pull/1".into();
+    });
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    let visible = ready_review_summary(&text.stdout);
+    assert!(
+        visible.contains("https://github.com/acme/widgets/pull/8"),
+        "validated pull request left the visible heading: {visible:?}\nraw stdout:\n{}",
+        text.stdout
     );
 }
 
