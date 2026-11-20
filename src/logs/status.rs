@@ -10,8 +10,9 @@ pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::validate_remote;
 pub(crate) use inbox::{Archive, ArchivePage};
-pub(crate) use inbox::{Inbox, Row, Section, issue_url, subject, subject_link_matches};
-pub(crate) use ready::ReadyGroup;
+pub(crate) use inbox::{
+    DisplayRow, DisplaySection, Inbox, Row, issue_url, subject, subject_link_matches,
+};
 pub(crate) use target::GitHubTarget;
 pub(crate) use watching::{Process, watching};
 
@@ -272,7 +273,7 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         let rows: Vec<_> = document
             .commands
             .iter()
-            .map(text::Row::read)
+            .map(fleet::Observation::text_row)
             .collect::<Result<_>>()?;
         for group in Group::ORDER {
             let items: Vec<_> = rows.iter().filter(|row| row.group == group).collect();

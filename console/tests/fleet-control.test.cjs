@@ -1,9 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
-const { writeFile } = require('node:fs/promises');
+const { utimes, writeFile } = require('node:fs/promises');
 const { hostname } = require('node:os');
-const { join } = require('node:path');
+const { basename, join } = require('node:path');
 const { record: traceRecord } = require('./session-trace.cjs');
 const { startFixture } = require('./start-fixture.cjs');
 
@@ -108,6 +108,76 @@ test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the 
   await remote.getByText('Owning machine unavailable', { exact: true }).waitFor();
   assert.equal(await remote.getByRole('button', { name: /Dismiss|Start Fix run/ }).count(), 0);
   assert.equal(await local.getByRole('button', { name: /Dismiss/ }).count(), 1);
+});
+
+test('Text status pairs stale GitHub facts with the Fleet Command that supplied them', async t => {
+  const env = { THIRDSHIFT_GITHUB_INTERVAL_MS: '3600000' };
+  const peer = await startFixture(env);
+  t.after(() => peer.close());
+  const caller = await startFixture(env);
+  t.after(() => caller.close());
+  const token = peer.cli(['console', 'token', 'create', 'watcher', '--scopes', 'read']);
+  caller.cli(['console', 'fleet', 'add', 'relay', peer.origin], token);
+  await peer.readyPullRequest(116, { name: 'older-peer-command' }, { ci: 'green' });
+  await caller.readyPullRequest(116, { name: 'newer-local-command' }, { ci: 'green' });
+  const old = new Date(Date.now() - 360_000);
+  await utimes(join(peer.home, '.thirdshift/logs/github-inbox.json'), old, old);
+  const page = await peer.page();
+  const status = await (await page.request.get(`${peer.origin}/api/v1/status`)).json();
+  assert.ok(status.github_answer_age_seconds >= 300, JSON.stringify(status));
+  const output = caller.cli(['status']);
+  const lines = output.split('\n');
+  assert.match(lines.find(line => line.startsWith('acme/widgets#116 · ')), /2 Commands/);
+  const remote = lines.findIndex(line => line.startsWith('  [relay]'));
+  assert.ok(remote >= 0, output);
+  assert.match(lines.slice(remote, remote + 5).join('\n'), /stale/i, output);
+});
+
+test('Ready members with identical qualified names show different record names', async t => {
+  const fixture = await startFixture({ THIRDSHIFT_GITHUB_INTERVAL_MS: '3600000' });
+  t.after(() => fixture.close());
+  const timestamp = new Date().toISOString();
+  const facts = { name: 'acme/widgets#116', pull_request: 'https://github.com/acme/widgets/pull/116', started_at: timestamp, ended_at: timestamp };
+  const records = [await fixture.readyPullRequest(116, facts), await fixture.readyPullRequest(216, facts)];
+  const page = await fixture.page({ viewport: { width: 390, height: 844 } });
+  const group = page.locator('.review-group');
+  await group.locator('summary').click({ timeout: 15000 });
+  const members = group.locator('.review-members > .command');
+  assert.equal(await members.count(), 2);
+  const labels = await members.locator('.member-command code').allTextContents();
+  assert.deepEqual(labels.sort(), records.map(record => `${basename(record)}::acme/widgets#116`).sort());
+});
+
+test('A failed Dismiss restores a navigable selection when another Ready member arrives', async t => {
+  const fixture = await startFixture();
+  t.after(() => fixture.close());
+  const started_at = new Date(Date.now() - 120_000).toISOString();
+  const ended_at = new Date(Date.now() - 60_000).toISOString();
+  const pull_request = 'https://github.com/acme/widgets/pull/116';
+  await fixture.readyPullRequest(116, { name: 'first-review', started_at, ended_at });
+  const page = await fixture.page();
+  const ready = page.locator('#inbox > [data-group="ready for review"] > .commands');
+  const dismiss = ready.locator(':scope > .command').getByRole('button', { name: 'Dismiss', exact: true });
+  let failSave;
+  const pendingSave = new Promise(resolve => { failSave = resolve; });
+  await page.route('**/dismiss', async route => {
+    await pendingSave;
+    await route.fulfill({ status: 500, body: 'Fixture write failed' });
+  });
+  const group = ready.locator(':scope > .review-group');
+  try {
+    await dismiss.click();
+    await fixture.readyPullRequest(117, { name: 'second-review', pull_request, started_at, ended_at });
+    await group.locator(':scope > details > summary').click();
+  } finally {
+    failSave();
+  }
+  await group.getByText(/Could not save the dismissal/).waitFor();
+  const selected = await group.evaluate(node => {
+    if (node.matches('.is-selected')) return 'PR group wrapper';
+    return node.querySelector('.is-selected')?.tagName ?? 'nothing';
+  });
+  assert.ok(['SUMMARY', 'LI'].includes(selected), `Expected a navigable selection, got ${selected}`);
 });
 
 test('Fleet starts, Passes and config keep their machine through confirmation and scopes', async t => {

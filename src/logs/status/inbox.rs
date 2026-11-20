@@ -33,9 +33,48 @@ pub(crate) struct Section {
 }
 
 impl Section {
-    pub fn is_ready(&self) -> bool {
+    fn is_ready(&self) -> bool {
         self.group == "ready for review"
     }
+
+    fn display(&self) -> DisplaySection<'_> {
+        let rows = if self.is_ready() {
+            ready::group(self.rows.iter().collect(), |row| ready::Member {
+                repository: &row.repository,
+                pull_request: &row.pull_request,
+                order: row.order,
+                machine: &row.machine,
+                account: row.account.as_deref(),
+                selector: &row.selector,
+            })
+            .into_iter()
+            .map(|group| match group.pull_request {
+                Some(pr) => DisplayRow::PullRequest(pr, group.members),
+                None => DisplayRow::Command(group.members[0]),
+            })
+            .collect()
+        } else {
+            self.rows.iter().map(DisplayRow::Command).collect()
+        };
+        DisplaySection {
+            group: self.group,
+            title: self.title,
+            references: &self.references,
+            rows,
+        }
+    }
+}
+
+pub(crate) struct DisplaySection<'a> {
+    pub group: &'static str,
+    pub title: &'static str,
+    pub rows: Vec<DisplayRow<'a>>,
+    pub references: &'a [LandingReference],
+}
+
+pub(crate) enum DisplayRow<'a> {
+    Command(&'a Row),
+    PullRequest(ready::PullRequest, Vec<&'a Row>),
 }
 
 pub(crate) struct LandingReference {
@@ -227,10 +266,7 @@ impl Row {
             .unwrap_or_else(|| self.pull_request.clone());
         self.subject_url =
             Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
-        self.title = title
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or("(title unavailable)")
-            .into();
+        self.title = title.unwrap_or("(title unavailable)").into();
         self.ci = Some(checks.ci());
         self.merge_conflict = checks.has_merge_conflict();
         self.stale_ci = checks.stale_ci.clone();
@@ -298,21 +334,9 @@ impl Row {
 }
 
 impl Inbox {
-    /// Called after machine and repository filtering, once per HTML render.
-    pub fn take_ready_groups(&mut self) -> Vec<ready::ReadyGroup<Row>> {
-        let section = self
-            .sections
-            .iter_mut()
-            .find(|section| section.is_ready())
-            .expect("Inbox has a Ready for review section");
-        ready::group(std::mem::take(&mut section.rows), |row| ready::Member {
-            repository: &row.repository,
-            pull_request: &row.pull_request,
-            order: row.order,
-            machine: &row.machine,
-            account: row.account.as_deref(),
-            selector: &row.selector,
-        })
+    /// Project the visible sections after machine and repository selection.
+    pub fn display_sections(&self) -> Vec<DisplaySection<'_>> {
+        self.sections.iter().map(Section::display).collect()
     }
 
     pub(super) fn add_reservations(
@@ -366,15 +390,16 @@ impl Inbox {
         let rows = document
             .commands
             .iter()
-            .map(|value| present(value, chrono::Local::now()))
+            .map(|command| present(&command.value, chrono::Local::now()))
             .collect::<Result<Vec<_>>>()?;
         let listed = rows
             .iter()
             .map(|row| row.id.clone())
             .collect::<std::collections::BTreeSet<_>>();
         let stale_github = document.github_answer_is_stale();
-        for (value, mut row) in document.commands.iter().zip(rows) {
-            let checked = super::text::Row::read(value)?;
+        for (command, mut row) in document.commands.iter().zip(rows) {
+            let checked = command.text_row()?;
+            let value = &command.value;
             let Some(section) = self
                 .sections
                 .iter_mut()
@@ -456,8 +481,8 @@ pub(crate) fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
 }
 
 pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
-    for value in &document.commands {
-        present(value, chrono::Local::now())?;
+    for command in &document.commands {
+        present(&command.value, chrono::Local::now())?;
     }
     Ok(())
 }
@@ -948,16 +973,16 @@ pub(super) fn from_read(
                         );
                     }
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
-                        let title = kept
-                            .pull_request(&row.selector, &row.pull_request)
-                            .and_then(|pr| pr.title.as_deref())
-                            .filter(|title| !title.trim().is_empty())
-                            .or_else(|| match item.command {
+                        let title = super::target::preferred_pr_title(
+                            kept.pull_request(&row.selector, &row.pull_request)
+                                .and_then(|pr| pr.title.as_deref()),
+                            match item.command {
                                 Observation::Record(command) => {
                                     command.record.pull_request_title.as_deref()
                                 }
                                 Observation::History(_) => None,
-                            });
+                            },
+                        );
                         row.present_ready(title, &item.github.checks);
                         row.stale_github = stale_github;
                     }

@@ -265,7 +265,7 @@ function restoreOptimisticallyDismissedRow(command) {
     if (sibling) target.insertBefore(row, sibling);
     else target.append(row);
   }
-  const restored = document.getElementById(row.id);
+  const restored = refreshedTarget(row.id, false, null);
   if (entry.hadSelection && restored) {
     select(restored);
     restored.focus({ preventScroll: true });

@@ -33,14 +33,10 @@ pub(crate) struct ReadyGroup<T> {
 }
 
 pub(super) fn title<'a>(value: &'a serde_json::Value, pull_request: &str) -> Option<&'a str> {
-    value["github"]["subjects"][pull_request]["facts"]["title"]
-        .as_str()
-        .filter(|title| !title.trim().is_empty())
-        .or_else(|| {
-            value["pull_request_title"]
-                .as_str()
-                .filter(|title| !title.trim().is_empty())
-        })
+    super::target::preferred_pr_title(
+        value["github"]["subjects"][pull_request]["facts"]["title"].as_str(),
+        value["pull_request_title"].as_str(),
+    )
 }
 
 /// Group only after the owning machines have evaluated the Inbox and the caller

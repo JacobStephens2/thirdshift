@@ -1,17 +1,17 @@
-{% let latest = group.members[0] %}
+{% let latest = members[0] %}
 <li class="review-group" id="{{ pr.id }}">
   <div class="review-heading">
     <h4><a href="{{ pr.url }}">{{ pr.label }}</a></h4>
     <span class="issue-title">{{ latest.title }}</span>
     {% match latest.timing.finish %}{% when Some with (finish) %}<time datetime="{{ finish.datetime }}">Ended {{ finish.label }}</time>{% when None %}<span>{{ latest.timing.age }}</span>{% endmatch %}
   </div>
-  <div class="review-owners">{% for owner in self.review_owners(group.members.as_slice()) %}<span class="machine-tag">{{ owner }}</span>{% endfor %}</div>
-  {% let warnings = self.review_warnings(group.members.as_slice()) %}
+  <div class="review-owners">{% for owner in self.review_owners(members.as_slice()) %}<span class="machine-tag">{{ owner }}</span>{% endfor %}</div>
+  {% let warnings = self.review_warnings(members.as_slice()) %}
   {% if !warnings.is_empty() %}<p class="review-warnings">{% for warning in warnings %}<span>{{ warning }}</span>{% endfor %}</p>{% endif %}
   <details id="{{ pr.id }}-members">
-    <summary aria-label="{{ group.members.len() }} contributing Commands for {{ pr.label }}">{{ group.members.len() }} contributing Commands</summary>
+    <summary aria-label="{{ members.len() }} contributing Commands for {{ pr.label }}">{{ members.len() }} contributing Commands</summary>
     <ul class="review-members" aria-label="Contributing Commands">
-      {% for member in group.members %}{{ self.review_member(member)|safe }}{% endfor %}
+      {% for member in members %}{{ self.review_member(member)|safe }}{% endfor %}
     </ul>
   </details>
 </li>

@@ -16,6 +16,7 @@ pub(super) struct Row {
     command: Command,
     selector: String,
     pull_request_title: Option<String>,
+    stale_github: bool,
 }
 
 #[derive(Deserialize)]
@@ -197,7 +198,7 @@ impl Command {
 }
 
 impl Row {
-    pub fn read(value: &Value) -> Result<Self> {
+    pub fn read(value: &Value, stale_github: bool) -> Result<Self> {
         let meta: Metadata = serde_json::from_value(value.clone())?;
         let pull_request = value["pull_request"].as_str().unwrap_or_default();
         Ok(Self {
@@ -206,6 +207,7 @@ impl Row {
             command: Command::read(value)?,
             selector: super::document_selector(value),
             pull_request_title: super::ready::title(value, pull_request).map(str::to_owned),
+            stale_github,
             meta,
         })
     }
@@ -255,6 +257,9 @@ impl Row {
             }
             if let Some(note) = &meta.github_checks.stale_ci {
                 println!("{indent}  {note}");
+            }
+            if self.stale_github {
+                println!("{indent}  Stale GitHub facts");
             }
         }
         if let Some(departure) = &meta.departure {

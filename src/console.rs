@@ -1315,15 +1315,15 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 
 #[derive(Template)]
 #[template(path = "console/inbox.html")]
-struct InboxPage {
+struct InboxPage<'a> {
     page: PageContext,
     targets: Vec<fleet_control::Target>,
     start: Option<start_controls::Form>,
     csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
-    inbox: Inbox,
-    review_groups: Vec<status::ReadyGroup<Row>>,
+    inbox: &'a Inbox,
+    sections: Vec<status::DisplaySection<'a>>,
     title: &'static str,
     archive: Option<status::Archive>,
     outcome: String,
@@ -1339,7 +1339,7 @@ struct InboxPage {
     machines: Vec<fleet_inbox::Machine>,
 }
 
-impl InboxPage {
+impl InboxPage<'_> {
     fn hidden(&self, group: &str) -> bool {
         self.hidden_sections
             .iter()
@@ -1348,8 +1348,7 @@ impl InboxPage {
 
     /// An explicit visible section filters the Inbox; otherwise show Overview.
     fn folder(&self) -> &'static str {
-        self.inbox
-            .sections
+        self.sections
             .iter()
             .find(|section| !self.hidden(section.group) && slug(section.group) == self.section)
             .map_or("overview", |section| section.group)
@@ -1391,7 +1390,7 @@ impl InboxPage {
         )
     }
     fn needs_you(&self) -> usize {
-        self.inbox.sections[0].rows.len()
+        self.sections[0].rows.len()
     }
 
     fn idle(&self) -> bool {
@@ -1403,18 +1402,10 @@ impl InboxPage {
     }
 
     fn ready_for_review(&self) -> usize {
-        self.review_groups.len()
+        self.sections[1].rows.len()
     }
 
-    fn row_count(&self, section: &status::Section) -> usize {
-        if section.is_ready() {
-            self.ready_for_review()
-        } else {
-            section.rows.len()
-        }
-    }
-
-    fn review_owners(&self, members: &[Row]) -> Vec<String> {
+    fn review_owners(&self, members: &[&Row]) -> Vec<String> {
         let mut owners = std::collections::BTreeSet::new();
         for member in members {
             owners.insert(match &member.account {
@@ -1425,7 +1416,7 @@ impl InboxPage {
         owners.into_iter().collect()
     }
 
-    fn review_warnings(&self, members: &[Row]) -> Vec<&'static str> {
+    fn review_warnings(&self, members: &[&Row]) -> Vec<&'static str> {
         use crate::github::InboxCi;
         let mut warnings = Vec::new();
         for ci in [InboxCi::Red, InboxCi::Unknown] {
@@ -1446,7 +1437,7 @@ impl InboxPage {
     }
 
     fn urgent(&self) -> bool {
-        !self.inbox.sections[0].rows.is_empty()
+        self.needs_you() > 0
     }
 
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
@@ -1504,7 +1495,10 @@ impl RowTemplate<'_> {
     }
 
     fn command_file(&self) -> &str {
-        self.row.selector.rsplit('/').next().unwrap_or_default()
+        let selector = self.row.selector.as_str();
+        let path = selector.split_once("::").map_or(selector, |(path, _)| path);
+        path.rfind('/')
+            .map_or(selector, |slash| &selector[slash + 1..])
     }
 
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
@@ -1654,7 +1648,6 @@ async fn render_page(
                         .retain(|reference| reference.repository.eq_ignore_ascii_case(&repository));
                 }
             }
-            let review_groups = inbox.take_ready_groups();
             let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
@@ -1667,8 +1660,8 @@ async fn render_page(
                 targets,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
-                inbox,
-                review_groups,
+                inbox: &inbox,
+                sections: inbox.display_sections(),
                 title,
                 archive: archive_page
                     .map(|page| {
