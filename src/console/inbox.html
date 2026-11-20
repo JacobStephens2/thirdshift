@@ -84,14 +84,14 @@
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">
-        {% for item in section.rows %}
-        {% match item %}
-        {% when status::DisplayRow::Command with (row) %}{{ self.row(row, true)|safe }}
-        {% when status::DisplayRow::PullRequest with (pr, members) %}
-        {% if members.len() > 1 %}{% include "console/review_group.html" %}
-        {% else %}{{ self.review_single(members[0], pr.id.as_str())|safe }}{% endif %}
-        {% endmatch %}
-        {% endfor %}
+        {%- for item in section.rows -%}
+        {%- match item -%}
+        {%- when status::DisplayRow::Command with (row) -%}{{ self.row(row, true)|safe }}
+        {%- when status::DisplayRow::PullRequest with (pr, members) -%}
+        {%- if members.len() > 1 -%}{% include "console/review_group.html" %}
+        {%- else -%}{{ self.review_single(members[0], pr.id.as_str())|safe }}{%- endif -%}
+        {%- endmatch -%}
+        {%- endfor -%}
       </ul>
       {% for reference in section.references %}<p>{{ reference.text|linkify }}</p>{% endfor %}
     </details>
