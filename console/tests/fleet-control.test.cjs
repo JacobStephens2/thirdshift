@@ -24,8 +24,8 @@ test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the 
   }, { ci: 'red', mergeable: 'conflicting', title: 'Earlier completion' });
   await writeFile(session, traceRecord('Relay Session output'));
   await writeFile(remotePath.replace('.command.json', '.log'), 'Relay Command output\n');
-  await caller.readyPullRequest(117);
-  await caller.readyPullRequest(118);
+  await caller.readyPullRequest(117, {}, { ci: 'green' });
+  await caller.readyPullRequest(118, {}, { ci: 'green' });
   await caller.readyPullRequest(119, { repository: 'acme/gadgets', pull_request: 'https://github.com/acme/gadgets/pull/119' });
 
   const page = await caller.page({ viewport: { width: 390, height: 844 } });
@@ -101,6 +101,14 @@ test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the 
   await page.goto(`${caller.origin}/?section=ready-for-review&repository=acme%2Fgadgets`);
   assert.equal(await rows.count(), 1);
   assert.match(await rows.first().textContent(), /acme\/gadgets#119/);
+  const widgets = `${caller.origin}/?section=ready-for-review&repository=acme%2Fwidgets`;
+  await page.goto(`${widgets}&ready_sort=problems-first`);
+  await fold.waitFor();
+  assert.equal(await rows.first().getAttribute('id'), groupId,
+    'a problem reported by the older Fleet Command moves the whole pull request first');
+  await page.goto(`${widgets}&ready_filter=hide-problems`);
+  assert.equal(await rows.count(), 2);
+  assert.equal(await grouped.count(), 0, 'hiding a problem also hides its green contributing Command');
   await page.goto(`${caller.origin}/?section=ready-for-review`);
   await fold.click();
   owner.cli(['console', 'token', 'revoke', 'watcher']);

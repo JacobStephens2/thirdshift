@@ -1313,6 +1313,56 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         .layer(middleware::from_fn(auth::headers))
 }
 
+#[derive(Default)]
+struct ReadyReview {
+    hide_problems: bool,
+    problems_first: bool,
+    empty_after_filter: bool,
+}
+
+impl ReadyReview {
+    const FILTER_PARAM: &'static str = "ready_filter";
+    const SORT_PARAM: &'static str = "ready_sort";
+    const HIDE_PROBLEMS: &'static str = "hide-problems";
+    const PROBLEMS_FIRST: &'static str = "problems-first";
+
+    fn from_query(query: &Option<String>) -> Self {
+        Self {
+            hide_problems: query_value(query, Self::FILTER_PARAM) == Self::HIDE_PROBLEMS,
+            problems_first: query_value(query, Self::SORT_PARAM) == Self::PROBLEMS_FIRST,
+            ..Self::default()
+        }
+    }
+
+    fn query_pairs(&self) -> impl Iterator<Item = (&'static str, &'static str)> {
+        [
+            self.hide_problems
+                .then_some((Self::FILTER_PARAM, Self::HIDE_PROBLEMS)),
+            self.problems_first
+                .then_some((Self::SORT_PARAM, Self::PROBLEMS_FIRST)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    fn apply(&mut self, sections: &mut [status::DisplaySection<'_>]) {
+        let Some(section) = sections
+            .iter_mut()
+            .find(|section| section.is_ready_for_review())
+        else {
+            return;
+        };
+        if self.hide_problems {
+            let had_rows = !section.rows.is_empty();
+            section.rows.retain(|row| !row.needs_fix());
+            self.empty_after_filter = had_rows && section.rows.is_empty();
+        } else if self.problems_first {
+            // Stable sorting keeps the existing occurrence order within each group.
+            section.rows.sort_by_key(|row| !row.needs_fix());
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "console/inbox.html")]
 struct InboxPage<'a> {
@@ -1337,6 +1387,7 @@ struct InboxPage<'a> {
     section: String,
     machine: String,
     machines: Vec<fleet_inbox::Machine>,
+    ready_review: ReadyReview,
 }
 
 impl InboxPage<'_> {
@@ -1374,14 +1425,16 @@ impl InboxPage<'_> {
     }
     fn folder_url(&self, group: &str) -> String {
         let mut url = reqwest::Url::parse("http://localhost/").expect("fixed URL");
-        url.query_pairs_mut().append_pair("section", &slug(group));
+        let mut query = url.query_pairs_mut();
+        query.append_pair("section", &slug(group));
         if !self.machine.is_empty() {
-            url.query_pairs_mut().append_pair("machine", &self.machine);
+            query.append_pair("machine", &self.machine);
         }
         if !self.repository.is_empty() {
-            url.query_pairs_mut()
-                .append_pair("repository", &self.repository);
+            query.append_pair("repository", &self.repository);
         }
+        query.extend_pairs(self.ready_review.query_pairs());
+        drop(query);
         format!(
             "/{}",
             url.query()
@@ -1401,8 +1454,14 @@ impl InboxPage<'_> {
         status::active_runs_text(self.inbox.active_runs)
     }
 
-    fn ready_for_review(&self) -> usize {
-        self.sections[1].rows.len()
+    fn waiting_review_group(&self) -> Option<&'static str> {
+        self.sections
+            .iter()
+            .find(|section| {
+                section.is_ready_for_review()
+                    && (self.ready_review.empty_after_filter || !section.rows.is_empty())
+            })
+            .map(|section| section.group)
     }
 
     fn review_owners(&self, members: &[&Row]) -> Vec<String> {
@@ -1420,17 +1479,29 @@ impl InboxPage<'_> {
         use crate::github::InboxCi;
         let mut warnings = Vec::new();
         for ci in [InboxCi::Red, InboxCi::Unknown] {
-            if members.iter().any(|member| member.ci == Some(ci)) {
+            if members
+                .iter()
+                .filter_map(|member| member.pr_checks.as_ref())
+                .any(|checks| checks.ci() == ci)
+            {
                 warnings.push(ci.label());
             }
         }
-        if members.iter().any(|member| member.merge_conflict) {
-            warnings.push("Merge conflict");
-        }
         if members
             .iter()
-            .any(|member| member.stale || member.stale_ci.is_some() || member.stale_github)
+            .filter_map(|member| member.pr_checks.as_ref())
+            .any(crate::logs::github::PullRequestChecks::has_merge_conflict)
         {
+            warnings.push("Merge conflict");
+        }
+        if members.iter().any(|member| {
+            member.stale
+                || member.stale_github
+                || member
+                    .pr_checks
+                    .as_ref()
+                    .is_some_and(|checks| checks.stale_ci.is_some())
+        }) {
             warnings.push("Stale or unavailable facts");
         }
         warnings
@@ -1641,6 +1712,12 @@ async fn render_page(
                         .retain(|reference| reference.repository.eq_ignore_ascii_case(&repository));
                 }
             }
+            let mut sections = inbox.display_sections();
+            let mut ready_review = ReadyReview::default();
+            if archive_page.is_none() {
+                ready_review = ReadyReview::from_query(&query);
+                ready_review.apply(&mut sections);
+            }
             let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
@@ -1654,7 +1731,7 @@ async fn render_page(
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
                 inbox: &inbox,
-                sections: inbox.display_sections(),
+                sections,
                 title,
                 archive: archive_page
                     .map(|page| {
@@ -1669,6 +1746,7 @@ async fn render_page(
                 section: query_value(&query, "section"),
                 machine,
                 machines,
+                ready_review,
             }
             .render()?)
         })

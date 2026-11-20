@@ -33,12 +33,14 @@ pub(crate) struct Section {
 }
 
 impl Section {
-    fn is_ready(&self) -> bool {
-        self.group == "ready for review"
+    const READY_FOR_REVIEW: &'static str = "ready for review";
+
+    fn is_ready_for_review(&self) -> bool {
+        self.group == Self::READY_FOR_REVIEW
     }
 
     fn display(&self) -> DisplaySection<'_> {
-        let rows = if self.is_ready() {
+        let rows = if self.is_ready_for_review() {
             ready::group(self.rows.iter().collect(), |row| ready::Member {
                 repository: &row.repository,
                 pull_request: &row.pull_request,
@@ -72,9 +74,24 @@ pub(crate) struct DisplaySection<'a> {
     pub references: &'a [LandingReference],
 }
 
+impl DisplaySection<'_> {
+    pub fn is_ready_for_review(&self) -> bool {
+        self.group == Section::READY_FOR_REVIEW
+    }
+}
+
 pub(crate) enum DisplayRow<'a> {
     Command(&'a Row),
     PullRequest(ready::PullRequest, Vec<&'a Row>),
+}
+
+impl DisplayRow<'_> {
+    pub fn needs_fix(&self) -> bool {
+        match self {
+            Self::Command(row) => row.needs_fix(),
+            Self::PullRequest(_, members) => members.iter().any(|row| row.needs_fix()),
+        }
+    }
 }
 
 pub(crate) struct LandingReference {
@@ -123,9 +140,7 @@ pub(crate) struct Row {
     pub left: String,
     pub harness: String,
     pub pull_request: String,
-    pub ci: Option<crate::github::InboxCi>,
-    pub merge_conflict: bool,
-    pub stale_ci: Option<String>,
+    pub pr_checks: Option<PullRequestChecks>,
     pub stale_github: bool,
     pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
@@ -232,6 +247,12 @@ impl Timing {
 }
 
 impl Row {
+    fn needs_fix(&self) -> bool {
+        self.pr_checks
+            .as_ref()
+            .is_some_and(PullRequestChecks::needs_fix)
+    }
+
     fn present_needs_you_target(&mut self, kind: &str, repository: &str) {
         if !matches!(kind, "Review run" | "Triage run") {
             return;
@@ -268,9 +289,7 @@ impl Row {
         self.subject_url =
             Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
         self.title = title.unwrap_or("(title unavailable)").into();
-        self.ci = Some(checks.ci());
-        self.merge_conflict = checks.has_merge_conflict();
-        self.stale_ci = checks.stale_ci.clone();
+        self.pr_checks = Some(checks.clone());
         self.fix_command = if checks.needs_fix() {
             pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
         } else {
@@ -416,9 +435,9 @@ impl Inbox {
             row.tag_machine(
                 &entry.name,
                 &entry.address,
-                stale || (section.is_ready() && failed),
+                stale || (section.is_ready_for_review() && failed),
             );
-            row.stale_github = stale_github && section.is_ready();
+            row.stale_github = stale_github && section.is_ready_for_review();
             let subject = row.subject.clone();
             section.rows.push(row);
             // Local rows were already ordered; merge with the same Needs you
@@ -554,7 +573,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     };
     let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
     let subject_url = issue_url(facts.issue.as_ref());
-    let ready = value["group"] == "ready for review";
+    let ready = value["group"] == Section::READY_FOR_REVIEW;
     let ready_title = ready::title(value, facts.pull_request.as_deref().unwrap_or_default());
     let group: Option<Group> = value
         .get("group")
@@ -659,9 +678,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             facts.effort.as_deref().unwrap_or("default Effort")
         ),
         pull_request: facts.pull_request.unwrap_or_default(),
-        ci: None,
-        merge_conflict: false,
-        stale_ci: None,
+        pr_checks: None,
         stale_github: false,
         ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
             complete: facts
@@ -926,9 +943,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
-                ci: None,
-                merge_conflict: false,
-                stale_ci: None,
+                pr_checks: None,
                 stale_github: false,
                 ticket_progress: None,
                 tickets: Vec::new(),
@@ -1038,7 +1053,7 @@ pub(super) fn from_read(
             Ok(Section {
                 group: match group {
                     Group::NeedsYou => "needs you",
-                    Group::ReadyForReview => "ready for review",
+                    Group::ReadyForReview => Section::READY_FOR_REVIEW,
                     Group::Landing => "landing",
                     Group::Working => "working",
                     Group::Done => "done",

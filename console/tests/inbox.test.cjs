@@ -4,7 +4,7 @@ const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { mkdtemp, mkdir, readFile, writeFile, appendFile, utimes, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
-const { join, resolve } = require("node:path");
+const { delimiter, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("./playwright.cjs");
 const { record: traceRecord } = require("./session-trace.cjs");
@@ -15,7 +15,11 @@ before(async () => {
   home = await mkdtemp(join(tmpdir(), "thirdshift-console-"));
   const configDir = join(home, ".thirdshift");
   const records = join(configDir, "logs/acme/widgets/commands/issue");
+  const bin = join(home, "bin");
   await mkdir(records, { recursive: true });
+  // The tests supply kept GitHub facts, independently of the host's gh and network.
+  await mkdir(bin);
+  await writeFile(join(bin, "gh"), "#!/bin/sh\necho 'GitHub unavailable in the Inbox fixture' >&2\nexit 1\n", { mode: 0o755 });
   await writeFile(join(configDir, "config.toml"), '[console]\nport = 0\nfleet = [{ name = "other.example.test", address = "https://other.example.test" }]\n');
   for (let number = 1; number <= 10; number++) {
     const now = new Date().toISOString();
@@ -42,7 +46,9 @@ before(async () => {
     security_findings: [{ title: 'Bound <input> before storage', severity: 'high', url: 'https://github.com/acme/widgets/security/advisories/GHSA-test' }]
   }));
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift"), ["console", "--no-sign-in"], {
-    env: { ...process.env, HOME: home }, stdio: ["ignore", "pipe", "inherit"]
+    env: { ...process.env, HOME: home, PATH: [bin, process.env.PATH].join(delimiter),
+      THIRDSHIFT_GITHUB_INTERVAL_MS: "3600000" },
+    stdio: ["ignore", "pipe", "inherit"]
   });
   exited = once(server, "exit");
   const lines = createInterface({ input: server.stdout });
@@ -64,6 +70,20 @@ async function pageFor(t, options) {
   t.after(() => context.close());
   const page = await context.newPage();
   return page;
+}
+
+async function readStartupGitHubAnswer(cache) {
+  // The startup read can overwrite a kept-answer fixture installed before it finishes.
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    try {
+      return await readFile(cache, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      assert.ok(Date.now() < deadline, 'Console completed its startup GitHub read');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
 }
 
 test('Repository filtering preserves Machine and section through native form navigation', async t => {
@@ -2214,6 +2234,92 @@ for (const storage of ['blocked', 'read-only', 'malformed']) {
   });
 }
 
+test('Ready for review filters and stably sorts by CI red or Merge conflict through live updates', async t => {
+  const logs = join(home, '.thirdshift/logs');
+  const dir = join(logs, 'acme/widgets/commands/issue');
+  const cache = join(logs, 'github-inbox.json');
+  const changed = join(logs, 'github-inbox.changed');
+  const previous = await readStartupGitHubAnswer(cache);
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const fixtures = [
+    [610, 'green', 'mergeable'], [611, 'red', 'mergeable'], [612, 'pending', 'unknown'],
+    [613, 'green', 'conflicting'], [614, 'no_checks', 'mergeable'], [615, 'red', 'conflicting'],
+    [616], [617, 'pending', 'conflicting'],
+  ];
+  const paths = [];
+  const subjects = {};
+  const pull = number => `https://github.com/acme/widgets/pull/${number}`;
+  const publish = async label => {
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, label);
+  };
+  const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+  try {
+    for (const [number, ci, mergeable] of fixtures) {
+      const path = join(dir, `${number}-fixture.command.json`);
+      paths.push(path);
+      const ended_at = new Date(Date.now() - (number - 609) * 60000).toISOString();
+      await replaceRecord(path, JSON.stringify({ ...base, started_at: ended_at, ended_at, kind: 'Run',
+        issue: null, outcome: 'ready for review', cause: null, tickets: [], pull_request: pull(number) }));
+      if (ci) subjects[pull(number)] = { state: 'Open', ci, mergeable, title: `Review ${number}` };
+    }
+    await publish('Review filter fixture');
+    await page.goto(origin);
+    const section = page.getByRole('group', { name: 'Ready for review', exact: true });
+    const rows = section.locator('.row-head > .subject a');
+    const order = () => rows.evaluateAll(links => links.map(link => Number(link.href.split('/').at(-1))));
+    const show = section.getByRole('combobox', { name: 'Show', exact: true });
+    const sort = section.getByRole('combobox', { name: 'Sort', exact: true });
+    const apply = section.getByRole('button', { name: 'Apply', exact: true });
+    const submit = (name, value) => Promise.all([
+      page.waitForURL(url => url.searchParams.get(name) === value),
+      apply.click(),
+    ]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);
+    assert.equal(await show.locator('option:checked').textContent(), 'All pull requests');
+    assert.equal(await sort.locator('option:checked').textContent(), 'Most recent first');
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await sort.selectOption({ label: 'CI red or Merge conflict first' });
+    await submit('ready_sort', 'problems-first');
+    assert.deepEqual(await order(), [611, 613, 615, 617, 610, 612, 614, 616]);
+
+    // Refresh the sorted rows while Show is still being edited.
+    await show.selectOption({ label: 'Hide CI red or Merge conflict' });
+    subjects[pull(611)].ci = 'green';
+    await publish('Red CI recovered');
+    await rows.first().filter({ hasText: '#613' }).waitFor();
+    assert.deepEqual(await order(), [613, 615, 617, 610, 611, 612, 614, 616]);
+    assert.equal(await show.locator('option:checked').textContent(), 'Hide CI red or Merge conflict');
+    await submit('ready_filter', 'hide-problems');
+    assert.deepEqual(await order(), [610, 611, 612, 614, 616]);
+
+    subjects[pull(611)].ci = 'red';
+    await publish('CI failed again');
+    await rows.filter({ hasText: '#611' }).waitFor({ state: 'detached' });
+    assert.deepEqual(await order(), [610, 612, 614, 616]);
+    assert.match(await section.locator('summary').textContent(), /Ready for review 4/);
+    assert.equal(await show.locator('option:checked').textContent(), 'Hide CI red or Merge conflict');
+    assert.equal(await sort.locator('option:checked').textContent(), 'CI red or Merge conflict first');
+    for (const number of [610, 612, 614, 616]) {
+      subjects[pull(number)] = { state: 'Open', ci: 'red', title: `Review ${number}` };
+    }
+    await publish('All rows now need fixes');
+    await section.getByText('All pull requests here have CI red or a Merge conflict.').waitFor();
+    assert.deepEqual(await order(), []);
+    assert.equal(await page.getByRole('region', { name: 'No running Commands' })
+      .getByRole('link', { name: 'Ready for review', exact: true }).count(), 1,
+      'the idle notice still points to waiting pull requests when their rows are filtered');
+    await show.selectOption({ label: 'All pull requests' });
+    await submit('ready_filter', '');
+    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);
+  } finally {
+    await page.close();
+    for (const path of paths) await rm(path, { force: true });
+    await replaceRecord(cache, previous);
+    await writeFile(changed, 'Review filter fixture removed');
+  }
+});
+
 test('Ready rows link PR subjects, show titles and CI across widths, and update live', async t => {
   const logs = join(home, '.thirdshift/logs');
   const dir = join(logs, 'acme/widgets/commands/issue');
@@ -2748,17 +2854,7 @@ test('Ready for review copies rendered context in Overview and its folder withou
   const path = join(dir, '2174-copy.command.json');
   const log = join(dir, '2174-copy.log');
   const cache = join(logs, 'github-inbox.json');
-  // The Console's startup GitHub read must finish before installing kept facts.
-  // Otherwise its older answer can overwrite this fixture in an isolated run.
-  const deadline = Date.now() + 15000;
-  let previous;
-  while (previous === undefined) {
-    previous = await readFile(cache, 'utf8').catch(error => {
-      if (error.code !== 'ENOENT') throw error;
-    });
-    assert.ok(Date.now() < deadline, 'Console completed its startup GitHub read');
-    if (previous === undefined) await new Promise(resolve => setTimeout(resolve, 25));
-  }
+  const previous = await readStartupGitHubAnswer(cache);
   const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
   const pr = 'https://github.com/acme/widgets/pull/2174';
   const subjects = { [pr]: { state: 'Open', ci: 'red', mergeable: 'conflicting', title: 'Copy ready PR context' } };

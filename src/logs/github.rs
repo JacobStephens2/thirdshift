@@ -108,8 +108,8 @@ pub(super) struct CommandAnswer {
 }
 
 /// The CI and mergeability facts shown together on Ready for review rows.
-#[derive(Default, Deserialize, Serialize)]
-pub(super) struct PullRequestChecks {
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub(crate) struct PullRequestChecks {
     #[serde(rename = "github_ci", skip_serializing_if = "Option::is_none")]
     ci: Option<crate::github::InboxCi>,
     #[serde(rename = "github_mergeable", skip_serializing_if = "Option::is_none")]

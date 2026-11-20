@@ -89,9 +89,11 @@ export function showFolder(group) {
   const links = [...document.querySelectorAll('#inbox .folders a[data-group]')];
   const current = links.find(link => link.dataset.group === group && !link.hidden)
     ?? links.find(link => link.dataset.group === 'overview');
-  const sectionInput = document.querySelector('.machine-filter [name="section"]');
-  if (sectionInput && current) {
-    sectionInput.value = new URL(current.href).searchParams.get('section');
+  if (current) {
+    const slug = new URL(current.href).searchParams.get('section');
+    for (const sectionInput of document.querySelectorAll('[data-inbox-filter] [name="section"]')) {
+      sectionInput.value = slug;
+    }
   }
   for (const link of links) {
     if (link === current) link.setAttribute('aria-current', 'page');
