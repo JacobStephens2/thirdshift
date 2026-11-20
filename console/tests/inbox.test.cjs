@@ -2306,6 +2306,9 @@ test('Ready for review filters and stably sorts by CI red or Merge conflict thro
     await publish('All rows now need fixes');
     await section.getByText('All pull requests here have CI red or a Merge conflict.').waitFor();
     assert.deepEqual(await order(), []);
+    assert.equal(await page.getByRole('region', { name: 'No running Commands' })
+      .getByRole('link', { name: 'Ready for review', exact: true }).count(), 1,
+      'the idle notice still points to waiting pull requests when their rows are filtered');
     await show.selectOption({ label: 'All pull requests' });
     await submit('ready_filter', '');
     assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);

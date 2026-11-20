@@ -1349,7 +1349,7 @@ impl ReadyReview {
         let Some(section) = inbox
             .sections
             .iter_mut()
-            .find(|section| section.group == "ready for review")
+            .find(|section| section.is_ready_for_review())
         else {
             return;
         };
@@ -1455,8 +1455,15 @@ impl InboxPage {
         status::active_runs_text(self.inbox.active_runs)
     }
 
-    fn ready_for_review(&self) -> usize {
-        self.inbox.sections[1].rows.len()
+    fn waiting_review_group(&self) -> Option<&'static str> {
+        self.inbox
+            .sections
+            .iter()
+            .find(|section| {
+                section.is_ready_for_review()
+                    && (self.ready_review.empty_after_filter || !section.rows.is_empty())
+            })
+            .map(|section| section.group)
     }
 
     fn urgent(&self) -> bool {

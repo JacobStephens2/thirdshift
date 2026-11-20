@@ -32,6 +32,14 @@ pub(crate) struct Section {
     pub references: Vec<LandingReference>,
 }
 
+impl Section {
+    const READY_FOR_REVIEW: &'static str = "ready for review";
+
+    pub fn is_ready_for_review(&self) -> bool {
+        self.group == Self::READY_FOR_REVIEW
+    }
+}
+
 pub(crate) struct LandingReference {
     pub repository: String,
     pub text: String,
@@ -520,7 +528,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     };
     let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
     let subject_url = issue_url(facts.issue.as_ref());
-    let ready = value["group"] == "ready for review";
+    let ready = value["group"] == Section::READY_FOR_REVIEW;
     let ready_title = value["github"]["subjects"]
         [facts.pull_request.as_deref().unwrap_or_default()]["facts"]["title"]
         .as_str();
@@ -988,7 +996,7 @@ pub(super) fn from_read(
             Ok(Section {
                 group: match group {
                     Group::NeedsYou => "needs you",
-                    Group::ReadyForReview => "ready for review",
+                    Group::ReadyForReview => Section::READY_FOR_REVIEW,
                     Group::Landing => "landing",
                     Group::Working => "working",
                     Group::Done => "done",
