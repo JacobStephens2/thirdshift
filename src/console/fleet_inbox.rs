@@ -263,10 +263,11 @@ impl Fleet {
             };
             let count = answer.good.as_ref().map_or(0, |good| good.active_runs);
             if let Some(good) = &answer.good {
-                inbox.merge_remote(good, entry, stale)?;
+                let unavailable = stale || answer.error.is_some();
+                inbox.merge_remote(good, entry, stale, answer.error.is_some())?;
                 inbox.remote_actions(
                     &entry.name,
-                    !stale && answer.error.is_none() && answer.scopes.contains(&super::Scope::Act),
+                    !unavailable && answer.scopes.contains(&super::Scope::Act),
                 );
             }
             inbox.active_runs += count;

@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use std::path::Path;
 
-use super::{age, ticket_text};
+use super::{age, ready, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
@@ -35,8 +35,62 @@ pub(crate) struct Section {
 impl Section {
     const READY_FOR_REVIEW: &'static str = "ready for review";
 
-    pub fn is_ready_for_review(&self) -> bool {
+    fn is_ready_for_review(&self) -> bool {
         self.group == Self::READY_FOR_REVIEW
+    }
+
+    fn display(&self) -> DisplaySection<'_> {
+        let rows = if self.is_ready_for_review() {
+            ready::group(self.rows.iter().collect(), |row| ready::Member {
+                repository: &row.repository,
+                pull_request: &row.pull_request,
+                order: row.order,
+                machine: &row.machine,
+                account: row.account.as_deref(),
+                selector: &row.selector,
+            })
+            .into_iter()
+            .map(|group| match group.pull_request {
+                Some(pr) => DisplayRow::PullRequest(pr, group.members),
+                None => DisplayRow::Command(group.members[0]),
+            })
+            .collect()
+        } else {
+            self.rows.iter().map(DisplayRow::Command).collect()
+        };
+        DisplaySection {
+            group: self.group,
+            title: self.title,
+            references: &self.references,
+            rows,
+        }
+    }
+}
+
+pub(crate) struct DisplaySection<'a> {
+    pub group: &'static str,
+    pub title: &'static str,
+    pub rows: Vec<DisplayRow<'a>>,
+    pub references: &'a [LandingReference],
+}
+
+impl DisplaySection<'_> {
+    pub fn is_ready_for_review(&self) -> bool {
+        self.group == Section::READY_FOR_REVIEW
+    }
+}
+
+pub(crate) enum DisplayRow<'a> {
+    Command(&'a Row),
+    PullRequest(ready::PullRequest, Vec<&'a Row>),
+}
+
+impl DisplayRow<'_> {
+    pub fn needs_fix(&self) -> bool {
+        match self {
+            Self::Command(row) => row.needs_fix(),
+            Self::PullRequest(_, members) => members.iter().any(|row| row.needs_fix()),
+        }
     }
 }
 
@@ -60,6 +114,7 @@ pub(crate) struct Row {
     pub slow: bool,
     pub log_growth: String,
     pub selector: String,
+    pub selector_label: String,
     pub can_dismiss: bool,
     pub remote_stop: bool,
     pub remote_undo: bool,
@@ -86,6 +141,7 @@ pub(crate) struct Row {
     pub harness: String,
     pub pull_request: String,
     pub pr_checks: Option<PullRequestChecks>,
+    pub stale_github: bool,
     pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
@@ -191,7 +247,7 @@ impl Timing {
 }
 
 impl Row {
-    pub fn needs_fix(&self) -> bool {
+    fn needs_fix(&self) -> bool {
         self.pr_checks
             .as_ref()
             .is_some_and(PullRequestChecks::needs_fix)
@@ -232,10 +288,7 @@ impl Row {
             .unwrap_or_else(|| self.pull_request.clone());
         self.subject_url =
             Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
-        self.title = title
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or("(title unavailable)")
-            .into();
+        self.title = title.unwrap_or("(title unavailable)").into();
         self.pr_checks = Some(checks.clone());
         self.fix_command = if checks.needs_fix() {
             pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
@@ -301,6 +354,11 @@ impl Row {
 }
 
 impl Inbox {
+    /// Project the visible sections after machine and repository selection.
+    pub fn display_sections(&self) -> Vec<DisplaySection<'_>> {
+        self.sections.iter().map(Section::display).collect()
+    }
+
     pub(super) fn add_reservations(
         &mut self,
         values: &[serde_json::Value],
@@ -347,18 +405,21 @@ impl Inbox {
         document: &super::fleet::Document,
         entry: &crate::config::console::fleet::Entry,
         stale: bool,
+        failed: bool,
     ) -> Result<()> {
         let rows = document
             .commands
             .iter()
-            .map(|value| present(value, chrono::Local::now()))
+            .map(|command| present(&command.value, chrono::Local::now()))
             .collect::<Result<Vec<_>>>()?;
         let listed = rows
             .iter()
             .map(|row| row.id.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        for (value, mut row) in document.commands.iter().zip(rows) {
-            let checked = super::text::Row::read(value)?;
+        let stale_github = document.github_answer_is_stale();
+        for (command, mut row) in document.commands.iter().zip(rows) {
+            let checked = command.text_row()?;
+            let value = &command.value;
             let Some(section) = self
                 .sections
                 .iter_mut()
@@ -371,7 +432,12 @@ impl Inbox {
             // A received document chooses `issue.url` independently, so keep
             // the href only when it names that same GitHub issue or pull request.
             bind_subject_link(&mut row);
-            row.tag_machine(&entry.name, &entry.address, stale);
+            row.tag_machine(
+                &entry.name,
+                &entry.address,
+                stale || (section.is_ready_for_review() && failed),
+            );
+            row.stale_github = stale_github && section.is_ready_for_review();
             let subject = row.subject.clone();
             section.rows.push(row);
             // Local rows were already ordered; merge with the same Needs you
@@ -435,8 +501,8 @@ pub(crate) fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
 }
 
 pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
-    for value in &document.commands {
-        present(value, chrono::Local::now())?;
+    for command in &document.commands {
+        present(&command.value, chrono::Local::now())?;
     }
     Ok(())
 }
@@ -457,7 +523,6 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         started_at: String,
         ended_at: Option<String>,
         outcome: Option<String>,
-        command_log: Option<std::path::PathBuf>,
         cause: Option<String>,
         pull_request: Option<String>,
         release_url: Option<String>,
@@ -489,33 +554,13 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     let live = facts.state == "live";
     // A child Ticket shares its outer Command log, but owns a different
     // record. Use the owning observation's path rather than the log stem.
-    let selector = value["selector"]
-        .as_str()
-        .map(String::from)
-        .or_else(|| {
-            value["record_path"].as_str().map(|path| {
-                if facts.name.is_empty() {
-                    path.to_owned()
-                } else {
-                    format!("{path}::{}", facts.name)
-                }
-            })
-        })
-        .or_else(|| {
-            facts.command_log.as_ref().map(|path| {
-                let path = if value["source"] == "command_record" {
-                    path.with_extension("command.json")
-                } else {
-                    path.clone()
-                };
-                if facts.name.is_empty() {
-                    path.to_string_lossy().into_owned()
-                } else {
-                    format!("{}::{}", path.display(), facts.name)
-                }
-            })
-        })
-        .unwrap_or_default();
+    let selector = super::document_selector(value);
+    let selector_label = selector_label(
+        &selector,
+        value["record_path"]
+            .as_str()
+            .or_else(|| value["command_log"].as_str()),
+    );
     let process =
         (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
     let live_target = live && matches!(facts.kind.as_str(), "Fix run" | "Review run");
@@ -529,9 +574,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
     let subject_url = issue_url(facts.issue.as_ref());
     let ready = value["group"] == Section::READY_FOR_REVIEW;
-    let ready_title = value["github"]["subjects"]
-        [facts.pull_request.as_deref().unwrap_or_default()]["facts"]["title"]
-        .as_str();
+    let ready_title = ready::title(value, facts.pull_request.as_deref().unwrap_or_default());
     let group: Option<Group> = value
         .get("group")
         .map(|group| serde_json::from_value(group.clone()))
@@ -562,6 +605,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
         slow: matches!(facts.health, Some(Health::Slow { .. })),
         log_growth: String::new(),
+        selector_label: selector_label.to_owned(),
         selector,
         can_dismiss: facts.account.is_none()
             && matches!(
@@ -635,6 +679,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         ),
         pull_request: facts.pull_request.unwrap_or_default(),
         pr_checks: None,
+        stale_github: false,
         ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
             complete: facts
                 .tickets
@@ -868,6 +913,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 slow: false,
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
+                selector_label: String::new(),
                 can_dismiss: false,
                 remote_stop: false,
                 remote_undo: false,
@@ -898,6 +944,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 harness: String::new(),
                 pull_request: String::new(),
                 pr_checks: None,
+                stale_github: false,
                 ticket_progress: None,
                 tickets: Vec::new(),
                 children: Vec::new(),
@@ -923,6 +970,8 @@ pub(super) fn from_read(
         .iter()
         .filter_map(|item| item.command.selector())
         .collect();
+    let stale_github =
+        super::stale_github_answer(kept.age.map(|age| age.as_secs()), kept.failure.is_some());
     let sections = Group::ORDER
         .into_iter()
         .filter(|group| *group != Group::History)
@@ -948,10 +997,18 @@ pub(super) fn from_read(
                         );
                     }
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
-                        let title = kept
-                            .pull_request(&row.selector, &row.pull_request)
-                            .and_then(|pr| pr.title.as_deref());
+                        let title = super::target::preferred_pr_title(
+                            kept.pull_request(&row.selector, &row.pull_request)
+                                .and_then(|pr| pr.title.as_deref()),
+                            match item.command {
+                                Observation::Record(command) => {
+                                    command.record.pull_request_title.as_deref()
+                                }
+                                Observation::History(_) => None,
+                            },
+                        );
                         row.present_ready(title, &item.github.checks);
+                        row.stale_github = stale_github;
                     }
                     // Needs you may replace the subject with its pull request
                     // after `present` checked the recorded issue link.
@@ -1085,6 +1142,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         ));
         row.log_growth = format!("{log_length}:{session_length}");
         row.selector = Observation::Record(command).selector().unwrap_or_default();
+        row.selector_label = selector_label(&row.selector, command.record_path.to_str()).to_owned();
         row.logs_url = logs_url(&command.record_path, root, command.account.as_deref());
         row.timing = Timing::new(
             row.live,
@@ -1108,6 +1166,16 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let mut row = present(&serde_json::to_value(command)?, now)?;
     attach_local(&mut row, command, now, root)?;
     Ok(row)
+}
+
+fn selector_label<'a>(selector: &'a str, storage_path: Option<&str>) -> &'a str {
+    // Only trim the directory named by the observation. Both the path and
+    // Command name can contain characters used in the opaque selector.
+    storage_path
+        .and_then(|path| path.rsplit_once('/'))
+        .and_then(|(directory, _)| selector.strip_prefix(directory))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(selector)
 }
 
 fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {
@@ -1325,6 +1393,7 @@ mod tests {
                     scopes: Vec::new(),
                     last_contact: None,
                 },
+                false,
                 false,
             )
             .unwrap();
@@ -1674,6 +1743,7 @@ mod tests {
                     scopes: Vec::new(),
                     last_contact: None,
                 },
+                false,
                 false,
             )
             .unwrap();

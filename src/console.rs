@@ -1345,9 +1345,8 @@ impl ReadyReview {
         .flatten()
     }
 
-    fn apply(&mut self, inbox: &mut Inbox) {
-        let Some(section) = inbox
-            .sections
+    fn apply(&mut self, sections: &mut [status::DisplaySection<'_>]) {
+        let Some(section) = sections
             .iter_mut()
             .find(|section| section.is_ready_for_review())
         else {
@@ -1366,14 +1365,15 @@ impl ReadyReview {
 
 #[derive(Template)]
 #[template(path = "console/inbox.html")]
-struct InboxPage {
+struct InboxPage<'a> {
     page: PageContext,
     targets: Vec<fleet_control::Target>,
     start: Option<start_controls::Form>,
     csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
-    inbox: Inbox,
+    inbox: &'a Inbox,
+    sections: Vec<status::DisplaySection<'a>>,
     title: &'static str,
     archive: Option<status::Archive>,
     outcome: String,
@@ -1390,7 +1390,7 @@ struct InboxPage {
     ready_review: ReadyReview,
 }
 
-impl InboxPage {
+impl InboxPage<'_> {
     fn hidden(&self, group: &str) -> bool {
         self.hidden_sections
             .iter()
@@ -1399,8 +1399,7 @@ impl InboxPage {
 
     /// An explicit visible section filters the Inbox; otherwise show Overview.
     fn folder(&self) -> &'static str {
-        self.inbox
-            .sections
+        self.sections
             .iter()
             .find(|section| !self.hidden(section.group) && slug(section.group) == self.section)
             .map_or("overview", |section| section.group)
@@ -1444,7 +1443,7 @@ impl InboxPage {
         )
     }
     fn needs_you(&self) -> usize {
-        self.inbox.sections[0].rows.len()
+        self.sections[0].rows.len()
     }
 
     fn idle(&self) -> bool {
@@ -1456,8 +1455,7 @@ impl InboxPage {
     }
 
     fn waiting_review_group(&self) -> Option<&'static str> {
-        self.inbox
-            .sections
+        self.sections
             .iter()
             .find(|section| {
                 section.is_ready_for_review()
@@ -1466,18 +1464,77 @@ impl InboxPage {
             .map(|section| section.group)
     }
 
+    fn review_owners(&self, members: &[&Row]) -> Vec<String> {
+        let mut owners = std::collections::BTreeSet::new();
+        for member in members {
+            owners.insert(match &member.account {
+                Some(account) => format!("{} · {account}", member.machine),
+                None => member.machine.clone(),
+            });
+        }
+        owners.into_iter().collect()
+    }
+
+    fn review_warnings(&self, members: &[&Row]) -> Vec<&'static str> {
+        use crate::github::InboxCi;
+        let mut warnings = Vec::new();
+        for ci in [InboxCi::Red, InboxCi::Unknown] {
+            if members
+                .iter()
+                .filter_map(|member| member.pr_checks.as_ref())
+                .any(|checks| checks.ci() == ci)
+            {
+                warnings.push(ci.label());
+            }
+        }
+        if members
+            .iter()
+            .filter_map(|member| member.pr_checks.as_ref())
+            .any(crate::logs::github::PullRequestChecks::has_merge_conflict)
+        {
+            warnings.push("Merge conflict");
+        }
+        if members.iter().any(|member| {
+            member.stale
+                || member.stale_github
+                || member
+                    .pr_checks
+                    .as_ref()
+                    .is_some_and(|checks| checks.stale_ci.is_some())
+        }) {
+            warnings.push("Stale or unavailable facts");
+        }
+        warnings
+    }
+
     fn urgent(&self) -> bool {
-        !self.inbox.sections[0].rows.is_empty()
+        self.needs_you() > 0
     }
 
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            id: &row.id,
+            review_member: false,
             start: self.start.as_ref(),
             csrf: &self.csrf,
             can_copy,
             can_act: self.page.can_act(),
             can_security: self.page.can_security(),
+        }
+    }
+
+    fn review_single<'a>(&'a self, row: &'a Row, id: &'a str) -> RowTemplate<'a> {
+        RowTemplate {
+            id,
+            ..self.row(row, true)
+        }
+    }
+
+    fn review_member<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+        RowTemplate {
+            review_member: true,
+            ..self.row(row, true)
         }
     }
 }
@@ -1486,6 +1543,8 @@ impl InboxPage {
 #[template(path = "console/row.html")]
 struct RowTemplate<'a> {
     row: &'a Row,
+    id: &'a str,
+    review_member: bool,
     start: Option<&'a start_controls::Form>,
     csrf: &'a str,
     can_copy: bool,
@@ -1509,6 +1568,8 @@ impl RowTemplate<'_> {
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            id: &row.id,
+            review_member: false,
             start: self.start,
             csrf: self.csrf,
             can_copy: false,
@@ -1651,10 +1712,11 @@ async fn render_page(
                         .retain(|reference| reference.repository.eq_ignore_ascii_case(&repository));
                 }
             }
+            let mut sections = inbox.display_sections();
             let mut ready_review = ReadyReview::default();
             if archive_page.is_none() {
                 ready_review = ReadyReview::from_query(&query);
-                ready_review.apply(&mut inbox);
+                ready_review.apply(&mut sections);
             }
             let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
@@ -1668,7 +1730,8 @@ async fn render_page(
                 targets,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
-                inbox,
+                inbox: &inbox,
+                sections,
                 title,
                 archive: archive_page
                     .map(|page| {
