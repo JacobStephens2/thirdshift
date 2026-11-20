@@ -1313,6 +1313,33 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         .layer(middleware::from_fn(auth::headers))
 }
 
+#[derive(Default)]
+struct ReadyReview {
+    hide_problems: bool,
+    problems_first: bool,
+    empty_after_filter: bool,
+}
+
+impl ReadyReview {
+    fn apply(&mut self, inbox: &mut Inbox) {
+        let Some(section) = inbox
+            .sections
+            .iter_mut()
+            .find(|section| section.group == "ready for review")
+        else {
+            return;
+        };
+        if self.hide_problems {
+            let had_rows = !section.rows.is_empty();
+            section.rows.retain(|row| !row.needs_fix());
+            self.empty_after_filter = had_rows && section.rows.is_empty();
+        } else if self.problems_first {
+            // Stable sorting keeps the existing occurrence order within each group.
+            section.rows.sort_by_key(|row| !row.needs_fix());
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "console/inbox.html")]
 struct InboxPage {
@@ -1336,6 +1363,7 @@ struct InboxPage {
     section: String,
     machine: String,
     machines: Vec<fleet_inbox::Machine>,
+    ready_review: ReadyReview,
 }
 
 impl InboxPage {
@@ -1374,14 +1402,21 @@ impl InboxPage {
     }
     fn folder_url(&self, group: &str) -> String {
         let mut url = reqwest::Url::parse("http://localhost/").expect("fixed URL");
-        url.query_pairs_mut().append_pair("section", &slug(group));
+        let mut query = url.query_pairs_mut();
+        query.append_pair("section", &slug(group));
         if !self.machine.is_empty() {
-            url.query_pairs_mut().append_pair("machine", &self.machine);
+            query.append_pair("machine", &self.machine);
         }
         if !self.repository.is_empty() {
-            url.query_pairs_mut()
-                .append_pair("repository", &self.repository);
+            query.append_pair("repository", &self.repository);
         }
+        if self.ready_review.hide_problems {
+            query.append_pair("ready_filter", "hide-problems");
+        }
+        if self.ready_review.problems_first {
+            query.append_pair("ready_sort", "problems-first");
+        }
+        drop(query);
         format!(
             "/{}",
             url.query()
@@ -1590,6 +1625,12 @@ async fn render_page(
                         .retain(|reference| reference.repository.eq_ignore_ascii_case(&repository));
                 }
             }
+            let mut ready_review = ReadyReview::default();
+            if archive_page.is_none() {
+                ready_review.hide_problems = query_value(&query, "ready_filter") == "hide-problems";
+                ready_review.problems_first = query_value(&query, "ready_sort") == "problems-first";
+                ready_review.apply(&mut inbox);
+            }
             let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
@@ -1617,6 +1658,7 @@ async fn render_page(
                 section: query_value(&query, "section"),
                 machine,
                 machines,
+                ready_review,
             }
             .render()?)
         })

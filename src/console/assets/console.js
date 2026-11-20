@@ -76,7 +76,7 @@ function morph(html) {
   const selection = selected?.id || selected?.closest('details')?.id;
   const selectedSummary = selected?.matches('summary');
   const previousGrowth = growth();
-  const filters = new Map([...current.querySelectorAll('.machine-filter select')]
+  const filters = new Map([...current.querySelectorAll('.inbox-filter select')]
     .map(input => [input.name, input.value]));
   Idiomorph.morph(current, replacement, {
     callbacks: {
@@ -91,7 +91,7 @@ function morph(html) {
   });
   hideOptimisticallyDismissedRows();
   // A live refresh must keep choices the person has not submitted yet.
-  for (const input of current.querySelectorAll('.machine-filter select')) {
+  for (const input of current.querySelectorAll('.inbox-filter select')) {
     const value = filters.get(input.name);
     if ([...input.options].some(option => option.value === value)) input.value = value;
   }

@@ -77,9 +77,7 @@ pub(crate) struct Row {
     pub left: String,
     pub harness: String,
     pub pull_request: String,
-    pub ci: Option<crate::github::InboxCi>,
-    pub merge_conflict: bool,
-    pub stale_ci: Option<String>,
+    pub pr_checks: Option<PullRequestChecks>,
     pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
@@ -185,6 +183,12 @@ impl Timing {
 }
 
 impl Row {
+    pub fn needs_fix(&self) -> bool {
+        self.pr_checks
+            .as_ref()
+            .is_some_and(PullRequestChecks::needs_fix)
+    }
+
     fn present_needs_you_target(&mut self, kind: &str, repository: &str) {
         if !matches!(kind, "Review run" | "Triage run") {
             return;
@@ -224,9 +228,7 @@ impl Row {
             .filter(|title| !title.trim().is_empty())
             .unwrap_or("(title unavailable)")
             .into();
-        self.ci = Some(checks.ci());
-        self.merge_conflict = checks.has_merge_conflict();
-        self.stale_ci = checks.stale_ci.clone();
+        self.pr_checks = Some(checks.clone());
         self.fix_command = if checks.needs_fix() {
             pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
         } else {
@@ -624,9 +626,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             facts.effort.as_deref().unwrap_or("default Effort")
         ),
         pull_request: facts.pull_request.unwrap_or_default(),
-        ci: None,
-        merge_conflict: false,
-        stale_ci: None,
+        pr_checks: None,
         ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
             complete: facts
                 .tickets
@@ -889,9 +889,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
-                ci: None,
-                merge_conflict: false,
-                stale_ci: None,
+                pr_checks: None,
                 ticket_progress: None,
                 tickets: Vec::new(),
                 children: Vec::new(),

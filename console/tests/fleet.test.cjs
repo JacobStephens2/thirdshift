@@ -210,6 +210,24 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
+  const machine = 'remote-workstation-with-a-long-name';
+  await page.goto(`${caller.origin}/?section=overview&machine=${machine}&repository=acme%2Fwidgets`);
+  await ready.getByText('Merge conflict', { exact: true }).waitFor();
+  const readySection = page.getByRole('group', { name: 'Ready for review', exact: true });
+  await readySection.getByRole('combobox', { name: 'Show', exact: true })
+    .selectOption({ label: 'Hide CI red or Merge conflict' });
+  await Promise.all([
+    page.waitForURL(url => url.searchParams.get('ready_filter') === 'hide-problems'),
+    readySection.getByRole('button', { name: 'Apply', exact: true }).click(),
+  ]);
+  assert.equal(new URL(page.url()).searchParams.get('machine'), machine);
+  assert.equal(new URL(page.url()).searchParams.get('repository'), 'acme/widgets');
+  await readySection.getByText('All pull requests here have CI red or a Merge conflict.').waitFor();
+  assert.equal(await ready.count(), 0);
+  await page.getByRole('navigation', { name: 'Inbox sections' })
+    .getByRole('link', { name: 'Ready for review 0' }).click();
+  assert.equal(new URL(page.url()).searchParams.get('ready_filter'), 'hide-problems');
+  await readySection.getByText('All pull requests here have CI red or a Merge conflict.').waitFor();
   await page.goto(caller.origin);
   await ready.getByRole('button', { name: 'Copy', exact: true }).waitFor();
   cli(homes[1], ['console', 'token', 'revoke', 'caller']);
