@@ -44,8 +44,7 @@
       <label>Machine <select name="machine"><option value="">Whole Fleet</option><option value="{{ page.hostname }}"{% if machine == page.hostname %} selected{% endif %}>{{ page.hostname }}</option>{% for item in page.consoles %}<option value="{{ item.name }}"{% if machine == item.name %} selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
       <label>Repository <select name="repository"><option value="">Every repository</option>{% for value in repositories %}<option {% if value.eq_ignore_ascii_case(repository) %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
       <input type="hidden" name="section" value="{{ self.slug(self.folder()) }}">
-      {% if ready_review.hide_problems %}<input type="hidden" name="ready_filter" value="hide-problems">{% endif %}
-      {% if ready_review.problems_first %}<input type="hidden" name="ready_sort" value="problems-first">{% endif %}
+      {% for (name, value) in ready_review.query_pairs() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
       <button>Filter</button>
     </form>
     {# Folded on each page load, without folds.js: live updates keep the reader's choice until the next load. #}
@@ -82,13 +81,13 @@
       <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>
       {% if section.group == "ready for review" %}
       <form method="get" class="inbox-filter ready-review-filter">
-        <label>Show <select id="ready-review-show" name="ready_filter">
+        <label>Show <select id="ready-review-show" name="{{ ReadyReview::FILTER_PARAM }}">
           <option value="">All pull requests</option>
-          <option value="hide-problems"{% if ready_review.hide_problems %} selected{% endif %}>Hide CI red or Merge conflict</option>
+          <option value="{{ ReadyReview::HIDE_PROBLEMS }}"{% if ready_review.hide_problems %} selected{% endif %}>Hide CI red or Merge conflict</option>
         </select></label>
-        <label>Sort <select id="ready-review-sort" name="ready_sort">
+        <label>Sort <select id="ready-review-sort" name="{{ ReadyReview::SORT_PARAM }}">
           <option value="">Most recent first</option>
-          <option value="problems-first"{% if ready_review.problems_first %} selected{% endif %}>CI red or Merge conflict first</option>
+          <option value="{{ ReadyReview::PROBLEMS_FIRST }}"{% if ready_review.problems_first %} selected{% endif %}>CI red or Merge conflict first</option>
         </select></label>
         <input type="hidden" name="section" value="{{ self.slug(self.folder()) }}">
         {% if !machine.is_empty() %}<input type="hidden" name="machine" value="{{ machine }}">{% endif %}

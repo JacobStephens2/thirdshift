@@ -1321,6 +1321,30 @@ struct ReadyReview {
 }
 
 impl ReadyReview {
+    const FILTER_PARAM: &'static str = "ready_filter";
+    const SORT_PARAM: &'static str = "ready_sort";
+    const HIDE_PROBLEMS: &'static str = "hide-problems";
+    const PROBLEMS_FIRST: &'static str = "problems-first";
+
+    fn from_query(query: &Option<String>) -> Self {
+        Self {
+            hide_problems: query_value(query, Self::FILTER_PARAM) == Self::HIDE_PROBLEMS,
+            problems_first: query_value(query, Self::SORT_PARAM) == Self::PROBLEMS_FIRST,
+            ..Self::default()
+        }
+    }
+
+    fn query_pairs(&self) -> impl Iterator<Item = (&'static str, &'static str)> {
+        [
+            self.hide_problems
+                .then_some((Self::FILTER_PARAM, Self::HIDE_PROBLEMS)),
+            self.problems_first
+                .then_some((Self::SORT_PARAM, Self::PROBLEMS_FIRST)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
     fn apply(&mut self, inbox: &mut Inbox) {
         let Some(section) = inbox
             .sections
@@ -1410,12 +1434,7 @@ impl InboxPage {
         if !self.repository.is_empty() {
             query.append_pair("repository", &self.repository);
         }
-        if self.ready_review.hide_problems {
-            query.append_pair("ready_filter", "hide-problems");
-        }
-        if self.ready_review.problems_first {
-            query.append_pair("ready_sort", "problems-first");
-        }
+        query.extend_pairs(self.ready_review.query_pairs());
         drop(query);
         format!(
             "/{}",
@@ -1627,8 +1646,7 @@ async fn render_page(
             }
             let mut ready_review = ReadyReview::default();
             if archive_page.is_none() {
-                ready_review.hide_problems = query_value(&query, "ready_filter") == "hide-problems";
-                ready_review.problems_first = query_value(&query, "ready_sort") == "problems-first";
+                ready_review = ReadyReview::from_query(&query);
                 ready_review.apply(&mut inbox);
             }
             let targets = fleet_control::controls(&config, &viewer);

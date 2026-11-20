@@ -4,7 +4,7 @@ const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { mkdtemp, mkdir, readFile, writeFile, appendFile, utimes, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
-const { join, resolve } = require("node:path");
+const { delimiter, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("./playwright.cjs");
 const { record: traceRecord } = require("./session-trace.cjs");
@@ -15,7 +15,11 @@ before(async () => {
   home = await mkdtemp(join(tmpdir(), "thirdshift-console-"));
   const configDir = join(home, ".thirdshift");
   const records = join(configDir, "logs/acme/widgets/commands/issue");
+  const bin = join(home, "bin");
   await mkdir(records, { recursive: true });
+  // The tests supply kept GitHub facts, independently of the host's gh and network.
+  await mkdir(bin);
+  await writeFile(join(bin, "gh"), "#!/bin/sh\necho 'GitHub unavailable in the Inbox fixture' >&2\nexit 1\n", { mode: 0o755 });
   await writeFile(join(configDir, "config.toml"), '[console]\nport = 0\nfleet = [{ name = "other.example.test", address = "https://other.example.test" }]\n');
   for (let number = 1; number <= 10; number++) {
     const now = new Date().toISOString();
@@ -42,7 +46,9 @@ before(async () => {
     security_findings: [{ title: 'Bound <input> before storage', severity: 'high', url: 'https://github.com/acme/widgets/security/advisories/GHSA-test' }]
   }));
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift"), ["console", "--no-sign-in"], {
-    env: { ...process.env, HOME: home }, stdio: ["ignore", "pipe", "inherit"]
+    env: { ...process.env, HOME: home, PATH: [bin, process.env.PATH].join(delimiter),
+      THIRDSHIFT_GITHUB_INTERVAL_MS: "3600000" },
+    stdio: ["ignore", "pipe", "inherit"]
   });
   exited = once(server, "exit");
   const lines = createInterface({ input: server.stdout });
