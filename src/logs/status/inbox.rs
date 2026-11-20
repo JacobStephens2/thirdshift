@@ -97,6 +97,7 @@ pub(crate) struct Row {
     pub slow: bool,
     pub log_growth: String,
     pub selector: String,
+    pub selector_label: String,
     pub can_dismiss: bool,
     pub remote_stop: bool,
     pub remote_undo: bool,
@@ -535,6 +536,12 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     // A child Ticket shares its outer Command log, but owns a different
     // record. Use the owning observation's path rather than the log stem.
     let selector = super::document_selector(value);
+    let selector_label = selector_label(
+        &selector,
+        value["record_path"]
+            .as_str()
+            .or_else(|| value["command_log"].as_str()),
+    );
     let process =
         (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
     let live_target = live && matches!(facts.kind.as_str(), "Fix run" | "Review run");
@@ -579,6 +586,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
         slow: matches!(facts.health, Some(Health::Slow { .. })),
         log_growth: String::new(),
+        selector_label: selector_label.to_owned(),
         selector,
         can_dismiss: facts.account.is_none()
             && matches!(
@@ -888,6 +896,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 slow: false,
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
+                selector_label: String::new(),
                 can_dismiss: false,
                 remote_stop: false,
                 remote_undo: false,
@@ -1118,6 +1127,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         ));
         row.log_growth = format!("{log_length}:{session_length}");
         row.selector = Observation::Record(command).selector().unwrap_or_default();
+        row.selector_label = selector_label(&row.selector, command.record_path.to_str()).to_owned();
         row.logs_url = logs_url(&command.record_path, root, command.account.as_deref());
         row.timing = Timing::new(
             row.live,
@@ -1141,6 +1151,16 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let mut row = present(&serde_json::to_value(command)?, now)?;
     attach_local(&mut row, command, now, root)?;
     Ok(row)
+}
+
+fn selector_label<'a>(selector: &'a str, storage_path: Option<&str>) -> &'a str {
+    // Only trim the directory named by the observation. Both the path and
+    // Command name can contain characters used in the opaque selector.
+    storage_path
+        .and_then(|path| path.rsplit_once('/'))
+        .and_then(|(directory, _)| selector.strip_prefix(directory))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(selector)
 }
 
 fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {

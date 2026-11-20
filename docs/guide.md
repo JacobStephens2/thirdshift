@@ -3335,8 +3335,8 @@ Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. `dismiss --json` reports what it did.
 
-In the Console, viewers with permission can click **Dismiss** on a Command row
-in Needs you or Ready for review, or in Command details beside Stop when available.
+In the Console, viewers with permission can click **Dismiss** on the row for a
+Command in Needs you or Ready for review, or in Command details beside Stop when available.
 For a grouped PR, expand **contributing Commands** and use the control beside
 the intended Command. Dismiss and Undo go to that Command's owning machine.
 The PR stays in Ready for review while another visible Command still waits.

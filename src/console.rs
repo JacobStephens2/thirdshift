@@ -1494,13 +1494,6 @@ impl RowTemplate<'_> {
         }
     }
 
-    fn command_file(&self) -> &str {
-        let selector = self.row.selector.as_str();
-        let path = selector.split_once("::").map_or(selector, |(path, _)| path);
-        path.rfind('/')
-            .map_or(selector, |slash| &selector[slash + 1..])
-    }
-
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,

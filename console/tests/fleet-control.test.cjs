@@ -1,8 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
-const { utimes, writeFile } = require('node:fs/promises');
-const { hostname } = require('node:os');
+const { mkdtemp, rmdir, utimes, writeFile } = require('node:fs/promises');
+const { hostname, tmpdir } = require('node:os');
 const { basename, join } = require('node:path');
 const { record: traceRecord } = require('./session-trace.cjs');
 const { startFixture } = require('./start-fixture.cjs');
@@ -146,6 +146,31 @@ test('Ready members with identical qualified names show different record names',
   assert.equal(await members.count(), 2);
   const labels = await members.locator('.member-command code').allTextContents();
   assert.deepEqual(labels.sort(), records.map(record => `${basename(record)}::acme/widgets#116`).sort());
+});
+
+test('Ready member record labels stay compact when the path contains double colons', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ready::parent-'));
+  let fixture;
+  t.after(async () => {
+    await fixture?.close();
+    await rmdir(directory);
+  });
+  const original = process.env.TMPDIR;
+  try {
+    process.env.TMPDIR = directory;
+    fixture = await startFixture({ THIRDSHIFT_GITHUB_INTERVAL_MS: '3600000' });
+  } finally {
+    if (original === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = original;
+  }
+  const timestamp = new Date().toISOString();
+  const facts = { name: 'review-116', pull_request: 'https://github.com/acme/widgets/pull/116', started_at: timestamp, ended_at: timestamp };
+  const records = [await fixture.readyPullRequest(116, facts), await fixture.readyPullRequest(216, facts)];
+  const page = await fixture.page();
+  const group = page.locator('.review-group');
+  await group.locator('summary').click();
+  const labels = await group.locator('.member-command code').allTextContents();
+  assert.deepEqual(labels.sort(), records.map(record => `${basename(record)}::review-116`).sort());
 });
 
 test('A failed Dismiss restores a navigable selection when another Ready member arrives', async t => {
