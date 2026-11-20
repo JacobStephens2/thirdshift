@@ -155,10 +155,12 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
         }
     }
     let text = scenario.run(&["status"]);
+    let machine = text.stdout.lines().next().expect("status names the host");
+    let dispatched_prefix = format!("    [{machine}] Ticket run acme/widgets#7");
     let dispatched = text
         .stdout
         .lines()
-        .find(|line| line.starts_with("  Ticket run acme/widgets#7"))
+        .find(|line| line.starts_with(&dispatched_prefix))
         .expect(&text.stdout);
     assert!(dispatched.ends_with("ready for review"), "{dispatched}");
 }
@@ -315,8 +317,12 @@ fn pickup_row_after(change: impl FnOnce(&mut Value)) -> String {
     fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = scenario.run(&["status"]);
     assert_eq!(text.code, Some(0), "{}", text.stderr);
-    text.stdout
-        .lines()
+    // Ready Commands are indented under the PR heading with their machine tag.
+    let mut lines = text.stdout.lines();
+    let machine = lines.next().expect("status names the host");
+    let ready_member_prefix = format!("  [{machine}] ");
+    lines
+        .map(|line| line.strip_prefix(&ready_member_prefix).unwrap_or(line))
         .find(|line| line.starts_with("Pickup run "))
         .expect(&text.stdout)
         .to_string()
