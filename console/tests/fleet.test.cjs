@@ -131,9 +131,16 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await remoteRows.first().waitFor();
   let releaseRefresh;
   const refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
+  let dismissSubmitted = false;
   const holdRefresh = async route => {
     const request = route.request();
-    if (new URL(request.url()).pathname === '/' && request.method() === 'GET' && !request.isNavigationRequest() && !request.redirectedFrom()) await refreshGate;
+    const path = new URL(request.url()).pathname;
+    if (path === '/dismiss' && request.method() === 'POST') dismissSubmitted = true;
+    // Let Fleet refreshes restore Dismiss if a stale answer hides it before the click.
+    if (dismissSubmitted && path === '/' && request.method() === 'GET' &&
+        !request.isNavigationRequest() && !request.redirectedFrom()) {
+      await refreshGate;
+    }
     await route.continue();
   };
   await page.route(`${caller.origin}/**`, holdRefresh);
