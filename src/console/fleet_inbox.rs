@@ -108,7 +108,7 @@ fn timing(variable: &str, seconds: u64) -> Duration {
 
 fn read(entry: &Entry, token: &str, person: Option<&str>) -> ReadResult {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(timing("THIRDSHIFT_FLEET_READ_TIMEOUT_MS", 3))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| {
@@ -291,14 +291,22 @@ impl Fleet {
                     });
                 for person in people {
                     for (entry, token) in live.iter().cloned() {
+                        let mut answers = fleet.answers.lock().unwrap();
+                        let started_at = Instant::now();
                         let request = InboxRead {
                             person: person.clone(),
                             entry,
-                            started_at: Instant::now(),
+                            started_at,
                         };
-                        if !fetching.insert(request.key()) {
+                        let key = request.key();
+                        if !fetching.insert(key.clone()) {
                             continue;
                         }
+                        // A save can fence the first poll even if the viewer leaves.
+                        answers
+                            .entry(key)
+                            .or_insert_with(|| Answer::new(request.entry.clone(), started_at));
+                        drop(answers);
                         jobs.spawn_blocking(move || request.fetch(&token));
                     }
                 }
@@ -351,7 +359,9 @@ impl Fleet {
             }
             let Some(answer) = answers
                 .get(&(person.map(str::to_owned), entry.name.clone()))
-                .filter(|answer| answer.entry == *entry)
+                .filter(|answer| {
+                    answer.entry == *entry && (answer.good.is_some() || answer.error.is_some())
+                })
             else {
                 continue;
             };

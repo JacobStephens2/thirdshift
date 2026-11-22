@@ -29,6 +29,27 @@ async function files(root) {
 }
 
 const machine = 'remote-workstation-with-a-long-name';
+const fixtureEmails = ['actor@example.test', 'viewer@example.test'];
+
+async function seedAccounts(config, emails) {
+  // Fixture hash for "browser test password".
+  const password_hash = '$argon2id$v=19$m=19456,t=2,p=1$Yd89fw8Yx3I9TbhuY+Y/cQ$NhL+Lqg2T9nXrlM8NKBaQ3dpVpRWjRsyYbeNkQS8Q7s';
+  const accounts = Object.fromEntries(emails.map(email => [email, { password_hash, sessions: {} }]));
+  await writeFile(join(config, 'console-accounts.json'), JSON.stringify(accounts), { mode: 0o600 });
+}
+
+async function signIn(browser, origin, email) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(origin);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password', { exact: true }).fill('browser test password');
+  await Promise.all([
+    page.waitForURL(`${origin}/`),
+    page.getByRole('button', { name: 'Sign in', exact: true }).click(),
+  ]);
+  return page;
+}
 
 async function fleetPair(t, interval, stale, emails = []) {
   const root = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-inbox-'));
@@ -49,12 +70,7 @@ async function fleetPair(t, interval, stale, emails = []) {
     const scopes = emails.length && index === 1 ? `address_scopes = { "${emails[1]}" = ["read"] }\n` : '';
     await writeFile(join(home, '.thirdshift/config.toml'),
       `[console]\nport = 0\nallowed_emails = ${JSON.stringify(emails)}\n${scopes}`);
-    if (emails.length) {
-      // Fixture hash for "browser test password".
-      const password_hash = '$argon2id$v=19$m=19456,t=2,p=1$Yd89fw8Yx3I9TbhuY+Y/cQ$NhL+Lqg2T9nXrlM8NKBaQ3dpVpRWjRsyYbeNkQS8Q7s';
-      const accounts = Object.fromEntries(emails.map(email => [email, { password_hash, sessions: {} }]));
-      await writeFile(join(home, '.thirdshift/console-accounts.json'), JSON.stringify(accounts), { mode: 0o600 });
-    }
+    if (emails.length) await seedAccounts(join(home, '.thirdshift'), emails);
     const now = new Date().toISOString();
     await writeFile(join(dir, '1-fixture.command.json'), JSON.stringify({
       version: 1, kind: 'Run', name: 'fixture', repository: 'acme/widgets', hostname: 'fixture',
@@ -91,21 +107,9 @@ async function fleetPair(t, interval, stale, emails = []) {
 }
 
 test('Fleet Inbox keeps a saved Dismissal through a caller refresh before the next poll', async t => {
-  const emails = ['actor@example.test', 'viewer@example.test'];
-  const { homes, remote, caller, browser } = await fleetPair(t, '3600000', '60000', emails);
-  async function signIn(origin, email) {
-    const page = await browser.newPage();
-    await page.goto(origin);
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password', { exact: true }).fill('browser test password');
-    await Promise.all([
-      page.waitForURL(`${origin}/`),
-      page.getByRole('button', { name: 'Sign in', exact: true }).click(),
-    ]);
-    return page;
-  }
-  const page = await signIn(caller.origin, emails[0]);
-  const observer = await signIn(caller.origin, emails[1]);
+  const { homes, remote, caller, browser } = await fleetPair(t, '3600000', '60000', fixtureEmails);
+  const page = await signIn(browser, caller.origin, fixtureEmails[0]);
+  const observer = await signIn(browser, caller.origin, fixtureEmails[1]);
   const remoteRow = `.command[data-machine="${machine}"]`;
   const waiting = `#inbox > [data-group="needs you"] ${remoteRow}`;
   const done = `#inbox > [data-group="done"] ${remoteRow}`;
@@ -116,7 +120,7 @@ test('Fleet Inbox keeps a saved Dismissal through a caller refresh before the ne
     response.request().method() === 'POST');
   await dismiss.click();
   assert.equal((await saved).status(), 200);
-  const owner = await signIn(remote.origin, emails[0]);
+  const owner = await signIn(browser, remote.origin, fixtureEmails[0]);
   assert.equal(await owner.locator('#inbox > [data-group="done"] .command').count(), 1);
 
   const localPath = join(homes[0], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
@@ -135,11 +139,13 @@ test('Fleet Inbox keeps a saved Dismissal through a caller refresh before the ne
   assert.equal(await observer.locator(waiting).getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
 });
 
-test('a Fleet poll failure cannot hide the successful owning Inbox read after Undo', { timeout: 20000 }, async t => {
-  const home = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-undo-'));
+async function fakeFleet(t, serve, emails = []) {
+  const home = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-fake-owner-'));
   const config = join(home, '.thirdshift');
   const dir = join(config, 'logs/acme/widgets/commands/issue');
-  const env = { ...process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '3600000' };
+  // The held reads wait for browser subscriptions and renders, even on a busy runner.
+  const env = { ...process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '3600000',
+    THIRDSHIFT_FLEET_READ_TIMEOUT_MS: '12000' };
   const cli = args => execFileSync(binary, args, { env, encoding: 'utf8' });
   const record = join(dir, '1-fixture.command.json');
   await mkdir(dir, { recursive: true });
@@ -156,33 +162,12 @@ test('a Fleet poll failure cannot hide the successful owning Inbox read after Un
   const dismissal = cli(['dismiss', record, '--json']);
   const done = status();
   const undo = cli(['dismiss', record, '--undo', '--json']);
-  let dismissed = false;
-  let undoSaved = false;
-  let held;
-  const undoRead = Promise.withResolvers();
+  await rm(record);
   const owner = createServer((request, response) => {
     if (request.url === '/api/v1/whoami') return response.end(JSON.stringify({
       version: 1, api_version: 'v1', hostname: 'owner', thirdshift_version: 'fixture', scopes: ['read', 'act'],
     }));
-    if (request.url === '/api/v1/dismiss') {
-      dismissed = true;
-      return response.end(dismissal);
-    }
-    if (request.url === '/api/v1/dismiss/undo') {
-      undoSaved = true;
-      return response.end(undo);
-    }
-    if (request.url.startsWith('/api/v1/status?')) {
-      if (!undoSaved) return response.end(dismissed ? done : waiting);
-      if (!held) {
-        held = response;
-        undoRead.resolve();
-        return;
-      }
-      response.writeHead(503).end();
-      return;
-    }
-    response.writeHead(404).end();
+    serve(request, response, { waiting, dismissal, done, undo });
   });
   let server, exited, browser;
   t.after(async () => {
@@ -195,15 +180,46 @@ test('a Fleet poll failure cannot hide the successful owning Inbox read after Un
   });
   await new Promise(resolve => owner.listen(0, '127.0.0.1', resolve));
   const address = `http://127.0.0.1:${owner.address().port}`;
-  await writeFile(join(config, 'config.toml'), `[console]\nport = 0\nfleet = [{name = "owner", address = "${address}"}]\n`);
+  await writeFile(join(config, 'config.toml'),
+    `[console]\nport = 0\nallowed_emails = ${JSON.stringify(emails)}\nfleet = [{name = "owner", address = "${address}"}]\n`);
   await writeFile(join(config, 'credentials.toml'), '[fleet]\nowner = "fixture"\n', { mode: 0o600 });
-  server = spawn(binary, ['console', '--no-sign-in'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  if (emails.length) await seedAccounts(config, emails);
+  const args = emails.length ? ['console'] : ['console', '--no-sign-in'];
+  server = spawn(binary, args, { env, stdio: ['ignore', 'pipe', 'inherit'] });
   exited = once(server, 'exit');
   const lines = createInterface({ input: server.stdout });
   let origin;
   try { [origin] = await once(lines, 'line', { signal: AbortSignal.timeout(15000) }); }
   finally { lines.close(); }
   browser = await chromium.launch();
+  return { browser, origin };
+}
+
+test('a Fleet poll failure cannot hide the successful owning Inbox read after Undo', { timeout: 20000 }, async t => {
+  let dismissed = false;
+  let undoSaved = false;
+  let releaseHeld;
+  const undoRead = Promise.withResolvers();
+  const { browser, origin } = await fakeFleet(t, (request, response, { waiting, dismissal, done, undo }) => {
+    if (request.url === '/api/v1/dismiss') {
+      dismissed = true;
+      return response.end(dismissal);
+    }
+    if (request.url === '/api/v1/dismiss/undo') {
+      undoSaved = true;
+      return response.end(undo);
+    }
+    if (request.url.startsWith('/api/v1/status?')) {
+      if (!undoSaved) return response.end(dismissed ? done : waiting);
+      if (!releaseHeld) {
+        releaseHeld = () => response.end(waiting);
+        undoRead.resolve();
+        return;
+      }
+      return response.writeHead(503).end();
+    }
+    return response.writeHead(404).end();
+  });
   const page = await browser.newPage();
   await page.goto(origin);
   const row = group => page.locator(`#inbox > [data-group="${group}"] .command[data-machine="owner"]`);
@@ -216,9 +232,54 @@ test('a Fleet poll failure cannot hide the successful owning Inbox read after Un
   // A new subscription starts another poll while the post-Undo read is held.
   await page.evaluate(() => { window.extraInboxSubscription = new EventSource('/events'); });
   await page.getByText('Inbox request returned HTTP 503', { exact: false }).waitFor({ state: 'attached' });
-  held.end(waiting);
+  releaseHeld();
   assert.equal((await saved).status(), 200);
   await row('needs you').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+});
+
+test('a closed Inbox cannot repopulate its first pre-Dismiss Fleet answer', { timeout: 20000 }, async t => {
+  const oldRead = Promise.withResolvers();
+  const afterClosePoll = Promise.withResolvers();
+  let closed = false;
+  let saved = false;
+  const { browser, origin } = await fakeFleet(t, (request, response, { waiting, dismissal, done }) => {
+    if (request.url === '/api/v1/dismiss') {
+      saved = true;
+      return response.end(dismissal);
+    }
+    if (request.url.startsWith('/api/v1/status?')) {
+      if (!saved && request.headers['x-thirdshift-person'] === fixtureEmails[1]) {
+        oldRead.resolve(() => response.end(waiting));
+        return;
+      }
+      if (closed && !saved) afterClosePoll.resolve();
+      return response.end(saved ? done : waiting);
+    }
+    return response.writeHead(404).end();
+  }, fixtureEmails);
+  const actor = await signIn(browser, origin, fixtureEmails[0]);
+  const dismiss = actor.locator('#inbox > [data-group="needs you"] .command[data-machine="owner"]')
+    .getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor();
+  const observer = await signIn(browser, origin, fixtureEmails[1]);
+  const viewer = observer.context();
+  const releaseOld = await oldRead.promise;
+  closed = true;
+  await observer.close();
+  await afterClosePoll.promise;
+  const post = actor.waitForResponse(response => response.url() === `${origin}/dismiss` &&
+    response.request().method() === 'POST');
+  await dismiss.click();
+  assert.equal((await post).status(), 200);
+  await actor.locator('#inbox > [data-group="done"] .command[data-machine="owner"]').waitFor({ state: 'attached' });
+  releaseOld();
+
+  // Fetch the initial page as the viewer without opening a new subscription.
+  for (let read = 0; read < 10; read++) {
+    const response = await viewer.request.get(origin);
+    const html = await response.text();
+    assert.equal(/<title>1 need you/.test(html), false, 'the first pre-save answer must not return the dismissed row');
+  }
 });
 
 test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
