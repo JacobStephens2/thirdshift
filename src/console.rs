@@ -1323,8 +1323,8 @@ struct ReadyReview {
 #[derive(Default, PartialEq, Eq)]
 enum ReadyReviewSort {
     #[default]
-    MostRecentFirst,
-    OldestFirst,
+    MostRecent,
+    Oldest,
     ProblemsFirst,
 }
 
@@ -1339,9 +1339,9 @@ impl ReadyReview {
         Self {
             hide_problems: query_value(query, Self::FILTER_PARAM) == Self::HIDE_PROBLEMS,
             sort: match query_value(query, Self::SORT_PARAM).as_str() {
-                Self::OLDEST_FIRST => ReadyReviewSort::OldestFirst,
+                Self::OLDEST_FIRST => ReadyReviewSort::Oldest,
                 Self::PROBLEMS_FIRST => ReadyReviewSort::ProblemsFirst,
-                _ => ReadyReviewSort::MostRecentFirst,
+                _ => ReadyReviewSort::MostRecent,
             },
             ..Self::default()
         }
@@ -1352,8 +1352,8 @@ impl ReadyReview {
             self.hide_problems
                 .then_some((Self::FILTER_PARAM, Self::HIDE_PROBLEMS)),
             match self.sort {
-                ReadyReviewSort::MostRecentFirst => None,
-                ReadyReviewSort::OldestFirst => Some((Self::SORT_PARAM, Self::OLDEST_FIRST)),
+                ReadyReviewSort::MostRecent => None,
+                ReadyReviewSort::Oldest => Some((Self::SORT_PARAM, Self::OLDEST_FIRST)),
                 ReadyReviewSort::ProblemsFirst => Some((Self::SORT_PARAM, Self::PROBLEMS_FIRST)),
             },
         ]
@@ -1374,7 +1374,7 @@ impl ReadyReview {
             self.empty_after_filter = had_rows && section.rows.is_empty();
         }
         match self.sort {
-            ReadyReviewSort::OldestFirst => {
+            ReadyReviewSort::Oldest => {
                 section
                     .rows
                     .sort_by_key(status::DisplayRow::completion_time);
@@ -1382,7 +1382,7 @@ impl ReadyReview {
             ReadyReviewSort::ProblemsFirst if !self.hide_problems => {
                 section.rows.sort_by_key(|row| !row.needs_fix());
             }
-            _ => {}
+            ReadyReviewSort::MostRecent | ReadyReviewSort::ProblemsFirst => {}
         }
     }
 }
