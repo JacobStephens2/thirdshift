@@ -87,7 +87,8 @@
         </select></label>
         <label>Sort <select id="ready-review-sort" name="{{ ReadyReview::SORT_PARAM }}">
           <option value="">Most recent first</option>
-          <option value="{{ ReadyReview::PROBLEMS_FIRST }}"{% if ready_review.problems_first %} selected{% endif %}>CI red or Merge conflict first</option>
+          <option value="{{ ReadyReview::OLDEST_FIRST }}"{% if ready_review.sort == ReadyReviewSort::Oldest %} selected{% endif %}>Oldest first</option>
+          <option value="{{ ReadyReview::PROBLEMS_FIRST }}"{% if ready_review.sort == ReadyReviewSort::ProblemsFirst %} selected{% endif %}>CI red or Merge conflict first</option>
         </select></label>
         <input type="hidden" name="section" value="{{ self.slug(self.folder()) }}">
         {% if !machine.is_empty() %}<input type="hidden" name="machine" value="{{ machine }}">{% endif %}
@@ -106,8 +107,9 @@
         {%- match item -%}
         {%- when status::DisplayRow::Command with (row) -%}{{ self.row(row, true)|safe }}
         {%- when status::DisplayRow::PullRequest with (pr, members) -%}
+        {%- let latest = item.heading() -%}
         {%- if members.len() > 1 -%}{% include "console/review_group.html" %}
-        {%- else -%}{{ self.review_single(members[0], pr.id.as_str())|safe }}{%- endif -%}
+        {%- else -%}{{ self.review_single(latest, pr.id.as_str())|safe }}{%- endif -%}
         {%- endmatch -%}
         {%- endfor -%}
       </ul>
