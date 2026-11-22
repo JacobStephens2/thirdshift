@@ -107,8 +107,9 @@
         {%- match item -%}
         {%- when status::DisplayRow::Command with (row) -%}{{ self.row(row, true)|safe }}
         {%- when status::DisplayRow::PullRequest with (pr, members) -%}
+        {%- let latest = item.heading() -%}
         {%- if members.len() > 1 -%}{% include "console/review_group.html" %}
-        {%- else -%}{{ self.review_single(members[0], pr.id.as_str())|safe }}{%- endif -%}
+        {%- else -%}{{ self.review_single(latest, pr.id.as_str())|safe }}{%- endif -%}
         {%- endmatch -%}
         {%- endfor -%}
       </ul>

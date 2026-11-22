@@ -118,6 +118,30 @@ test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the 
   assert.equal(await local.getByRole('button', { name: /Dismiss/ }).count(), 1);
 });
 
+test('Oldest first uses a Fleet Command’s start when its completion is unknown', async t => {
+  const owner = await startFixture();
+  t.after(() => owner.close());
+  const caller = await startFixture({ THIRDSHIFT_FLEET_INTERVAL_MS: '150' });
+  t.after(() => caller.close());
+  const token = owner.cli(['console', 'token', 'create', 'watcher', '--scopes', 'read']).trim();
+  caller.cli(['console', 'fleet', 'add', 'relay', owner.origin], `${token}\n`);
+  const now = Date.now();
+  const minutesAgo = minutes => new Date(now - minutes * 60_000);
+  const legacy = await owner.readyPullRequest(616, { started_at: minutesAgo(20).toISOString(), ended_at: null });
+  await utimes(legacy, minutesAgo(1), minutesAgo(1));
+  await caller.readyPullRequest(617, { started_at: minutesAgo(15).toISOString(), ended_at: minutesAgo(10).toISOString() });
+
+  const page = await caller.page();
+  t.after(() => page.context().close());
+  await page.goto(`${caller.origin}/?section=ready-for-review&ready_sort=oldest-first`);
+  const rows = page.locator('#inbox > [data-group="ready for review"] > .commands > li');
+  const remote = rows.filter({ has: page.getByRole('link', { name: /acme\/widgets\s*#616/ }) });
+  await remote.waitFor({ timeout: 15_000 });
+  assert.deepEqual(await rows.locator('.row-head > .subject a').evaluateAll(
+    links => links.map(link => Number(link.href.split('/').at(-1)))), [616, 617]);
+  assert.equal(await remote.locator('.age').textContent(), 'End time unknown');
+});
+
 test('Text status pairs stale GitHub facts with the Fleet Command that supplied them', async t => {
   const env = { THIRDSHIFT_GITHUB_INTERVAL_MS: '3600000' };
   const peer = await startFixture(env);

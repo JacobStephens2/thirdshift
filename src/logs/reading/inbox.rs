@@ -141,6 +141,9 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// A live Command given a Stop, still ending.
     pub stopping: bool,
     pub count: usize,
+    /// Fleet presentation must distinguish a legacy retention estimate from a recorded finish.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    end_time_estimated: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collapsed: Vec<InboxItem<'a>>,
     /// A waiting group's departure, absent for rows that never waited or aged out.
@@ -750,6 +753,8 @@ pub(super) fn evaluate<'a>(
                 landing,
                 stopping,
                 count: 1,
+                end_time_estimated: group == Group::ReadyForReview
+                    && matches!(command, Observation::Record(command) if command.record.end_time_estimated),
                 collapsed: Vec::new(),
                 departure: departure.map(|(reason, at)| Departure {
                     left_from: from.expect("departed rows waited").to_string(),

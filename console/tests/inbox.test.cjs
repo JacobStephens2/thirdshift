@@ -2271,7 +2271,7 @@ test('Ready for review filters and stably sorts through live updates', async t =
         issue: null, outcome: 'ready for review', cause: null, tickets: [], pull_request: pull(number) }));
       // Local legacy records estimate their completion from the record's modification time.
       if (end === null) {
-        const estimatedEnd = new Date(minutesAgo(start));
+        const estimatedEnd = new Date(minutesAgo(8));
         await utimes(path, estimatedEnd, estimatedEnd);
       }
     };
@@ -2293,7 +2293,7 @@ test('Ready for review filters and stably sorts through live updates', async t =
       page.waitForURL(url => url.searchParams.get(name) === value),
       apply.click(),
     ]);
-    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 617, 616]);
     assert.equal(await show.locator('option:checked').textContent(), 'All pull requests');
     assert.equal(await sort.locator('option:checked').textContent(), 'Most recent first');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -2329,11 +2329,12 @@ test('Ready for review filters and stably sorts through live updates', async t =
       'the idle notice still points to waiting pull requests when their rows are filtered');
     await show.selectOption({ label: 'All pull requests' });
     await submit('ready_filter', '');
-    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 617, 616]);
 
     await sort.selectOption({ label: 'Oldest first' });
     await submit('ready_sort', 'oldest-first');
-    const oldestFirst = [616, 617, 615, 614, 613, 612, 611, 610];
+    // The legacy Command starts when #617 completed. Keep their existing order for the tie.
+    const oldestFirst = [617, 616, 615, 614, 613, 612, 611, 610];
     assert.deepEqual(await order(), oldestFirst);
     const group = section.locator('.review-group');
     assert.equal(await group.locator('.review-heading time').getAttribute('datetime'), minutesAgo(1));
