@@ -81,10 +81,19 @@ pub(super) struct Page {
 
 pub(super) async fn submit(
     viewer: super::auth::Viewer,
-    fleet: super::fleet_inbox::Fleet,
     machine: String,
     command: String,
     action: Action,
+) -> Response {
+    submit_then(viewer, machine, command, action, |_, _, _| {}).await
+}
+
+pub(super) async fn submit_then(
+    viewer: super::auth::Viewer,
+    machine: String,
+    command: String,
+    action: Action,
+    on_success: impl FnOnce(&PairedMachine, Option<&str>, &str) + Send + 'static,
 ) -> Response {
     let person = viewer.fleet_person().map(str::to_owned);
     let undo = matches!(action, Action::Dismiss { undo: false });
@@ -92,8 +101,8 @@ pub(super) async fn submit(
         let config = UserConfig::load()?;
         let destination = PairedMachine::load(&config, &machine)?;
         let answer = request(&destination, person.as_deref(), &command, action)?;
-        if answer.status.is_success() && matches!(action, Action::Dismiss { .. }) {
-            fleet.dismissal_saved(&destination, person.as_deref(), &command);
+        if answer.status.is_success() {
+            on_success(&destination, person.as_deref(), &command);
         }
         let html = Page {
             page: super::PageContext::new(&config, &viewer.scopes),

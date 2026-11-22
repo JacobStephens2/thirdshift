@@ -40,12 +40,12 @@ async fn change(
     undo: bool,
 ) -> Response {
     if !form.machine.is_empty() && format == super::api::Format::Html {
-        return super::fleet_actions::submit(
+        return super::fleet_actions::submit_then(
             viewer,
-            fleet,
             form.machine,
             form.command,
             super::fleet_actions::Action::Dismiss { undo },
+            move |destination, person, command| fleet.dismissal_saved(destination, person, command),
         )
         .await;
     }

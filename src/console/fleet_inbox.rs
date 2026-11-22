@@ -25,7 +25,7 @@ pub(super) struct Fleet {
 
 struct Answer {
     entry: Entry,
-    requested_at: Instant,
+    read_floor: Instant,
     good: Option<Document>,
     fetched_at: Option<DateTime<Utc>>,
     error: Option<(Reachability, String)>,
@@ -36,13 +36,38 @@ impl Answer {
     fn new(entry: Entry, requested_at: Instant) -> Self {
         Self {
             entry,
-            requested_at,
+            read_floor: requested_at,
             good: None,
             fetched_at: None,
             error: None,
             scopes: Vec::new(),
         }
     }
+}
+
+struct InboxRead {
+    person: Option<String>,
+    entry: Entry,
+    started_at: Instant,
+}
+
+impl InboxRead {
+    fn key(&self) -> AnswerKey {
+        (self.person.clone(), self.entry.name.clone())
+    }
+
+    fn fetch(self, token: &str) -> InboxAnswer {
+        let result = read(&self.entry, token, self.person.as_deref());
+        InboxAnswer {
+            request: self,
+            result,
+        }
+    }
+}
+
+struct InboxAnswer {
+    request: InboxRead,
+    result: ReadResult,
 }
 
 pub(super) struct Lease(
@@ -120,26 +145,28 @@ impl Fleet {
         Lease(self.pages.clone(), person)
     }
 
-    fn keep(&self, key: AnswerKey, entry: Entry, requested_at: Instant, result: ReadResult) {
+    fn keep(&self, response: InboxAnswer) {
+        let InboxAnswer { request, result } = response;
         let mut answers = self.answers.lock().unwrap();
         let answer = answers
-            .entry(key)
-            .or_insert_with(|| Answer::new(entry.clone(), requested_at));
-        if requested_at < answer.requested_at {
+            .entry(request.key())
+            .or_insert_with(|| Answer::new(request.entry.clone(), request.started_at));
+        if request.started_at < answer.read_floor {
             return;
         }
-        if answer.entry != entry {
-            *answer = Answer::new(entry, requested_at);
+        if answer.entry != request.entry {
+            *answer = Answer::new(request.entry, request.started_at);
         }
-        answer.requested_at = requested_at;
         match result {
             Ok((document, scopes)) => {
+                answer.read_floor = request.started_at;
                 answer.good = Some(document);
                 answer.scopes = scopes;
                 answer.fetched_at = Some(Utc::now());
                 answer.error = None;
             }
             Err(error) => {
+                // A later failed read must still let an earlier usable snapshot through.
                 answer.error = Some(error);
                 answer.scopes.clear();
             }
@@ -147,34 +174,64 @@ impl Fleet {
         self.notifier.commands();
     }
 
-    /// Re-read the owning Inbox after a successful Dismiss or Undo. Until it
-    /// answers, the cached row for that Command is known to be out of date.
+    /// Re-read the owning Inbox as each viewer after a successful Dismiss or Undo.
+    /// The acting viewer's read completes before the action response is sent.
     pub fn dismissal_saved(
         &self,
         destination: &super::fleet::PairedMachine,
         person: Option<&str>,
         command: &str,
     ) {
-        let entry = &destination.entry;
-        let key = (person.map(str::to_owned), entry.name.clone());
-        let requested_at = {
+        let mut people = self.pages.borrow().keys().cloned().collect::<BTreeSet<_>>();
+        people.insert(person.map(str::to_owned));
+        let reads = {
             let mut answers = self.answers.lock().unwrap();
-            let requested_at = Instant::now();
-            let answer = answers
-                .entry(key.clone())
-                .or_insert_with(|| Answer::new(entry.clone(), requested_at));
-            if answer.entry != *entry {
-                return;
-            }
-            // A poll that began before the save can no longer replace this answer.
-            answer.requested_at = requested_at;
-            if let Some(document) = &mut answer.good {
-                document.omit_command(command);
-            }
-            requested_at
+            let started_at = Instant::now();
+            people.extend(
+                answers
+                    .keys()
+                    .filter(|(_, machine)| machine == &destination.entry.name)
+                    .map(|(viewer, _)| viewer.clone()),
+            );
+            people
+                .into_iter()
+                .filter_map(|person| {
+                    let request = InboxRead {
+                        person,
+                        entry: destination.entry.clone(),
+                        started_at,
+                    };
+                    let answer = answers
+                        .entry(request.key())
+                        .or_insert_with(|| Answer::new(request.entry.clone(), started_at));
+                    if answer.entry != request.entry {
+                        return None;
+                    }
+                    // This cached row and any poll in flight may predate the save.
+                    answer.read_floor = started_at;
+                    if let Some(document) = &mut answer.good {
+                        document.omit_command(command);
+                    }
+                    Some(request)
+                })
+                .collect::<Vec<_>>()
         };
-        let result = read(entry, &destination.token, person);
-        self.keep(key, entry.clone(), requested_at, result);
+        self.notifier.commands();
+        let mut caller = None;
+        for request in reads {
+            if request.person.as_deref() == person {
+                caller = Some(request);
+            } else {
+                let fleet = self.clone();
+                let token = destination.token.clone();
+                drop(tokio::task::spawn_blocking(move || {
+                    fleet.keep(request.fetch(&token))
+                }));
+            }
+        }
+        if let Some(request) = caller {
+            self.keep(request.fetch(&destination.token));
+        }
     }
 
     pub fn follow(&self) -> tokio::task::JoinHandle<()> {
@@ -183,7 +240,7 @@ impl Fleet {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(timing("THIRDSHIFT_FLEET_INTERVAL_MS", 15));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut jobs = tokio::task::JoinSet::<(AnswerKey, Entry, Instant, ReadResult)>::new();
+            let mut jobs = tokio::task::JoinSet::<InboxAnswer>::new();
             let mut fetching = BTreeSet::new();
             loop {
                 tokio::select! {
@@ -194,9 +251,9 @@ impl Fleet {
                         if pages.borrow_and_update().is_empty() { continue; }
                     },
                     Some(result) = jobs.join_next(), if !jobs.is_empty() => {
-                        if let Ok((key, entry, requested_at, result)) = result {
-                            fetching.remove(&key);
-                            fleet.keep(key, entry, requested_at, result);
+                        if let Ok(answer) = result {
+                            fetching.remove(&answer.request.key());
+                            fleet.keep(answer);
                         }
                         continue;
                     },
@@ -226,23 +283,23 @@ impl Fleet {
                     .answers
                     .lock()
                     .unwrap()
-                    .retain(|(person, name), answer| {
-                        people.contains(person)
+                    .retain(|key @ (person, name), answer| {
+                        (people.contains(person) || fetching.contains(key))
                             && live
                                 .iter()
                                 .any(|(entry, _)| entry.name == *name && *entry == answer.entry)
                     });
                 for person in people {
                     for (entry, token) in live.iter().cloned() {
-                        let key = (person.clone(), entry.name.clone());
-                        if !fetching.insert(key.clone()) {
+                        let request = InboxRead {
+                            person: person.clone(),
+                            entry,
+                            started_at: Instant::now(),
+                        };
+                        if !fetching.insert(request.key()) {
                             continue;
                         }
-                        let requested_at = Instant::now();
-                        jobs.spawn_blocking(move || {
-                            let result = read(&entry, &token, key.0.as_deref());
-                            (key, entry, requested_at, result)
-                        });
+                        jobs.spawn_blocking(move || request.fetch(&token));
                     }
                 }
                 // Ages and the unreachable threshold advance even without good answers.
