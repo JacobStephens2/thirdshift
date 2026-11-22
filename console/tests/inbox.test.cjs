@@ -2249,8 +2249,8 @@ test('Ready for review filters and stably sorts through live updates', async t =
     [611, 'red', 'mergeable', 16, 2],
     [612, 'pending', 'unknown', 15, 3],
     [613, 'green', 'conflicting', 17, 4],
-    [614, 'no_checks', 'mergeable', 12, 5],
-    [615, 'red', 'conflicting', 11, 6],
+    [614, 'no_checks', 'mergeable', 12, 6],
+    [615, 'red', 'conflicting', 11, 5],
     [616, undefined, undefined, 7, null],
     [617, 'pending', 'conflicting', 9, 7],
   ];
@@ -2293,7 +2293,7 @@ test('Ready for review filters and stably sorts through live updates', async t =
       page.waitForURL(url => url.searchParams.get(name) === value),
       apply.click(),
     ]);
-    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 617, 616]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 615, 614, 617, 616]);
     assert.equal(await show.locator('option:checked').textContent(), 'All pull requests');
     assert.equal(await sort.locator('option:checked').textContent(), 'Most recent first');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -2329,12 +2329,12 @@ test('Ready for review filters and stably sorts through live updates', async t =
       'the idle notice still points to waiting pull requests when their rows are filtered');
     await show.selectOption({ label: 'All pull requests' });
     await submit('ready_filter', '');
-    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 617, 616]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 615, 614, 617, 616]);
 
     await sort.selectOption({ label: 'Oldest first' });
     await submit('ready_sort', 'oldest-first');
     // The legacy Command starts when #617 completed. Keep their existing order for the tie.
-    const oldestFirst = [617, 616, 615, 614, 613, 612, 611, 610];
+    const oldestFirst = [617, 616, 614, 615, 613, 612, 611, 610];
     assert.deepEqual(await order(), oldestFirst);
     const group = section.locator('.review-group');
     assert.equal(await group.locator('.review-heading time').getAttribute('datetime'), minutesAgo(1));
