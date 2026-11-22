@@ -1,6 +1,6 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local};
 use std::path::Path;
 
 use super::{age, ready, ticket_text};
@@ -85,7 +85,19 @@ pub(crate) enum DisplayRow<'a> {
     PullRequest(ready::PullRequest, Vec<&'a Row>),
 }
 
-impl DisplayRow<'_> {
+impl<'a> DisplayRow<'a> {
+    /// The latest visible contributing Command supplies the pull request heading.
+    pub fn heading(&self) -> &'a Row {
+        match self {
+            Self::Command(row) => row,
+            Self::PullRequest(_, members) => members[0],
+        }
+    }
+
+    pub fn completion_time(&self) -> Option<DateTime<FixedOffset>> {
+        self.heading().timing.ended_or_started
+    }
+
     pub fn needs_fix(&self) -> bool {
         match self {
             Self::Command(row) => row.needs_fix(),
@@ -217,6 +229,7 @@ pub(crate) struct TicketProgress {
 pub(crate) struct Timing {
     pub finish: Option<Finish>,
     pub age: String,
+    ended_or_started: Option<DateTime<FixedOffset>>,
 }
 
 pub(crate) struct Finish {
@@ -226,23 +239,30 @@ pub(crate) struct Finish {
 
 impl Timing {
     fn new(live: bool, start: &str, end: Option<&str>, now: DateTime<Local>) -> Self {
-        if live {
-            return Self {
-                finish: None,
-                age: elapsed(start, now),
-            };
-        }
-        let finish = end.and_then(|end| {
-            DateTime::parse_from_rfc3339(end).ok().map(|time| Finish {
-                datetime: end.into(),
-                label: crate::local_time::stamp(&time),
-            })
+        let completion = end.filter(|_| !live).and_then(|end| {
+            DateTime::parse_from_rfc3339(end)
+                .ok()
+                .map(|time| (end, time))
         });
-        let age = finish.as_ref().map_or_else(
-            || "End time unknown".into(),
-            |finish| format!("{} ago", elapsed(&finish.datetime, now)),
-        );
-        Self { finish, age }
+        let finish = completion.map(|(end, time)| Finish {
+            datetime: end.into(),
+            label: crate::local_time::stamp(&time),
+        });
+        let age = match completion {
+            Some((_, time)) => format!(
+                "{} ago",
+                age(now.signed_duration_since(time).num_seconds().max(0))
+            ),
+            None if live => elapsed(start, now),
+            None => "End time unknown".into(),
+        };
+        Self {
+            finish,
+            age,
+            ended_or_started: completion
+                .map(|(_, time)| time)
+                .or_else(|| DateTime::parse_from_rfc3339(start).ok()),
+        }
     }
 }
 
@@ -655,7 +675,15 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             facts.health.as_ref(),
             &facts.waiting_for,
         ),
-        timing: Timing::new(live, &facts.started_at, facts.ended_at.as_deref(), now),
+        timing: Timing::new(
+            live,
+            &facts.started_at,
+            facts
+                .ended_at
+                .as_deref()
+                .filter(|_| value["end_time_estimated"] != true),
+            now,
+        ),
         count: value["count"].as_u64().unwrap_or(1) as usize,
         cause: facts.cause.unwrap_or_default(),
         resume_command: facts

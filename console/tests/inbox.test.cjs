@@ -2234,17 +2234,25 @@ for (const storage of ['blocked', 'read-only', 'malformed']) {
   });
 }
 
-test('Ready for review filters and stably sorts by CI red or Merge conflict through live updates', async t => {
+test('Ready for review filters and stably sorts through live updates', async t => {
   const logs = join(home, '.thirdshift/logs');
   const dir = join(logs, 'acme/widgets/commands/issue');
   const cache = join(logs, 'github-inbox.json');
   const changed = join(logs, 'github-inbox.changed');
   const previous = await readStartupGitHubAnswer(cache);
   const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const now = Math.floor(Date.now() / 1000) * 1000;
+  const minutesAgo = minutes => new Date(now - minutes * 60_000).toISOString();
   const fixtures = [
-    [610, 'green', 'mergeable'], [611, 'red', 'mergeable'], [612, 'pending', 'unknown'],
-    [613, 'green', 'conflicting'], [614, 'no_checks', 'mergeable'], [615, 'red', 'conflicting'],
-    [616], [617, 'pending', 'conflicting'],
+    // PR number, CI, mergeability, start and completion (minutes ago).
+    [610, 'green', 'mergeable', 19, 1],
+    [611, 'red', 'mergeable', 16, 2],
+    [612, 'pending', 'unknown', 15, 3],
+    [613, 'green', 'conflicting', 17, 4],
+    [614, 'no_checks', 'mergeable', 12, 6],
+    [615, 'red', 'conflicting', 11, 5],
+    [616, undefined, undefined, 7, null],
+    [617, 'pending', 'conflicting', 9, 7],
   ];
   const paths = [];
   const subjects = {};
@@ -2255,18 +2263,28 @@ test('Ready for review filters and stably sorts by CI red or Merge conflict thro
   };
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   try {
-    for (const [number, ci, mergeable] of fixtures) {
-      const path = join(dir, `${number}-fixture.command.json`);
+    const writeReady = async (stem, number, start, end) => {
+      const path = join(dir, `${stem}-fixture.command.json`);
       paths.push(path);
-      const ended_at = new Date(Date.now() - (number - 609) * 60000).toISOString();
-      await replaceRecord(path, JSON.stringify({ ...base, started_at: ended_at, ended_at, kind: 'Run',
+      await replaceRecord(path, JSON.stringify({ ...base, started_at: minutesAgo(start),
+        ended_at: end === null ? null : minutesAgo(end), kind: 'Run',
         issue: null, outcome: 'ready for review', cause: null, tickets: [], pull_request: pull(number) }));
+      // Local legacy records estimate their completion from the record's modification time.
+      if (end === null) {
+        const estimatedEnd = new Date(minutesAgo(8));
+        await utimes(path, estimatedEnd, estimatedEnd);
+      }
+    };
+    for (const [number, ci, mergeable, start, end] of fixtures) {
+      await writeReady(number, number, start, end);
       if (ci) subjects[pull(number)] = { state: 'Open', ci, mergeable, title: `Review ${number}` };
     }
+    // The two Commands overlap, so both still contribute to PR #610.
+    await writeReady('610-overlap', 610, 18, 10);
     await publish('Review filter fixture');
     await page.goto(origin);
     const section = page.getByRole('group', { name: 'Ready for review', exact: true });
-    const rows = section.locator('.row-head > .subject a');
+    const rows = section.locator(':scope > .commands > li > :is(.row-head, .review-heading) > :is(.subject, h4) > a');
     const order = () => rows.evaluateAll(links => links.map(link => Number(link.href.split('/').at(-1))));
     const show = section.getByRole('combobox', { name: 'Show', exact: true });
     const sort = section.getByRole('combobox', { name: 'Sort', exact: true });
@@ -2275,7 +2293,7 @@ test('Ready for review filters and stably sorts by CI red or Merge conflict thro
       page.waitForURL(url => url.searchParams.get(name) === value),
       apply.click(),
     ]);
-    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 615, 614, 617, 616]);
     assert.equal(await show.locator('option:checked').textContent(), 'All pull requests');
     assert.equal(await sort.locator('option:checked').textContent(), 'Most recent first');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -2297,7 +2315,7 @@ test('Ready for review filters and stably sorts by CI red or Merge conflict thro
     await publish('CI failed again');
     await rows.filter({ hasText: '#611' }).waitFor({ state: 'detached' });
     assert.deepEqual(await order(), [610, 612, 614, 616]);
-    assert.match(await section.locator('summary').textContent(), /Ready for review 4/);
+    assert.match(await section.locator(':scope > summary').textContent(), /Ready for review 4/);
     assert.equal(await show.locator('option:checked').textContent(), 'Hide CI red or Merge conflict');
     assert.equal(await sort.locator('option:checked').textContent(), 'CI red or Merge conflict first');
     for (const number of [610, 612, 614, 616]) {
@@ -2311,7 +2329,51 @@ test('Ready for review filters and stably sorts by CI red or Merge conflict thro
       'the idle notice still points to waiting pull requests when their rows are filtered');
     await show.selectOption({ label: 'All pull requests' });
     await submit('ready_filter', '');
-    assert.deepEqual(await order(), [610, 611, 612, 613, 614, 615, 616, 617]);
+    assert.deepEqual(await order(), [610, 611, 612, 613, 615, 614, 617, 616]);
+
+    await sort.selectOption({ label: 'Oldest first' });
+    await submit('ready_sort', 'oldest-first');
+    // The legacy Command starts when #617 completed. Keep their existing order for the tie.
+    const oldestFirst = [617, 616, 614, 615, 613, 612, 611, 610];
+    assert.deepEqual(await order(), oldestFirst);
+    const group = section.locator('.review-group');
+    assert.equal(await group.locator('.review-heading time').getAttribute('datetime'), minutesAgo(1));
+    await group.getByText('2 contributing Commands', { exact: true }).click();
+    assert.deepEqual(await group.locator('.review-members .row-head time').evaluateAll(
+      times => times.map(time => time.dateTime)), [minutesAgo(1), minutesAgo(10)]);
+
+    const folder = page.getByRole('navigation', { name: 'Inbox sections' }).locator('[data-group="ready for review"]');
+    await folder.click();
+    await page.waitForURL(url => url.searchParams.get('section') === 'ready-for-review');
+    assert.equal(new URL(page.url()).searchParams.get('ready_sort'), 'oldest-first');
+    await page.reload();
+    assert.deepEqual(await order(), oldestFirst);
+    assert.equal(await sort.inputValue(), 'oldest-first');
+
+    const filters = page.locator('.machine-filter');
+    const machine = filters.getByRole('combobox', { name: 'Machine' });
+    const localMachine = await machine.locator('option').nth(1).getAttribute('value');
+    for (const [name, label, value] of [
+      ['machine', 'Machine', localMachine], ['repository', 'Repository', 'acme/widgets'],
+    ]) {
+      await filters.getByRole('combobox', { name: label }).selectOption(value);
+      await Promise.all([
+        page.waitForURL(url => url.searchParams.get(name) === value),
+        filters.getByRole('button', { name: 'Filter', exact: true }).click(),
+      ]);
+      assert.equal(new URL(page.url()).searchParams.get('ready_sort'), 'oldest-first');
+      assert.deepEqual(await order(), oldestFirst);
+    }
+
+    await show.selectOption({ label: 'Hide CI red or Merge conflict' });
+    await submit('ready_filter', 'hide-problems');
+    assert.deepEqual(await order(), []);
+    for (const number of [616, 612, 610]) subjects[pull(number)].ci = 'green';
+    await publish('Three pull requests now have green CI');
+    await rows.first().filter({ hasText: '#616' }).waitFor();
+    assert.deepEqual(await order(), [616, 612, 610]);
+    assert.equal(await show.inputValue(), 'hide-problems');
+    assert.equal(await sort.inputValue(), 'oldest-first');
   } finally {
     await page.close();
     for (const path of paths) await rm(path, { force: true });
