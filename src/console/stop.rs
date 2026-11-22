@@ -84,6 +84,7 @@ pub(super) struct StopForm {
 pub(super) async fn submit(
     Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
+    Extension(fleet): Extension<super::fleet_inbox::Fleet>,
     Form(form): Form<StopForm>,
 ) -> Response {
     if format == super::api::Format::Json {
@@ -104,6 +105,7 @@ pub(super) async fn submit(
     if !form.machine.is_empty() {
         return super::fleet_actions::submit(
             viewer,
+            fleet,
             form.machine,
             form.command,
             super::fleet_actions::Action::Stop {

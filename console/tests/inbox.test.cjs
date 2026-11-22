@@ -1331,6 +1331,57 @@ test('inline Dismiss removes the row before the request settles and restores it 
   }
 });
 
+test('Inbox ignores a pre-Dismiss live response delivered after the saved refresh', { timeout: 20000 }, async t => {
+  const page = await pageFor(t);
+  const captured = Promise.withResolvers();
+  const releaseOld = Promise.withResolvers();
+  const releaseNext = Promise.withResolvers();
+  let holdingOld = false;
+  let holdingNext = false;
+  await page.route(url => url.origin === origin && url.pathname === '/', async route => {
+    const request = route.request();
+    if (request.isNavigationRequest() || request.redirectedFrom()) return route.continue();
+    if (!holdingOld) {
+      holdingOld = true;
+      const response = await route.fetch();
+      captured.resolve(await response.text());
+      await releaseOld.promise;
+      return route.fulfill({ response });
+    }
+    if (holdingNext) await releaseNext.promise;
+    return route.continue();
+  });
+
+  let recordPath;
+  try {
+    await page.goto(origin);
+    const row = page.locator('#inbox > [data-group="needs you"] .command').first();
+    const command = await row.getAttribute('data-command');
+    recordPath = await row.locator(':scope > .row-head form[data-dismiss] [name="command"]').inputValue();
+    const waiting = page.locator(`#inbox > [data-group="needs you"] .command[data-command="${command}"]`);
+    const done = page.locator(`#inbox > [data-group="done"] .command[data-command="${command}"]`);
+    assert.ok((await captured.promise).includes(`data-command="${command}"`));
+    await waiting.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await done.waitFor({ state: 'attached' });
+    await page.waitForFunction(() => !document.querySelector('#dismissal-notices button').disabled);
+
+    // The queued subscription GET proves the older refresh finished. Hold its
+    // response so a later correct render cannot erase a transient reappearance.
+    const next = page.waitForRequest(request => request.method() === 'GET' &&
+      new URL(request.url()).pathname === '/' && !request.redirectedFrom());
+    holdingNext = true;
+    releaseOld.resolve();
+    await next;
+    assert.equal(await waiting.count(), 0, 'the pre-Dismiss Inbox must not restore the saved row');
+    assert.equal(await done.count(), 1);
+  } finally {
+    releaseOld.resolve();
+    releaseNext.resolve();
+    await page.unrouteAll({ behavior: 'wait' });
+    if (recordPath) await rm(recordPath.replace(/\.json$/, '.dismiss.json'), { force: true });
+  }
+});
+
 test('the Inbox opens with Details closed, and Dismiss works by keyboard from Details beside a clicked row', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);

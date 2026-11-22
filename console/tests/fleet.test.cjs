@@ -28,7 +28,9 @@ async function files(root) {
   return result;
 }
 
-test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
+const machine = 'remote-workstation-with-a-long-name';
+
+async function fleetPair(t, interval, stale) {
   const root = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-inbox-'));
   const children = [];
   let browser;
@@ -60,7 +62,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   const cli = (home, args, input) => execFileSync(binary, args, { env: { ...process.env, HOME: home }, input, encoding: 'utf8' });
   async function start(home) {
     const process = spawn(binary, ['console', '--no-sign-in'], {
-      env: { ...global.process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '100', THIRDSHIFT_FLEET_STALE_MS: '600' },
+      env: { ...global.process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: interval, THIRDSHIFT_FLEET_STALE_MS: stale },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
     const child = { process, exited: once(process, 'exit') };
@@ -72,10 +74,44 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   }
   const remote = await start(homes[1]);
   const token = cli(homes[1], ['console', 'token', 'create', 'caller', '--scopes', 'read,act']).trim();
-  cli(homes[0], ['console', 'fleet', 'add', 'remote-workstation-with-a-long-name', remote.origin], `${token}\n`);
+  cli(homes[0], ['console', 'fleet', 'add', machine, remote.origin], `${token}\n`);
   const caller = await start(homes[0]);
   const before = await files(homes[0]);
   browser = await chromium.launch({ headless: true });
+  return { homes, cli, remote, caller, before, browser };
+}
+
+test('Fleet Inbox keeps a saved Dismissal through a caller refresh before the next poll', async t => {
+  const { homes, remote, caller, browser } = await fleetPair(t, '3600000', '60000');
+  const page = await browser.newPage();
+  await page.goto(caller.origin);
+  const remoteRow = `.command[data-machine="${machine}"]`;
+  const waiting = page.locator(`#inbox > [data-group="needs you"] ${remoteRow}`);
+  const done = page.locator(`#inbox > [data-group="done"] ${remoteRow}`);
+  const dismiss = waiting.getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor();
+  const saved = page.waitForResponse(response => response.url() === `${caller.origin}/dismiss` &&
+    response.request().method() === 'POST');
+  await dismiss.click();
+  assert.equal((await saved).status(), 200);
+  const owner = await browser.newPage();
+  await owner.goto(remote.origin);
+  assert.equal(await owner.locator('#inbox > [data-group="done"] .command').count(), 1);
+
+  const localPath = join(homes[0], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const local = JSON.parse(await readFile(localPath, 'utf8'));
+  local.cause = 'Caller changed before the next Fleet poll';
+  await replaceRecord(localPath, JSON.stringify(local));
+  await page.waitForFunction(cause => document.querySelector('#inbox').textContent.includes(cause), local.cause);
+  assert.equal(await waiting.count(), 0, 'a caller refresh must keep the saved remote row out of Needs you');
+  assert.equal(await done.count(), 1);
+
+  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  await dismiss.waitFor();
+});
+
+test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
+  const { homes, cli, remote, caller, before, browser } = await fleetPair(t, '100', '600');
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await context.addInitScript(() => {
     window.notices = [];
@@ -217,7 +253,6 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
-  const machine = 'remote-workstation-with-a-long-name';
   await page.goto(`${caller.origin}/?section=overview&machine=${machine}&repository=acme%2Fwidgets`);
   await ready.getByText('Merge conflict', { exact: true }).waitFor();
   const readySection = page.getByRole('group', { name: 'Ready for review', exact: true });

@@ -1103,8 +1103,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let watched = executable.clone();
         let (changes, notifier, observer) = changes::observe(&config, &executable, &assets)?;
         let github = github::follow();
-        let fleet = fleet_inbox::Fleet::new();
-        let fleet_poller = fleet.follow(notifier.clone());
+        let fleet = fleet_inbox::Fleet::new(notifier.clone());
+        let fleet_poller = fleet.follow();
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
