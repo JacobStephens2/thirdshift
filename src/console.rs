@@ -1316,20 +1316,33 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 #[derive(Default)]
 struct ReadyReview {
     hide_problems: bool,
-    problems_first: bool,
+    sort: ReadyReviewSort,
     empty_after_filter: bool,
+}
+
+#[derive(Default, PartialEq, Eq)]
+enum ReadyReviewSort {
+    #[default]
+    MostRecentFirst,
+    OldestFirst,
+    ProblemsFirst,
 }
 
 impl ReadyReview {
     const FILTER_PARAM: &'static str = "ready_filter";
     const SORT_PARAM: &'static str = "ready_sort";
     const HIDE_PROBLEMS: &'static str = "hide-problems";
+    const OLDEST_FIRST: &'static str = "oldest-first";
     const PROBLEMS_FIRST: &'static str = "problems-first";
 
     fn from_query(query: &Option<String>) -> Self {
         Self {
             hide_problems: query_value(query, Self::FILTER_PARAM) == Self::HIDE_PROBLEMS,
-            problems_first: query_value(query, Self::SORT_PARAM) == Self::PROBLEMS_FIRST,
+            sort: match query_value(query, Self::SORT_PARAM).as_str() {
+                Self::OLDEST_FIRST => ReadyReviewSort::OldestFirst,
+                Self::PROBLEMS_FIRST => ReadyReviewSort::ProblemsFirst,
+                _ => ReadyReviewSort::MostRecentFirst,
+            },
             ..Self::default()
         }
     }
@@ -1338,8 +1351,11 @@ impl ReadyReview {
         [
             self.hide_problems
                 .then_some((Self::FILTER_PARAM, Self::HIDE_PROBLEMS)),
-            self.problems_first
-                .then_some((Self::SORT_PARAM, Self::PROBLEMS_FIRST)),
+            match self.sort {
+                ReadyReviewSort::MostRecentFirst => None,
+                ReadyReviewSort::OldestFirst => Some((Self::SORT_PARAM, Self::OLDEST_FIRST)),
+                ReadyReviewSort::ProblemsFirst => Some((Self::SORT_PARAM, Self::PROBLEMS_FIRST)),
+            },
         ]
         .into_iter()
         .flatten()
@@ -1356,9 +1372,17 @@ impl ReadyReview {
             let had_rows = !section.rows.is_empty();
             section.rows.retain(|row| !row.needs_fix());
             self.empty_after_filter = had_rows && section.rows.is_empty();
-        } else if self.problems_first {
-            // Stable sorting keeps the existing occurrence order within each group.
-            section.rows.sort_by_key(|row| !row.needs_fix());
+        }
+        match self.sort {
+            ReadyReviewSort::OldestFirst => {
+                section
+                    .rows
+                    .sort_by_key(status::DisplayRow::completion_time);
+            }
+            ReadyReviewSort::ProblemsFirst if !self.hide_problems => {
+                section.rows.sort_by_key(|row| !row.needs_fix());
+            }
+            _ => {}
         }
     }
 }

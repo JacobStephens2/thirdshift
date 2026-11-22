@@ -87,7 +87,8 @@
         </select></label>
         <label>Sort <select id="ready-review-sort" name="{{ ReadyReview::SORT_PARAM }}">
           <option value="">Most recent first</option>
-          <option value="{{ ReadyReview::PROBLEMS_FIRST }}"{% if ready_review.problems_first %} selected{% endif %}>CI red or Merge conflict first</option>
+          <option value="{{ ReadyReview::OLDEST_FIRST }}"{% if ready_review.sort == ReadyReviewSort::OldestFirst %} selected{% endif %}>Oldest first</option>
+          <option value="{{ ReadyReview::PROBLEMS_FIRST }}"{% if ready_review.sort == ReadyReviewSort::ProblemsFirst %} selected{% endif %}>CI red or Merge conflict first</option>
         </select></label>
         <input type="hidden" name="section" value="{{ self.slug(self.folder()) }}">
         {% if !machine.is_empty() %}<input type="hidden" name="machine" value="{{ machine }}">{% endif %}

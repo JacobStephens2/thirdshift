@@ -1,6 +1,7 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local};
+use std::cmp::Reverse;
 use std::path::Path;
 
 use super::{age, ready, ticket_text};
@@ -86,6 +87,16 @@ pub(crate) enum DisplayRow<'a> {
 }
 
 impl DisplayRow<'_> {
+    /// The completion (or start fallback) of the Command used for the heading.
+    pub fn completion_time(&self) -> Option<DateTime<FixedOffset>> {
+        let row = match self {
+            Self::Command(row) => row,
+            Self::PullRequest(_, members) => members[0],
+        };
+        let (_, _, Reverse(time)) = row.order;
+        time
+    }
+
     pub fn needs_fix(&self) -> bool {
         match self {
             Self::Command(row) => row.needs_fix(),
