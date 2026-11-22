@@ -1,7 +1,7 @@
 //! Subscription-owned Fleet reads. Answers and errors live only in this process.
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
@@ -12,20 +12,62 @@ use crate::logs::status::{
     fleet::{Document, Reachability},
 };
 
-type PersonAnswers = BTreeMap<(Option<String>, String), Answer>;
+type AnswerKey = (Option<String>, String);
+type PersonAnswers = BTreeMap<AnswerKey, Answer>;
+type ReadResult = Result<(Document, Vec<super::Scope>), (Reachability, String)>;
 
 #[derive(Clone)]
 pub(super) struct Fleet {
     answers: Arc<Mutex<PersonAnswers>>,
     pages: watch::Sender<BTreeMap<Option<String>, usize>>,
+    notifier: super::changes::Notifier,
 }
 
 struct Answer {
     entry: Entry,
+    read_floor: Instant,
     good: Option<Document>,
     fetched_at: Option<DateTime<Utc>>,
     error: Option<(Reachability, String)>,
     scopes: Vec<super::Scope>,
+}
+
+impl Answer {
+    fn new(entry: Entry, requested_at: Instant) -> Self {
+        Self {
+            entry,
+            read_floor: requested_at,
+            good: None,
+            fetched_at: None,
+            error: None,
+            scopes: Vec::new(),
+        }
+    }
+}
+
+struct InboxRead {
+    person: Option<String>,
+    entry: Entry,
+    started_at: Instant,
+}
+
+impl InboxRead {
+    fn key(&self) -> AnswerKey {
+        (self.person.clone(), self.entry.name.clone())
+    }
+
+    fn fetch(self, token: &str) -> InboxAnswer {
+        let result = read(&self.entry, token, self.person.as_deref());
+        InboxAnswer {
+            request: self,
+            result,
+        }
+    }
+}
+
+struct InboxAnswer {
+    request: InboxRead,
+    result: ReadResult,
 }
 
 pub(super) struct Lease(
@@ -64,12 +106,35 @@ fn timing(variable: &str, seconds: u64) -> Duration {
         .unwrap_or(Duration::from_secs(seconds))
 }
 
+fn read(entry: &Entry, token: &str, person: Option<&str>) -> ReadResult {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(timing("THIRDSHIFT_FLEET_READ_TIMEOUT_MS", 3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| {
+            (
+                Reachability::Unreachable,
+                "Can't create Inbox client".into(),
+            )
+        })?;
+    let scopes = super::fleet::effective_scopes(&client, entry, token, person)?;
+    let document = status::fleet::fetch_for_person(&client, entry, token, false, person)?;
+    status::validate_remote(&document).map_err(|_| {
+        (
+            Reachability::NeedsUpdate,
+            "incompatible Inbox presentation".into(),
+        )
+    })?;
+    Ok((document, scopes))
+}
+
 impl Fleet {
-    pub fn new() -> Self {
+    pub fn new(notifier: super::changes::Notifier) -> Self {
         let (pages, _) = watch::channel(BTreeMap::new());
         Self {
             answers: Arc::default(),
             pages,
+            notifier,
         }
     }
 
@@ -80,17 +145,102 @@ impl Fleet {
         Lease(self.pages.clone(), person)
     }
 
-    pub fn follow(&self, notifier: super::changes::Notifier) -> tokio::task::JoinHandle<()> {
+    fn keep(&self, response: InboxAnswer) {
+        let InboxAnswer { request, result } = response;
+        let mut answers = self.answers.lock().unwrap();
+        let answer = answers
+            .entry(request.key())
+            .or_insert_with(|| Answer::new(request.entry.clone(), request.started_at));
+        if request.started_at < answer.read_floor {
+            return;
+        }
+        if answer.entry != request.entry {
+            *answer = Answer::new(request.entry, request.started_at);
+        }
+        match result {
+            Ok((document, scopes)) => {
+                answer.read_floor = request.started_at;
+                answer.good = Some(document);
+                answer.scopes = scopes;
+                answer.fetched_at = Some(Utc::now());
+                answer.error = None;
+            }
+            Err(error) => {
+                // A later failed read must still let an earlier usable snapshot through.
+                answer.error = Some(error);
+                answer.scopes.clear();
+            }
+        }
+        self.notifier.commands();
+    }
+
+    /// Re-read the owning Inbox as each viewer after a successful Dismiss or Undo.
+    /// The acting viewer's read completes before the action response is sent.
+    pub fn dismissal_saved(
+        &self,
+        destination: &super::fleet::PairedMachine,
+        person: Option<&str>,
+        command: &str,
+    ) {
+        let mut people = self.pages.borrow().keys().cloned().collect::<BTreeSet<_>>();
+        people.insert(person.map(str::to_owned));
+        let reads = {
+            let mut answers = self.answers.lock().unwrap();
+            let started_at = Instant::now();
+            people.extend(
+                answers
+                    .keys()
+                    .filter(|(_, machine)| machine == &destination.entry.name)
+                    .map(|(viewer, _)| viewer.clone()),
+            );
+            people
+                .into_iter()
+                .filter_map(|person| {
+                    let request = InboxRead {
+                        person,
+                        entry: destination.entry.clone(),
+                        started_at,
+                    };
+                    let answer = answers
+                        .entry(request.key())
+                        .or_insert_with(|| Answer::new(request.entry.clone(), started_at));
+                    if answer.entry != request.entry {
+                        return None;
+                    }
+                    // This cached row and any poll in flight may predate the save.
+                    answer.read_floor = started_at;
+                    if let Some(document) = &mut answer.good {
+                        document.omit_command(command);
+                    }
+                    Some(request)
+                })
+                .collect::<Vec<_>>()
+        };
+        self.notifier.commands();
+        let mut caller = None;
+        for request in reads {
+            if request.person.as_deref() == person {
+                caller = Some(request);
+            } else {
+                let fleet = self.clone();
+                let token = destination.token.clone();
+                drop(tokio::task::spawn_blocking(move || {
+                    fleet.keep(request.fetch(&token))
+                }));
+            }
+        }
+        if let Some(request) = caller {
+            self.keep(request.fetch(&destination.token));
+        }
+    }
+
+    pub fn follow(&self) -> tokio::task::JoinHandle<()> {
         let fleet = self.clone();
         let mut pages = self.pages.subscribe();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(timing("THIRDSHIFT_FLEET_INTERVAL_MS", 15));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut jobs = tokio::task::JoinSet::<(
-                Option<String>,
-                Entry,
-                Result<(Document, Vec<super::Scope>), (Reachability, String)>,
-            )>::new();
+            let mut jobs = tokio::task::JoinSet::<InboxAnswer>::new();
             let mut fetching = BTreeSet::new();
             loop {
                 tokio::select! {
@@ -101,25 +251,9 @@ impl Fleet {
                         if pages.borrow_and_update().is_empty() { continue; }
                     },
                     Some(result) = jobs.join_next(), if !jobs.is_empty() => {
-                        if let Ok((person, entry, result)) = result {
-                            fetching.remove(&(person.clone(), entry.name.clone()));
-                            let mut answers = fleet.answers.lock().unwrap();
-                            let answer = answers.entry((person, entry.name.clone())).or_insert_with(|| Answer {
-                                entry: entry.clone(), good: None, fetched_at: None, error: None, scopes: Vec::new(),
-                            });
-                            if answer.entry != entry {
-                                *answer = Answer { entry, good: None, fetched_at: None, error: None, scopes: Vec::new() };
-                            }
-                            match result {
-                                Ok((document, scopes)) => {
-                                    answer.good = Some(document);
-                                    answer.scopes = scopes;
-                                    answer.fetched_at = Some(Utc::now());
-                                    answer.error = None;
-                                },
-                                Err(error) => { answer.error = Some(error); answer.scopes.clear(); },
-                            }
-                            notifier.commands();
+                        if let Ok(answer) = result {
+                            fetching.remove(&answer.request.key());
+                            fleet.keep(answer);
                         }
                         continue;
                     },
@@ -149,58 +283,36 @@ impl Fleet {
                     .answers
                     .lock()
                     .unwrap()
-                    .retain(|(person, name), answer| {
-                        people.contains(person)
+                    .retain(|key @ (person, name), answer| {
+                        (people.contains(person) || fetching.contains(key))
                             && live
                                 .iter()
                                 .any(|(entry, _)| entry.name == *name && *entry == answer.entry)
                     });
                 for person in people {
                     for (entry, token) in live.iter().cloned() {
-                        if !fetching.insert((person.clone(), entry.name.clone())) {
+                        let mut answers = fleet.answers.lock().unwrap();
+                        let started_at = Instant::now();
+                        let request = InboxRead {
+                            person: person.clone(),
+                            entry,
+                            started_at,
+                        };
+                        let key = request.key();
+                        if !fetching.insert(key.clone()) {
                             continue;
                         }
-                        let person = person.clone();
-                        jobs.spawn_blocking(move || {
-                            let result = reqwest::blocking::Client::builder()
-                                .timeout(Duration::from_secs(3))
-                                .redirect(reqwest::redirect::Policy::none())
-                                .build()
-                                .map_err(|_| {
-                                    (
-                                        Reachability::Unreachable,
-                                        "Can't create Inbox client".into(),
-                                    )
-                                })
-                                .and_then(|client| {
-                                    let scopes = super::fleet::effective_scopes(
-                                        &client,
-                                        &entry,
-                                        &token,
-                                        person.as_deref(),
-                                    )?;
-                                    let document = status::fleet::fetch_for_person(
-                                        &client,
-                                        &entry,
-                                        &token,
-                                        false,
-                                        person.as_deref(),
-                                    )?;
-                                    status::validate_remote(&document).map_err(|_| {
-                                        (
-                                            Reachability::NeedsUpdate,
-                                            "incompatible Inbox presentation".into(),
-                                        )
-                                    })?;
-                                    Ok((document, scopes))
-                                });
-                            (person, entry, result)
-                        });
+                        // A save can fence the first poll even if the viewer leaves.
+                        answers
+                            .entry(key)
+                            .or_insert_with(|| Answer::new(request.entry.clone(), started_at));
+                        drop(answers);
+                        jobs.spawn_blocking(move || request.fetch(&token));
                     }
                 }
                 // Ages and the unreachable threshold advance even without good answers.
                 if !fleet.answers.lock().unwrap().is_empty() {
-                    notifier.commands();
+                    fleet.notifier.commands();
                 }
             }
         })
@@ -247,7 +359,9 @@ impl Fleet {
             }
             let Some(answer) = answers
                 .get(&(person.map(str::to_owned), entry.name.clone()))
-                .filter(|answer| answer.entry == *entry)
+                .filter(|answer| {
+                    answer.entry == *entry && (answer.good.is_some() || answer.error.is_some())
+                })
             else {
                 continue;
             };

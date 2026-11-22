@@ -28,6 +28,11 @@ pub(crate) struct Document {
 }
 
 impl Document {
+    pub(crate) fn omit_command(&mut self, selector: &str) {
+        self.commands
+            .retain(|command| super::document_selector(&command.value) != selector);
+    }
+
     pub(super) fn github_answer_is_stale(&self) -> bool {
         super::stale_github_answer(
             self.other

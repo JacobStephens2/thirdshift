@@ -161,6 +161,8 @@ function morphTimePage(html) {
   loadLook();
 }
 
+let refreshRequests = 0;
+let inboxResponseFloor = 0;
 async function refresh() {
   if (observesCommands) {
     if (timePage?.matches('[data-span-page]')) {
@@ -175,12 +177,15 @@ async function refresh() {
       activity();
       loadLook();
     } else {
+      const request = ++refreshRequests;
       const url = stages?.url() ?? location.href;
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
       const html = await response.text();
       if (timePage) morphTimePage(html);
       else {
+        if (request <= inboxResponseFloor) return;
+        inboxResponseFloor = request;
         morph(html);
         // A folder opened while this answer was on its way outranks it.
         if (url !== location.href) showFolder(urlFolder()?.dataset.group);
@@ -599,6 +604,10 @@ document.addEventListener('submit', async event => {
     });
     if (!response.ok) throw new Error(await response.text());
     saved = true;
+    // A GET already in flight may have read the Inbox before the save.
+    inboxResponseFloor = refreshRequests;
+    // The owning Inbox can now show a newly uncovered Needs you kind.
+    delete state.optimistic;
     if (row && !undo) dismissalNotice(form, subject, member ? row.dataset.machine : null);
     if (undo) removeDismissalNotice(command);
     pendingPeek?.abort();
@@ -611,8 +620,10 @@ document.addEventListener('submit', async event => {
       : `Could not save the dismissal: ${error.message}`;
   } finally {
     state.pending = false;
-    if (!saved) restoreOptimisticallyDismissedRow(command);
-    delete state.optimistic;
+    if (!saved) {
+      restoreOptimisticallyDismissedRow(command);
+      delete state.optimistic;
+    }
     showDismissal();
   }
 });

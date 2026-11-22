@@ -17,31 +17,35 @@ pub(super) struct DismissForm {
 pub(super) async fn submit(
     Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
+    Extension(fleet): Extension<super::fleet_inbox::Fleet>,
     Form(form): Form<DismissForm>,
 ) -> Response {
-    change(viewer, format, form, false).await
+    change(viewer, format, fleet, form, false).await
 }
 
 pub(super) async fn undo(
     Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
+    Extension(fleet): Extension<super::fleet_inbox::Fleet>,
     Form(form): Form<DismissForm>,
 ) -> Response {
-    change(viewer, format, form, true).await
+    change(viewer, format, fleet, form, true).await
 }
 
 async fn change(
     viewer: Viewer,
     format: super::api::Format,
+    fleet: super::fleet_inbox::Fleet,
     form: DismissForm,
     undo: bool,
 ) -> Response {
     if !form.machine.is_empty() && format == super::api::Format::Html {
-        return super::fleet_actions::submit(
+        return super::fleet_actions::submit_then(
             viewer,
             form.machine,
             form.command,
             super::fleet_actions::Action::Dismiss { undo },
+            move |destination, person, command| fleet.dismissal_saved(destination, person, command),
         )
         .await;
     }

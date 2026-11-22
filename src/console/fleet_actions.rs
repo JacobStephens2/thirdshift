@@ -11,6 +11,8 @@ use serde_json::Value;
 
 use crate::config::UserConfig;
 
+use super::fleet::PairedMachine;
+
 #[derive(Clone, Copy)]
 pub(crate) enum Action {
     Stop { requeue: bool },
@@ -32,14 +34,12 @@ pub(super) struct Answer {
     value: Value,
 }
 
-pub(super) fn request(
-    machine: &str,
+fn request(
+    destination: &PairedMachine,
     person: Option<&str>,
     command: &str,
     action: Action,
 ) -> Result<Answer> {
-    let config = UserConfig::load()?;
-    let destination = super::fleet::PairedMachine::load(&config, machine)?;
     let address = destination.entry.address.trim_end_matches('/');
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -48,7 +48,7 @@ pub(super) fn request(
         .build()?;
     let mut request = client
         .post(format!("{address}/api/v1{}", action.endpoint()))
-        .bearer_auth(destination.token);
+        .bearer_auth(&destination.token);
     if let Some(person) = person {
         request = request.header(super::auth::PERSON_HEADER, person);
     }
@@ -85,11 +85,25 @@ pub(super) async fn submit(
     command: String,
     action: Action,
 ) -> Response {
+    submit_then(viewer, machine, command, action, |_, _, _| {}).await
+}
+
+pub(super) async fn submit_then(
+    viewer: super::auth::Viewer,
+    machine: String,
+    command: String,
+    action: Action,
+    on_success: impl FnOnce(&PairedMachine, Option<&str>, &str) + Send + 'static,
+) -> Response {
     let person = viewer.fleet_person().map(str::to_owned);
     let undo = matches!(action, Action::Dismiss { undo: false });
     let result = tokio::task::spawn_blocking(move || -> Result<_> {
-        let answer = request(&machine, person.as_deref(), &command, action)?;
         let config = UserConfig::load()?;
+        let destination = PairedMachine::load(&config, &machine)?;
+        let answer = request(&destination, person.as_deref(), &command, action)?;
+        if answer.status.is_success() {
+            on_success(&destination, person.as_deref(), &command);
+        }
         let html = Page {
             page: super::PageContext::new(&config, &viewer.scopes),
             csrf: viewer.csrf,
@@ -117,7 +131,8 @@ pub(crate) fn cli(machine: &str, command: &str, action: Action, json: bool) -> R
             Action::Dismiss { undo } => crate::logs::dismiss::dismiss(command, undo, json),
         };
     }
-    let answer = request(machine, None, command, action)?;
+    let destination = PairedMachine::load(&UserConfig::load()?, machine)?;
+    let answer = request(&destination, None, command, action)?;
     if !answer.status.is_success() {
         bail!(
             "Fleet machine {machine} returned HTTP {}: {}",

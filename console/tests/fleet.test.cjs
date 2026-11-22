@@ -28,7 +28,30 @@ async function files(root) {
   return result;
 }
 
-test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
+const machine = 'remote-workstation-with-a-long-name';
+const fixtureEmails = ['actor@example.test', 'viewer@example.test'];
+
+async function seedAccounts(config, emails) {
+  // Fixture hash for "browser test password".
+  const password_hash = '$argon2id$v=19$m=19456,t=2,p=1$Yd89fw8Yx3I9TbhuY+Y/cQ$NhL+Lqg2T9nXrlM8NKBaQ3dpVpRWjRsyYbeNkQS8Q7s';
+  const accounts = Object.fromEntries(emails.map(email => [email, { password_hash, sessions: {} }]));
+  await writeFile(join(config, 'console-accounts.json'), JSON.stringify(accounts), { mode: 0o600 });
+}
+
+async function signIn(browser, origin, email) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(origin);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password', { exact: true }).fill('browser test password');
+  await Promise.all([
+    page.waitForURL(`${origin}/`),
+    page.getByRole('button', { name: 'Sign in', exact: true }).click(),
+  ]);
+  return page;
+}
+
+async function fleetPair(t, interval, stale, emails = []) {
   const root = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-inbox-'));
   const children = [];
   let browser;
@@ -44,7 +67,10 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   for (const [index, home] of homes.entries()) {
     const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
     await mkdir(dir, { recursive: true });
-    await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
+    const scopes = emails.length && index === 1 ? `address_scopes = { "${emails[1]}" = ["read"] }\n` : '';
+    await writeFile(join(home, '.thirdshift/config.toml'),
+      `[console]\nport = 0\nallowed_emails = ${JSON.stringify(emails)}\n${scopes}`);
+    if (emails.length) await seedAccounts(join(home, '.thirdshift'), emails);
     const now = new Date().toISOString();
     await writeFile(join(dir, '1-fixture.command.json'), JSON.stringify({
       version: 1, kind: 'Run', name: 'fixture', repository: 'acme/widgets', hostname: 'fixture',
@@ -59,8 +85,9 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   }
   const cli = (home, args, input) => execFileSync(binary, args, { env: { ...process.env, HOME: home }, input, encoding: 'utf8' });
   async function start(home) {
-    const process = spawn(binary, ['console', '--no-sign-in'], {
-      env: { ...global.process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '100', THIRDSHIFT_FLEET_STALE_MS: '600' },
+    const args = emails.length ? ['console'] : ['console', '--no-sign-in'];
+    const process = spawn(binary, args, {
+      env: { ...global.process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: interval, THIRDSHIFT_FLEET_STALE_MS: stale },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
     const child = { process, exited: once(process, 'exit') };
@@ -72,10 +99,191 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   }
   const remote = await start(homes[1]);
   const token = cli(homes[1], ['console', 'token', 'create', 'caller', '--scopes', 'read,act']).trim();
-  cli(homes[0], ['console', 'fleet', 'add', 'remote-workstation-with-a-long-name', remote.origin], `${token}\n`);
+  cli(homes[0], ['console', 'fleet', 'add', machine, remote.origin], `${token}\n`);
   const caller = await start(homes[0]);
   const before = await files(homes[0]);
   browser = await chromium.launch({ headless: true });
+  return { homes, cli, remote, caller, before, browser };
+}
+
+test('Fleet Inbox keeps a saved Dismissal through a caller refresh before the next poll', async t => {
+  const { homes, remote, caller, browser } = await fleetPair(t, '3600000', '60000', fixtureEmails);
+  const page = await signIn(browser, caller.origin, fixtureEmails[0]);
+  const observer = await signIn(browser, caller.origin, fixtureEmails[1]);
+  const remoteRow = `.command[data-machine="${machine}"]`;
+  const waiting = `#inbox > [data-group="needs you"] ${remoteRow}`;
+  const done = `#inbox > [data-group="done"] ${remoteRow}`;
+  const dismiss = page.locator(waiting).getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor();
+  await observer.locator(waiting).waitFor();
+  const saved = page.waitForResponse(response => response.url() === `${caller.origin}/dismiss` &&
+    response.request().method() === 'POST');
+  await dismiss.click();
+  assert.equal((await saved).status(), 200);
+  const owner = await signIn(browser, remote.origin, fixtureEmails[0]);
+  assert.equal(await owner.locator('#inbox > [data-group="done"] .command').count(), 1);
+
+  const localPath = join(homes[0], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const local = JSON.parse(await readFile(localPath, 'utf8'));
+  local.cause = 'Caller changed before the next Fleet poll';
+  await replaceRecord(localPath, JSON.stringify(local));
+  for (const viewer of [page, observer]) {
+    await viewer.waitForFunction(cause => document.querySelector('#inbox').textContent.includes(cause), local.cause);
+    assert.equal(await viewer.locator(waiting).count(), 0, 'a caller refresh must keep the saved remote row out of Needs you');
+    await viewer.locator(done).waitFor({ state: 'attached' });
+  }
+
+  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  await dismiss.waitFor();
+  await observer.locator(waiting).waitFor();
+  assert.equal(await observer.locator(waiting).getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
+});
+
+async function fakeFleet(t, serve, emails = []) {
+  const home = await mkdtemp(join(tmpdir(), 'thirdshift-fleet-fake-owner-'));
+  const config = join(home, '.thirdshift');
+  const dir = join(config, 'logs/acme/widgets/commands/issue');
+  // The held reads wait for browser subscriptions and renders, even on a busy runner.
+  const env = { ...process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '3600000',
+    THIRDSHIFT_FLEET_READ_TIMEOUT_MS: '12000' };
+  const cli = args => execFileSync(binary, args, { env, encoding: 'utf8' });
+  const record = join(dir, '1-fixture.command.json');
+  await mkdir(dir, { recursive: true });
+  const now = new Date().toISOString();
+  await writeFile(record, JSON.stringify({
+    version: 1, kind: 'Run', name: 'fixture', repository: 'acme/widgets', hostname: 'fixture',
+    issue: null, process_id: 0, process_start: 'gone', harness: 'codex',
+    started_at: now, ended_at: now, stages: [], session_log: null, outcome: 'failed',
+    cause: 'Owning machine failure', tickets: [],
+  }));
+  await writeFile(join(config, 'config.toml'), '[console]\nport = 0\n');
+  const status = () => cli(['status', '--local', '--json']);
+  const waiting = status();
+  const dismissal = cli(['dismiss', record, '--json']);
+  const done = status();
+  const undo = cli(['dismiss', record, '--undo', '--json']);
+  await rm(record);
+  const owner = createServer((request, response) => {
+    if (request.url === '/api/v1/whoami') return response.end(JSON.stringify({
+      version: 1, api_version: 'v1', hostname: 'owner', thirdshift_version: 'fixture', scopes: ['read', 'act'],
+    }));
+    serve(request, response, { waiting, dismissal, done, undo });
+  });
+  let server, exited, browser;
+  t.after(async () => {
+    await browser?.close();
+    if (server?.exitCode === null) server.kill();
+    await exited;
+    owner.closeAllConnections();
+    await new Promise(resolve => owner.close(resolve));
+    await rm(home, { recursive: true, force: true });
+  });
+  await new Promise(resolve => owner.listen(0, '127.0.0.1', resolve));
+  const address = `http://127.0.0.1:${owner.address().port}`;
+  await writeFile(join(config, 'config.toml'),
+    `[console]\nport = 0\nallowed_emails = ${JSON.stringify(emails)}\nfleet = [{name = "owner", address = "${address}"}]\n`);
+  await writeFile(join(config, 'credentials.toml'), '[fleet]\nowner = "fixture"\n', { mode: 0o600 });
+  if (emails.length) await seedAccounts(config, emails);
+  const args = emails.length ? ['console'] : ['console', '--no-sign-in'];
+  server = spawn(binary, args, { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  exited = once(server, 'exit');
+  const lines = createInterface({ input: server.stdout });
+  let origin;
+  try { [origin] = await once(lines, 'line', { signal: AbortSignal.timeout(15000) }); }
+  finally { lines.close(); }
+  browser = await chromium.launch();
+  return { browser, origin };
+}
+
+test('a Fleet poll failure cannot hide the successful owning Inbox read after Undo', { timeout: 20000 }, async t => {
+  let dismissed = false;
+  let undoSaved = false;
+  let releaseHeld;
+  const undoRead = Promise.withResolvers();
+  const { browser, origin } = await fakeFleet(t, (request, response, { waiting, dismissal, done, undo }) => {
+    if (request.url === '/api/v1/dismiss') {
+      dismissed = true;
+      return response.end(dismissal);
+    }
+    if (request.url === '/api/v1/dismiss/undo') {
+      undoSaved = true;
+      return response.end(undo);
+    }
+    if (request.url.startsWith('/api/v1/status?')) {
+      if (!undoSaved) return response.end(dismissed ? done : waiting);
+      if (!releaseHeld) {
+        releaseHeld = () => response.end(waiting);
+        undoRead.resolve();
+        return;
+      }
+      return response.writeHead(503).end();
+    }
+    return response.writeHead(404).end();
+  });
+  const page = await browser.newPage();
+  await page.goto(origin);
+  const row = group => page.locator(`#inbox > [data-group="${group}"] .command[data-machine="owner"]`);
+  await row('needs you').getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await row('done').waitFor({ state: 'attached' });
+  const saved = page.waitForResponse(response => response.url() === `${origin}/dismiss/undo` &&
+    response.request().method() === 'POST');
+  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  await undoRead.promise;
+  // A new subscription starts another poll while the post-Undo read is held.
+  await page.evaluate(() => { window.extraInboxSubscription = new EventSource('/events'); });
+  await page.getByText('Inbox request returned HTTP 503', { exact: false }).waitFor({ state: 'attached' });
+  releaseHeld();
+  assert.equal((await saved).status(), 200);
+  await row('needs you').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+});
+
+test('a closed Inbox cannot repopulate its first pre-Dismiss Fleet answer', { timeout: 20000 }, async t => {
+  const oldRead = Promise.withResolvers();
+  const afterClosePoll = Promise.withResolvers();
+  let closed = false;
+  let saved = false;
+  const { browser, origin } = await fakeFleet(t, (request, response, { waiting, dismissal, done }) => {
+    if (request.url === '/api/v1/dismiss') {
+      saved = true;
+      return response.end(dismissal);
+    }
+    if (request.url.startsWith('/api/v1/status?')) {
+      if (!saved && request.headers['x-thirdshift-person'] === fixtureEmails[1]) {
+        oldRead.resolve(() => response.end(waiting));
+        return;
+      }
+      if (closed && !saved) afterClosePoll.resolve();
+      return response.end(saved ? done : waiting);
+    }
+    return response.writeHead(404).end();
+  }, fixtureEmails);
+  const actor = await signIn(browser, origin, fixtureEmails[0]);
+  const dismiss = actor.locator('#inbox > [data-group="needs you"] .command[data-machine="owner"]')
+    .getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor();
+  const observer = await signIn(browser, origin, fixtureEmails[1]);
+  const viewer = observer.context();
+  const releaseOld = await oldRead.promise;
+  closed = true;
+  await observer.close();
+  await afterClosePoll.promise;
+  const post = actor.waitForResponse(response => response.url() === `${origin}/dismiss` &&
+    response.request().method() === 'POST');
+  await dismiss.click();
+  assert.equal((await post).status(), 200);
+  await actor.locator('#inbox > [data-group="done"] .command[data-machine="owner"]').waitFor({ state: 'attached' });
+  releaseOld();
+
+  // Fetch the initial page as the viewer without opening a new subscription.
+  for (let read = 0; read < 10; read++) {
+    const response = await viewer.request.get(origin);
+    const html = await response.text();
+    assert.equal(/<title>1 need you/.test(html), false, 'the first pre-save answer must not return the dismissed row');
+  }
+});
+
+test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
+  const { homes, cli, remote, caller, before, browser } = await fleetPair(t, '100', '600');
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await context.addInitScript(() => {
     window.notices = [];
@@ -217,7 +425,6 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
-  const machine = 'remote-workstation-with-a-long-name';
   await page.goto(`${caller.origin}/?section=overview&machine=${machine}&repository=acme%2Fwidgets`);
   await ready.getByText('Merge conflict', { exact: true }).waitFor();
   const readySection = page.getByRole('group', { name: 'Ready for review', exact: true });
