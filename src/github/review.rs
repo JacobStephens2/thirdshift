@@ -407,6 +407,9 @@ impl GitHub {
 
     /// Closing issues are paged independently of comments. Never silently
     /// fall back to the body when GitHub failed to supply the issue links.
+    /// Fails with [`crate::trust::UnusableClosingIssue`] before reading a
+    /// linked closing issue whose author is not a Trusted account, or whose
+    /// title or body an account that is not one has edited.
     pub fn review_input(
         &self,
         pr: &PullRequestUrl,

@@ -2206,3 +2206,53 @@ printf '## Standards\nFixed export.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINA
     assert_eq!(scenario.claude_calls().len(), 1);
     assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
 }
+
+#[test]
+fn unusable_closing_issue_seen_at_push_stops_push_and_comment() {
+    let old = "2020-01-02T00:00:00Z";
+    let scenario = Scenario::new();
+    let url = pr_with_closing_issues(&scenario, &[7]);
+
+    let marker = scenario.path("push-edited");
+    let gh = scenario.path("bin/gh");
+    support::write_executable(
+        &scenario.path("bin/git"),
+        &format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = push ] && [ \"$2\" = --no-verify ] && [ ! -e '{marker}' ] && \
+                 printf '%s\\n' \"$@\" | /usr/bin/grep -q ':refs/heads/colleague$'; then\n\
+               touch '{marker}'\n\
+               '{gh}' fake edits 7 '[{{\"kind\":\"body\",\"by\":\"outsider\",\"at\":\"{old}\"}}]' || exit 1\n\
+               exit 1\n\
+             fi\n\
+             exec /usr/bin/git \"$@\"\n",
+            marker = marker.display(),
+            gh = gh.display(),
+        ),
+    );
+    scenario.agent_does(
+        r#"
+echo 'review fix' > review-fix.txt
+git add review-fix.txt
+git commit -qm 'Fix finding'
+printf '## Standards\nFixed export.\n## Spec\nNo findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "#7 body edited by an account that is not a Trusted account; starting no further session"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("since the Review run started"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_no_comment_or_push(&scenario, Some("review-fix.txt"));
+}
