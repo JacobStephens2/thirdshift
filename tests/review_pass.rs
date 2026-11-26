@@ -472,6 +472,10 @@ fn closing_issue_reservations_are_read_from_the_issues_repository() {
         ]);
         // Route GitHub requests for the linked repository to its own fake
         // state, just as the Git URL rewrite routes it to its own bare origin.
+        // `gh issue view --repo acme/other` and GraphQL `-f repo=other` name
+        // it as its own argument. The trust read uses
+        // `gh api repos/acme/other/issues/7`, so the repository is inside
+        // the path and must match there too.
         std::fs::create_dir(scenario.path("original-bin")).unwrap();
         std::fs::rename(scenario.path("bin/gh"), scenario.path("original-bin/gh")).unwrap();
         support::write_executable(
@@ -480,7 +484,7 @@ fn closing_issue_reservations_are_read_from_the_issues_repository() {
                 r#"#!/bin/sh
 for argument do
     case "$argument" in
-        acme/other|repo=other) export FAKE_GH_STATE='{}' ;;
+        *acme/other*|repo=other) export FAKE_GH_STATE='{}' ;;
     esac
 done
 exec '{}' "$@"
