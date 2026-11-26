@@ -1205,8 +1205,9 @@ trait FailedOutside {
 }
 
 /// Tracks linked closing issues seen on a pull request across Steps, sessions,
-/// Repairs, Resumes, pushes, and merges so any untrusted title or body edit
-/// stops further sessions and publication cleanly.
+/// Repairs, Resumes, pushes, and merges. An untrusted edit since the run
+/// started, or a linked closing issue that must not be used at all, stops
+/// further sessions and publication cleanly.
 #[derive(Clone)]
 pub(crate) struct ClosingIssues {
     pr: crate::review::PullRequestUrl,
@@ -1259,7 +1260,9 @@ impl ClosingIssues {
     }
 
     /// Fetch the pull request's current closing issues, retain all previously
-    /// seen links, and enforce [`no_untrusted_edit_since`] across the union.
+    /// seen links, and enforce [`Self::check_known`]: an edit since the run
+    /// started, then an untrusted author or any earlier untrusted title or
+    /// body edit.
     pub(crate) fn check(&self, github: &GitHub) -> Result<()> {
         let current = github.closing_issues(&self.pr)?;
         self.check_known(&current)

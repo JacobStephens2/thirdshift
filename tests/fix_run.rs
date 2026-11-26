@@ -2,10 +2,6 @@
 
 mod support;
 
-use std::os::unix::fs::symlink;
-use std::path::Path;
-use std::process::Command;
-
 use serde_json::json;
 use support::Scenario;
 
@@ -575,49 +571,6 @@ fn an_untrusted_edit_of_a_linked_issue_starts_no_repair() {
     assert!(scenario.origin_file("colleague", "pwned.txt").is_none());
 }
 
-/// Commit `branch` so `.thirdshift-review-input.md` is a symlink to `target`.
-fn commit_review_input_symlink(scenario: &Scenario, branch: &str, target: &Path) {
-    let seed = scenario.path("seed-link");
-    let home = scenario.path("home");
-    let git = |args: &[&str], dir: &Path| {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("HOME", &home)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    git(
-        &[
-            "clone",
-            "-q",
-            &scenario.github_url(),
-            seed.to_str().unwrap(),
-        ],
-        &scenario.path(""),
-    );
-    git(&["checkout", "-q", branch], &seed);
-    symlink(target, seed.join(".thirdshift-review-input.md")).unwrap();
-    git(&["add", ".thirdshift-review-input.md"], &seed);
-    git(
-        &[
-            "commit",
-            "-q",
-            "-m",
-            "Point the review input at another file",
-        ],
-        &seed,
-    );
-    git(&["push", "-q", "origin", branch], &seed);
-    std::fs::remove_dir_all(&seed).unwrap();
-}
-
 #[test]
 fn untrusted_closing_issue_stops_a_fix_run_before_repair() {
     for (association, edits, message) in [
@@ -641,7 +594,7 @@ fn untrusted_closing_issue_stops_a_fix_run_before_repair() {
         let url = scenario.github_has_pr("colleague", "main", "OPEN");
         let outside = scenario.path("outside-secret.txt");
         std::fs::write(&outside, "operator secret\n").unwrap();
-        commit_review_input_symlink(&scenario, "colleague", &outside);
+        scenario.commit_review_input_symlink("colleague", &outside);
         let head = scenario.origin_git(&["rev-parse", "colleague"]);
         let mut state = scenario.gh_state();
         state["checks"][head.trim()] =

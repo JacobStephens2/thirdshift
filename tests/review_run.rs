@@ -2,9 +2,7 @@
 
 mod support;
 
-use std::os::unix::fs::symlink;
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::json;
 use support::Scenario;
@@ -716,49 +714,6 @@ fn live_pull_request_processes_identify_their_target_before_the_first_session_en
         );
         assert_eq!(ended.code, Some(0), "{input}: {}", ended.stderr);
     }
-}
-
-/// Commit `branch` so `.thirdshift-review-input.md` is a symlink to `target`.
-fn commit_review_input_symlink(scenario: &Scenario, branch: &str, target: &Path) {
-    let seed = scenario.path("seed-link");
-    let home = scenario.path("home");
-    let git = |args: &[&str], dir: &Path| {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("HOME", &home)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    git(
-        &[
-            "clone",
-            "-q",
-            &scenario.github_url(),
-            seed.to_str().unwrap(),
-        ],
-        &scenario.path(""),
-    );
-    git(&["checkout", "-q", branch], &seed);
-    symlink(target, seed.join(".thirdshift-review-input.md")).unwrap();
-    git(&["add", ".thirdshift-review-input.md"], &seed);
-    git(
-        &[
-            "commit",
-            "-q",
-            "-m",
-            "Point the review input at another file",
-        ],
-        &seed,
-    );
-    git(&["push", "-q", "origin", branch], &seed);
-    std::fs::remove_dir_all(&seed).unwrap();
 }
 
 #[test]
@@ -1512,7 +1467,7 @@ fn review_input_does_not_follow_a_symlink_outside_the_worktree() {
     let outside = scenario.path("outside-secret.txt");
     std::fs::write(&outside, "operator secret\n").unwrap();
     let url = pull_request(&scenario);
-    commit_review_input_symlink(&scenario, "colleague", &outside);
+    scenario.commit_review_input_symlink("colleague", &outside);
     let mut state = scenario.gh_state();
     state["prs"][0]["body"] = json!("SYMLINK-PAYLOAD-TOKEN");
     scenario.write_gh_state(&state);
@@ -1623,7 +1578,7 @@ fn untrusted_closing_issue_author_stops_before_the_issue_is_used() {
         std::fs::write(&outside, "operator secret\n").unwrap();
         scenario.issue_is(8, "OPEN");
         let url = pr_with_closing_issues(&scenario, &[7, 8]);
-        commit_review_input_symlink(&scenario, "colleague", &outside);
+        scenario.commit_review_input_symlink("colleague", &outside);
         let mut state = scenario.gh_state();
         state["author_associations"]["8"] = json!("NONE");
         state["issue_authors"]["8"] = json!("outsider");
@@ -1718,7 +1673,7 @@ fn untrusted_closing_issue_edit_before_review_refuses_input_and_session() {
         let url = pr_with_closing_issues(&scenario, &[7, 8]);
         // If `.thirdshift-review-input.md` is written before checking closing
         // issues, `write_review_input` fails on the symlink instead of the trust stop.
-        commit_review_input_symlink(&scenario, "colleague", &outside);
+        scenario.commit_review_input_symlink("colleague", &outside);
         let at = if minutes_ago == 0 {
             (chrono::Utc::now() - chrono::TimeDelta::seconds(30)).to_rfc3339()
         } else {
