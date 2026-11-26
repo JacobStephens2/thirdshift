@@ -3738,7 +3738,7 @@ fails when its head branch is occupied and names the occupying worktree.
 At the repository's Command limit, or with no eligible PR it can reserve,
 it exits `0`, prints a skip reason on stderr, records an Activity log skip
 when the reason changes, and sends no Run notification. A failed Fix run
-leaves a draft, so later Passes skip it until the Day shift makes it ready.
+that leaves a draft stays out of later Passes until the Day shift makes it ready.
 
 The Built-in process `fix-run` is `delivery` followed by `self-merge`.
 `thirdshift processes` lists it; `thirdshift process show fix-run` prints it.
@@ -3787,9 +3787,10 @@ This preserves [ADR 0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merg
 Activity log lines and Run notifications identify a **Fix run**.
 
 Success prints `PR <url> is ready for review` or `PR <url> is merged`.
-Failure or interruption preserves uncommitted work as
-`thirdshift: failed fix run (<reason>)`, pushes unpublished work and drafts the
-PR. A Self-merge refused with a mergeable, green PR leaves it ready.
+A closing-issue trust stop keeps unpublished Repair work local and leaves the
+PR in its current state. Other failures and interruptions preserve uncommitted
+work as `thirdshift: failed fix run (<reason>)`, push unpublished work and draft
+the PR. A Self-merge refused with a mergeable, green PR leaves it ready.
 Recovery offers `thirdshift fix <PR URL>` with the original flags. An unchanged
 Repair creates no empty failure commit. A PR closed or merged during the run
 stops further publication; a PR made draft during Repair stays draft.
