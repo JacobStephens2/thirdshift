@@ -344,6 +344,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       await page.screenshot({ path, fullPage: true });
     }
   }
+  await keepInboxSubscribed(page, caller.origin);
   await page.goto(`${caller.origin}/?machine=remote-workstation-with-a-long-name`);
   await remoteRows.first().waitFor();
   assert.equal(await page.locator('.command').count(), 1);
@@ -413,7 +414,6 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await replaceRecord(remotePath, JSON.stringify(added));
   const ready = page.locator('[data-group="ready for review"] > .commands > .command[data-machine="remote-workstation-with-a-long-name"]');
   await ready.getByText('Ready on the Fleet machine', { exact: true }).waitFor({ state: 'attached' });
-  await keepInboxSubscribed(page, caller.origin);
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     for (const section of ['overview', 'ready-for-review']) {
