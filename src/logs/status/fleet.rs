@@ -12,6 +12,7 @@ use crate::resend_key::Credentials;
 
 pub(super) const VERSION: u32 = 2;
 const TIMEOUT: Duration = Duration::from_secs(3);
+const NESTED_COMMANDS: [&str; 3] = ["children", "dispatched", "collapsed"];
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Document {
@@ -29,8 +30,19 @@ pub(crate) struct Document {
 
 impl Document {
     pub(crate) fn omit_command(&mut self, selector: &str) {
+        fn keep(value: &mut Value, selector: &str) -> bool {
+            if super::document_selector(value) == selector {
+                return false;
+            }
+            for field in NESTED_COMMANDS {
+                if let Some(children) = value.get_mut(field).and_then(Value::as_array_mut) {
+                    children.retain_mut(|child| keep(child, selector));
+                }
+            }
+            true
+        }
         self.commands
-            .retain(|command| super::document_selector(&command.value) != selector);
+            .retain_mut(|command| keep(&mut command.value, selector));
     }
 
     pub(super) fn github_answer_is_stale(&self) -> bool {
@@ -110,7 +122,7 @@ fn tag(row: &mut Value, machine: &str, name: &str) -> Result<()> {
     let fields = row.as_object_mut().context("invalid Command")?;
     fields.insert("machine".into(), machine.into());
     fields.insert("machine_name".into(), name.into());
-    for field in ["children", "dispatched", "collapsed"] {
+    for field in NESTED_COMMANDS {
         if let Some(nested) = fields.get_mut(field) {
             for child in nested.as_array_mut().context("invalid Command tree")? {
                 tag(child, machine, name)?;

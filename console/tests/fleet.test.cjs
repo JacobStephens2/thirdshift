@@ -6,7 +6,7 @@ const { mkdtemp, mkdir, writeFile, readFile, readdir, rm } = require('node:fs/pr
 const { tmpdir, hostname } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
-const { chromium } = require('./playwright.cjs');
+const { chromium, keepInboxSubscribed } = require('./playwright.cjs');
 const { replaceRecord } = require('./records.cjs');
 const { createServer } = require('node:http');
 
@@ -282,6 +282,23 @@ test('a closed Inbox cannot repopulate its first pre-Dismiss Fleet answer', { ti
   }
 });
 
+test('Fleet Inbox drops a finished answer after its last viewer leaves', async t => {
+  const { browser, caller } = await fleetPair(t, '100', '60000');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const remoteRow = `.command[data-machine="${machine}"]`;
+  await page.goto(caller.origin);
+  await page.locator(remoteRow).waitFor({ state: 'attached' });
+  await page.close();
+
+  // Fetch the initial HTML without starting another Inbox subscription.
+  await waitUntil(async () => {
+    const response = await context.request.get(caller.origin);
+    assert.ok(response.ok());
+    return !(await response.text()).includes(`data-machine="${machine}"`);
+  }, 'a polling sweep should drop the inactive viewer’s finished answer');
+});
+
 test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
   const { homes, cli, remote, caller, before, browser } = await fleetPair(t, '100', '600');
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -327,6 +344,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       await page.screenshot({ path, fullPage: true });
     }
   }
+  await keepInboxSubscribed(page, caller.origin);
   await page.goto(`${caller.origin}/?machine=remote-workstation-with-a-long-name`);
   await remoteRows.first().waitFor();
   assert.equal(await page.locator('.command').count(), 1);
@@ -444,6 +462,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await readySection.getByText('All pull requests here have CI red or a Merge conflict.').waitFor();
   await page.goto(caller.origin);
   await ready.getByRole('button', { name: 'Copy', exact: true }).waitFor();
+  assert.equal(await remoteRows.count(), 2, 'establish both last good rows before revoking access');
   cli(homes[1], ['console', 'token', 'revoke', 'caller']);
   // The folded Fleet machines list still follows each machine's reachability.
   await page.locator('[data-reachability="refused"]').waitFor({ state: 'attached' });

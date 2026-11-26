@@ -6,6 +6,7 @@ const { hostname, tmpdir } = require('node:os');
 const { basename, join } = require('node:path');
 const { record: traceRecord } = require('./session-trace.cjs');
 const { startFixture } = require('./start-fixture.cjs');
+const { keepInboxSubscribed } = require('./playwright.cjs');
 
 test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the selected member', async t => {
   const owner = await startFixture();
@@ -94,6 +95,7 @@ test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the 
   assert.equal(rawRow(owner, remotePath).group, 'ready for review');
   assert.equal(await rows.count(), 4);
 
+  await keepInboxSubscribed(page, caller.origin);
   await page.goto(`${caller.origin}/?section=ready-for-review&machine=relay`);
   await rows.locator('.row-head > .subject > a[href$="/pull/116/"]').waitFor();
   assert.equal(await rows.count(), 1);
@@ -111,6 +113,7 @@ test('Ready for review groups Fleet Commands and routes Dismiss and Undo to the 
   assert.equal(await grouped.count(), 0, 'hiding a problem also hides its green contributing Command');
   await page.goto(`${caller.origin}/?section=ready-for-review`);
   await fold.click();
+  await remote.waitFor();
   owner.cli(['console', 'token', 'revoke', 'watcher']);
   await grouped.getByText('Stale or unavailable facts', { exact: true }).waitFor();
   await remote.getByText('Owning machine unavailable', { exact: true }).waitFor();
