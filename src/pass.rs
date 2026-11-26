@@ -97,7 +97,7 @@ pub trait Outside {
     /// log, once per change: Architect idea `issue` carries `needs-triage`
     /// and a label that keeps the Triage Pass from taking it, so it does
     /// not hold off an Architect run.
-    fn conflicting_architect_idea(&mut self, issue: u64, line: String);
+    fn conflicted_architect_idea(&mut self, issue: u64, line: String);
     /// Check the Harness, Model and Effort the pass's sessions, and the run
     /// it dispatches, run on, failing if they can't run. If it `dispatches`
     /// a run, or may, check those of that run's Security review too, where
@@ -273,9 +273,9 @@ impl Outside for LaunchAndGitHub<'_> {
         logs::skipped(pass, self.repo, reason);
     }
 
-    fn conflicting_architect_idea(&mut self, issue: u64, line: String) {
+    fn conflicted_architect_idea(&mut self, issue: u64, line: String) {
         progress::step(line.clone());
-        logs::conflicting_architect_idea(self.repo, issue, &line);
+        logs::conflicted_architect_idea(self.repo, issue, &line);
     }
 
     fn check_harness(&mut self, dispatches: bool) -> Result<()> {
@@ -552,7 +552,7 @@ mod in_memory {
         Skipped(String),
         /// It noted this Architect idea's conflicting labels, on its
         /// progress output and in the Activity log.
-        ConflictingArchitectIdea(String),
+        ConflictedArchitectIdea(String),
         /// It checked its Harness, Model and Effort.
         HarnessCheck,
         /// It checked Node.js for the Security audit validators.
@@ -974,8 +974,8 @@ mod in_memory {
             self.calls.push(Call::Skipped(reason.to_string()));
         }
 
-        fn conflicting_architect_idea(&mut self, _: u64, line: String) {
-            self.calls.push(Call::ConflictingArchitectIdea(line));
+        fn conflicted_architect_idea(&mut self, _: u64, line: String) {
+            self.calls.push(Call::ConflictedArchitectIdea(line));
         }
 
         fn check_harness(&mut self, _dispatches: bool) -> Result<()> {

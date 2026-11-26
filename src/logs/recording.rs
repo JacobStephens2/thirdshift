@@ -92,7 +92,7 @@ enum History<'a> {
     Kind(Kind),
     ProcessSkip(&'a str),
     ListingDisagreement(crate::labels::Label),
-    ConflictingArchitectIdea(u64),
+    ConflictedArchitectIdea(u64),
 }
 
 impl Started {
@@ -587,12 +587,12 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn conflicting_architect_idea(&mut self, repo: &Repo, issue: u64, message: &str) {
+    pub(super) fn conflicted_architect_idea(&mut self, repo: &Repo, issue: u64, message: &str) {
         if let Some(root) = self.root_if_configured(repo) {
             self.activity_write_with_history(
                 &root,
                 message,
-                Some(History::ConflictingArchitectIdea(issue)),
+                Some(History::ConflictedArchitectIdea(issue)),
             );
         }
     }
@@ -1188,8 +1188,8 @@ impl<O: Outside> Record<O> {
                 History::ListingDisagreement(label) => {
                     activity::last_of_listing_disagreement(whole, label)
                 }
-                History::ConflictingArchitectIdea(issue) => {
-                    activity::last_of_conflicting_architect_idea(whole, issue)
+                History::ConflictedArchitectIdea(issue) => {
+                    activity::last_of_conflicted_architect_idea(whole, issue)
                 }
             };
             if last.map(|(_, text)| text) == Some(line) {

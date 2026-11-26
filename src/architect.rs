@@ -27,7 +27,6 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::asks::Flags;
-use crate::claim::{triage_disqualifiers, waiting_for_triage};
 use crate::command_limit::{NotAdmitted, PassKind, Sharing};
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
@@ -389,14 +388,16 @@ fn gates(outside: &mut impl Outside) -> Result<Decision> {
     }
     let mut waiting = Vec::new();
     for idea in outside.open_issues(ARCHITECT_IDEA)? {
-        if waiting_for_triage(&idea.labels) {
+        if idea.labels.waiting_for_triage() {
             waiting.push(idea);
         } else if idea.labels.has(NEEDS_TRIAGE) {
-            let conflicting: Vec<String> = triage_disqualifiers(&idea.labels)
+            let conflicting: Vec<String> = idea
+                .labels
+                .triage_disqualifiers()
                 .iter()
                 .map(|label| label.to_string())
                 .collect();
-            outside.conflicting_architect_idea(
+            outside.conflicted_architect_idea(
                 idea.issue.number,
                 format!(
                     "Architect idea #{} \"{}\" is labelled {NEEDS_TRIAGE} and {}, \
@@ -718,8 +719,8 @@ mod tests {
         assert_eq!(calls, [PLANS, IDEAS]);
     }
 
-    fn conflicting(number: u64, label: &str) -> Call {
-        Call::ConflictingArchitectIdea(format!(
+    fn conflicted(number: u64, label: &str) -> Call {
+        Call::ConflictedArchitectIdea(format!(
             "Architect idea #{number} \"Issue {number}\" is labelled needs-triage and {label}, \
              so it is not waiting for triage: {}",
             url(number)
@@ -745,7 +746,7 @@ mod tests {
             assert_eq!(urls, Vec::<String>::new(), "{given}");
             assert_eq!(
                 calls,
-                [PLANS, IDEAS, conflicting(5, canonical), Call::ReadySearch],
+                [PLANS, IDEAS, conflicted(5, canonical), Call::ReadySearch],
                 "{given}"
             );
         }
@@ -772,7 +773,7 @@ mod tests {
             )
         );
         assert_eq!(urls, [url(5)]);
-        assert_eq!(calls, [PLANS, IDEAS, conflicting(6, "ready-for-human")]);
+        assert_eq!(calls, [PLANS, IDEAS, conflicted(6, "ready-for-human")]);
     }
 
     #[test]

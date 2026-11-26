@@ -13,6 +13,11 @@
 //! Custom process's Delivery removes it when the pull request is ready for
 //! review, without putting `ready-for-agent` back.
 //!
+//! What waiting for triage means by labels alone also lives here, as an
+//! exception to labels' rules living with them: two of its disqualifying
+//! labels are the Claim's, which `labels` cannot name, and the Architect
+//! run and the Triage Pass must share the one rule.
+//!
 //! What it reads and changes of GitHub and origin, whether the run is
 //! interrupted, and its progress lines all go through [`Outside`]:
 //! [`OnGitHub`] does each through `gh`, `git` and the progress lines;
@@ -60,18 +65,24 @@ pub const TRIAGE_DISQUALIFIERS: [Label; 6] = [
     AGENT_FAILED,
 ];
 
-/// Each of [`TRIAGE_DISQUALIFIERS`] among `labels`, in that order.
-pub fn triage_disqualifiers(labels: &Labels) -> Vec<Label> {
-    TRIAGE_DISQUALIFIERS
-        .into_iter()
-        .filter(|label| labels.has(*label))
-        .collect()
-}
+impl Labels {
+    /// Each of [`TRIAGE_DISQUALIFIERS`] among these labels, in that order.
+    pub fn triage_disqualifiers(&self) -> Vec<Label> {
+        TRIAGE_DISQUALIFIERS
+            .into_iter()
+            .filter(|label| self.has(*label))
+            .collect()
+    }
 
-/// Whether `labels` wait for triage as the Triage Pass can take them, by
-/// labels alone: `needs-triage` and none of [`TRIAGE_DISQUALIFIERS`].
-pub fn waiting_for_triage(labels: &Labels) -> bool {
-    labels.has(labels::NEEDS_TRIAGE) && triage_disqualifiers(labels).is_empty()
+    /// Whether these labels wait for triage as the Triage Pass can take
+    /// them, by labels alone: `needs-triage` and none of
+    /// [`TRIAGE_DISQUALIFIERS`].
+    pub fn waiting_for_triage(&self) -> bool {
+        self.has(labels::NEEDS_TRIAGE)
+            && !TRIAGE_DISQUALIFIERS
+                .into_iter()
+                .any(|label| self.has(label))
+    }
 }
 
 /// How the Run or the Spec run that made a Claim ended, as ending the Claim
@@ -1172,20 +1183,20 @@ mod tests {
     fn waiting_for_triage_is_needs_triage_with_no_disqualifier() {
         let labelled = |names: &[&str]| -> Labels { names.iter().copied().collect() };
 
-        assert!(waiting_for_triage(&labelled(&["needs-triage", "bug"])));
-        assert!(!waiting_for_triage(&labelled(&["bug"])));
-        assert!(!waiting_for_triage(&labelled(&["ready-for-human"])));
+        assert!(labelled(&["needs-triage", "bug"]).waiting_for_triage());
+        assert!(!labelled(&["bug"]).waiting_for_triage());
+        assert!(!labelled(&["ready-for-human"]).waiting_for_triage());
         for disqualifier in TRIAGE_DISQUALIFIERS {
             let labels = labelled(&["needs-triage", disqualifier.name()]);
-            assert!(!waiting_for_triage(&labels), "{disqualifier}");
-            assert_eq!(triage_disqualifiers(&labels), [disqualifier]);
+            assert!(!labels.waiting_for_triage(), "{disqualifier}");
+            assert_eq!(labels.triage_disqualifiers(), [disqualifier]);
         }
         let cased = labelled(&["Needs-Triage", "READY-FOR-HUMAN"]);
-        assert!(!waiting_for_triage(&cased));
-        assert_eq!(triage_disqualifiers(&cased), [labels::READY_FOR_HUMAN]);
+        assert!(!cased.waiting_for_triage());
+        assert_eq!(cased.triage_disqualifiers(), [labels::READY_FOR_HUMAN]);
         let several = labelled(&["needs-triage", "agent-failed", "wontfix"]);
         assert_eq!(
-            triage_disqualifiers(&several),
+            several.triage_disqualifiers(),
             [labels::WONTFIX, AGENT_FAILED]
         );
     }

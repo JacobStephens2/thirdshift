@@ -4,7 +4,6 @@ use anyhow::Result;
 
 use super::{Input, Options, existing, investigate};
 use crate::asks::Flags;
-use crate::claim;
 use crate::command::Skip;
 use crate::command_limit::Sharing;
 use crate::config::UserConfig;
@@ -155,10 +154,7 @@ fn ineligible(
     if !listed.labels.has(labels::NEEDS_TRIAGE) {
         return Ok(Some("is no longer labelled needs-triage".into()));
     }
-    if let Some(label) = claim::triage_disqualifiers(&listed.labels)
-        .into_iter()
-        .next()
-    {
+    if let Some(label) = listed.labels.triage_disqualifiers().into_iter().next() {
         return Ok(Some(format!("is labelled {label}")));
     }
     let candidate = github.candidate(&listed.issue, labels::NEEDS_TRIAGE)?;

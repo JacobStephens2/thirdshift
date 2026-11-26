@@ -113,14 +113,16 @@ pub(super) fn last_of_listing_disagreement(
         .find(|(_, text)| text.starts_with(&prefix))
 }
 
-/// The time and unstamped text of the last conflicting-labels line for
-/// Architect idea `issue` in the tail, so an unchanged conflict is not
-/// repeated on every Architect run.
-pub(super) fn last_of_conflicting_architect_idea(tail: &str, issue: u64) -> Option<(&str, &str)> {
+/// The time and unstamped text of the last conflicted-labels line for
+/// Architect idea `issue` in the tail — the only Activity log line that
+/// starts by naming an idea, since a skip for waiting ideas is recorded
+/// under its Architect run — so an unchanged conflict is not repeated on
+/// every Architect run.
+pub(super) fn last_of_conflicted_architect_idea(tail: &str, issue: u64) -> Option<(&str, &str)> {
     let prefix = format!("Architect idea #{issue} \"");
     lines(tail)
         .rev()
-        .find(|(_, text)| text.starts_with(&prefix) && text.contains("is not waiting for triage"))
+        .find(|(_, text)| text.starts_with(&prefix))
 }
 
 fn lines(tail: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
