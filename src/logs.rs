@@ -506,6 +506,13 @@ pub(crate) fn listing_disagreement(repo: &Repo, candidates: &crate::github::Labe
     }
 }
 
+/// Record `message` about Architect idea `issue`'s conflicting labels in
+/// `repo`'s Activity log, once per change, so an Architect run every few
+/// minutes does not repeat an unchanged conflict there.
+pub(crate) fn conflicting_architect_idea(repo: &Repo, issue: u64, message: impl Display) {
+    record().conflicting_architect_idea(repo, issue, &message.to_string());
+}
+
 /// Record how the command ended, `outcome` in short: show any lines held
 /// from the terminal, then write the Activity log's end line, if it started
 /// work. A skipped pass never calls it, so that under

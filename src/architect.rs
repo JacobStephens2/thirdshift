@@ -27,6 +27,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::asks::Flags;
+use crate::claim::{triage_disqualifiers, waiting_for_triage};
 use crate::command_limit::{NotAdmitted, PassKind, Sharing};
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
@@ -376,19 +377,38 @@ enum Decision {
 
 /// The gates of an Architect run, reaching its repository through `outside`: a
 /// skip for the open Architect plans, if it has any, then for the
-/// Architect ideas still labelled `needs-triage`, then for its lowest-numbered
-/// issue that is Ready or would be Ready once settled. No gate is read once
-/// one skips.
+/// Architect ideas waiting for triage, then for its lowest-numbered
+/// issue that is Ready or would be Ready once settled. An idea labelled
+/// `needs-triage` and a label that keeps the Triage Pass from taking it is
+/// not waiting: it is noted through `outside` and does not skip the run.
+/// No gate is read once one skips.
 fn gates(outside: &mut impl Outside) -> Result<Decision> {
     let open_plans = outside.open_issues(ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
         return Ok(Decision::Skip(Skipped::OpenPlans(open_plans)));
     }
-    let waiting: Vec<_> = outside
-        .open_issues(ARCHITECT_IDEA)?
-        .into_iter()
-        .filter(|idea| idea.labels.has(NEEDS_TRIAGE))
-        .collect();
+    let mut waiting = Vec::new();
+    for idea in outside.open_issues(ARCHITECT_IDEA)? {
+        if waiting_for_triage(&idea.labels) {
+            waiting.push(idea);
+        } else if idea.labels.has(NEEDS_TRIAGE) {
+            let conflicting: Vec<String> = triage_disqualifiers(&idea.labels)
+                .iter()
+                .map(|label| label.to_string())
+                .collect();
+            outside.conflicting_architect_idea(
+                idea.issue.number,
+                format!(
+                    "Architect idea #{} \"{}\" is labelled {NEEDS_TRIAGE} and {}, \
+                     so it is not waiting for triage: {}",
+                    idea.issue.number,
+                    idea.title,
+                    conflicting.join(", "),
+                    idea.issue.url
+                ),
+            );
+        }
+    }
     if !waiting.is_empty() {
         return Ok(Decision::Skip(Skipped::IdeasWaiting(waiting)));
     }
@@ -696,6 +716,63 @@ mod tests {
         );
         assert_eq!(urls, [url(5), url(7)]);
         assert_eq!(calls, [PLANS, IDEAS]);
+    }
+
+    fn conflicting(number: u64, label: &str) -> Call {
+        Call::ConflictingArchitectIdea(format!(
+            "Architect idea #{number} \"Issue {number}\" is labelled needs-triage and {label}, \
+             so it is not waiting for triage: {}",
+            url(number)
+        ))
+    }
+
+    #[test]
+    fn an_idea_labelled_needs_triage_and_a_disqualifier_does_not_skip_but_is_noted() {
+        for (given, canonical) in [
+            ("ready-for-agent", "ready-for-agent"),
+            ("Ready-For-Human", "ready-for-human"),
+            ("needs-info", "needs-info"),
+            ("wontfix", "wontfix"),
+            ("in-progress", "in-progress"),
+            ("agent-failed", "agent-failed"),
+        ] {
+            let repo =
+                InMemory::default().issue(5, true, &["architect-idea", "needs-triage", given]);
+
+            let (line, urls, calls) = decide(repo);
+
+            assert_eq!(line, None, "{given}");
+            assert_eq!(urls, Vec::<String>::new(), "{given}");
+            assert_eq!(
+                calls,
+                [PLANS, IDEAS, conflicting(5, canonical), Call::ReadySearch],
+                "{given}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_conflicted_idea_beside_a_waiting_one_is_noted_and_only_the_waiting_one_skips() {
+        let repo = InMemory::default()
+            .issue(5, true, &["architect-idea", "needs-triage"])
+            .issue(
+                6,
+                true,
+                &["architect-idea", "needs-triage", "ready-for-human"],
+            )
+            .ready(8, false);
+
+        let (line, urls, calls) = decide(repo);
+
+        assert_eq!(
+            line.unwrap(),
+            format!(
+                "Architect idea #5 \"Issue 5\" is waiting for triage: {}",
+                url(5)
+            )
+        );
+        assert_eq!(urls, [url(5)]);
+        assert_eq!(calls, [PLANS, IDEAS, conflicting(6, "ready-for-human")]);
     }
 
     #[test]

@@ -46,6 +46,34 @@ pub const AGENT_FAILED: Label = Label::new(
     "thirdshift failed on this issue; it waits for the Day shift",
 );
 
+/// The labels that, beside `needs-triage`, keep the Triage Pass from taking
+/// an issue: a triage outcome already decided, or a Claim state. Shared by
+/// the Triage Pass, which passes such an issue over, and an Architect run,
+/// which must not wait for triage on an issue the Triage Pass cannot take,
+/// so the two cannot disagree about what is waiting for triage.
+pub const TRIAGE_DISQUALIFIERS: [Label; 6] = [
+    READY_FOR_AGENT,
+    labels::READY_FOR_HUMAN,
+    labels::NEEDS_INFO,
+    labels::WONTFIX,
+    IN_PROGRESS,
+    AGENT_FAILED,
+];
+
+/// Each of [`TRIAGE_DISQUALIFIERS`] among `labels`, in that order.
+pub fn triage_disqualifiers(labels: &Labels) -> Vec<Label> {
+    TRIAGE_DISQUALIFIERS
+        .into_iter()
+        .filter(|label| labels.has(*label))
+        .collect()
+}
+
+/// Whether `labels` wait for triage as the Triage Pass can take them, by
+/// labels alone: `needs-triage` and none of [`TRIAGE_DISQUALIFIERS`].
+pub fn waiting_for_triage(labels: &Labels) -> bool {
+    labels.has(labels::NEEDS_TRIAGE) && triage_disqualifiers(labels).is_empty()
+}
+
 /// How the Run or the Spec run that made a Claim ended, as ending the Claim
 /// needs to know it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1139,6 +1167,28 @@ mod tests {
          is on origin, release it by hand: \
          gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress && \
          gh api --method POST repos/acme/widgets/issues/7/labels -f 'labels[]=ready-for-agent'";
+
+    #[test]
+    fn waiting_for_triage_is_needs_triage_with_no_disqualifier() {
+        let labelled = |names: &[&str]| -> Labels { names.iter().copied().collect() };
+
+        assert!(waiting_for_triage(&labelled(&["needs-triage", "bug"])));
+        assert!(!waiting_for_triage(&labelled(&["bug"])));
+        assert!(!waiting_for_triage(&labelled(&["ready-for-human"])));
+        for disqualifier in TRIAGE_DISQUALIFIERS {
+            let labels = labelled(&["needs-triage", disqualifier.name()]);
+            assert!(!waiting_for_triage(&labels), "{disqualifier}");
+            assert_eq!(triage_disqualifiers(&labels), [disqualifier]);
+        }
+        let cased = labelled(&["Needs-Triage", "READY-FOR-HUMAN"]);
+        assert!(!waiting_for_triage(&cased));
+        assert_eq!(triage_disqualifiers(&cased), [labels::READY_FOR_HUMAN]);
+        let several = labelled(&["needs-triage", "agent-failed", "wontfix"]);
+        assert_eq!(
+            triage_disqualifiers(&several),
+            [labels::WONTFIX, AGENT_FAILED]
+        );
+    }
 
     #[test]
     fn a_stop_leaves_the_issue_for_triage_keeping_the_claim_only_with_work_on_origin() {

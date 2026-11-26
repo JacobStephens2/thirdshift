@@ -93,6 +93,11 @@ pub trait Outside {
     fn step(&mut self, line: String);
     /// Record that `pass` was skipped for `reason`.
     fn skipped(&mut self, pass: Pass, reason: &dyn Display);
+    /// Hand on `line` as a progress line and record it in the Activity
+    /// log, once per change: Architect idea `issue` carries `needs-triage`
+    /// and a label that keeps the Triage Pass from taking it, so it does
+    /// not hold off an Architect run.
+    fn conflicting_architect_idea(&mut self, issue: u64, line: String);
     /// Check the Harness, Model and Effort the pass's sessions, and the run
     /// it dispatches, run on, failing if they can't run. If it `dispatches`
     /// a run, or may, check those of that run's Security review too, where
@@ -266,6 +271,11 @@ impl Outside for LaunchAndGitHub<'_> {
 
     fn skipped(&mut self, pass: Pass, reason: &dyn Display) {
         logs::skipped(pass, self.repo, reason);
+    }
+
+    fn conflicting_architect_idea(&mut self, issue: u64, line: String) {
+        progress::step(line.clone());
+        logs::conflicting_architect_idea(self.repo, issue, &line);
     }
 
     fn check_harness(&mut self, dispatches: bool) -> Result<()> {
@@ -540,6 +550,9 @@ mod in_memory {
         Step(String),
         /// It recorded that it was skipped, for this reason.
         Skipped(String),
+        /// It noted this Architect idea's conflicting labels, on its
+        /// progress output and in the Activity log.
+        ConflictingArchitectIdea(String),
         /// It checked its Harness, Model and Effort.
         HarnessCheck,
         /// It checked Node.js for the Security audit validators.
@@ -959,6 +972,10 @@ mod in_memory {
 
         fn skipped(&mut self, _: Pass, reason: &dyn Display) {
             self.calls.push(Call::Skipped(reason.to_string()));
+        }
+
+        fn conflicting_architect_idea(&mut self, _: u64, line: String) {
+            self.calls.push(Call::ConflictingArchitectIdea(line));
         }
 
         fn check_harness(&mut self, _dispatches: bool) -> Result<()> {
