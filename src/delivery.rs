@@ -1229,12 +1229,18 @@ impl ClosingIssues {
         }
     }
 
+    /// An untrusted edit since the run started, or a linked closing issue that
+    /// must not be used at all. Either stops the run without drafting the
+    /// pull request or posting from the untrusted text.
     pub(crate) fn is_untrusted_edit(error: &anyhow::Error) -> bool {
-        error.chain().any(|layer| layer.is::<UntrustedEdit>())
+        error
+            .chain()
+            .any(|layer| layer.is::<UntrustedEdit>() || layer.is::<trust::UnusableClosingIssue>())
     }
 
-    /// Record `issues` (retaining earlier seen links) and fail with
-    /// [`UntrustedEdit`] if an untrusted account edited any of them since the Run started.
+    /// Record `issues` (retaining earlier seen links). An edit since the run
+    /// started fails first. Otherwise the issue's author must be a Trusted
+    /// account and no account that is not one may have edited its title or body.
     pub(crate) fn check_known(&self, issues: &[IssueUrl]) -> Result<()> {
         let mut seen = self.seen.borrow_mut();
         let mut ids: std::collections::BTreeSet<_> = seen.iter().map(IssueUrl::identity).collect();
@@ -1245,6 +1251,9 @@ impl ClosingIssues {
         }
         for issue in seen.iter() {
             no_untrusted_edit_since(issue, self.started, self.run_name)?;
+        }
+        for issue in seen.iter() {
+            refuse_unusable_closing_issue(issue)?;
         }
         Ok(())
     }
@@ -1273,6 +1282,16 @@ pub(crate) fn no_untrusted_edit_since(
             run_name,
         }
         .into()),
+        None => Ok(()),
+    }
+}
+
+/// Fail when `issue` must not be used as a linked closing issue: its author
+/// is not a Trusted account, or an account that is not one edited its title
+/// or body.
+fn refuse_unusable_closing_issue(issue: &IssueUrl) -> Result<()> {
+    match trust::closing_issue_use(&GitHub::new(), issue)? {
+        Some(why) => Err(trust::UnusableClosingIssue::new(issue.number, why).into()),
         None => Ok(()),
     }
 }
@@ -1311,10 +1330,11 @@ fn hand_over_pull_request(
             "pull request became draft during Fix run"
         );
     }
+    // Since-start edits fail first, before the issue text is read. An
+    // untrusted author, or any older untrusted edit, fails in that same check.
+    let linked = github.closing_issues(pr)?;
+    closing_issues.check_known(&linked)?;
     let input = github.review_input(pr, &snapshot)?;
-    // The Repair session works from these issues and can push. Stop before
-    // writing them when an untrusted account has edited one (including any
-    // closing issue seen earlier in the Run and since unlinked) since the run started.
     closing_issues.check_known(&input.closing_issues)?;
     skills::exclude(&Git::new(worktree), "/.thirdshift-review-input.md")?;
     crate::processes::review::write_review_input(

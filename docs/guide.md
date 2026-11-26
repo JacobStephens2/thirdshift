@@ -3755,6 +3755,10 @@ each session, including a Resume. A title or body edit to any closing
 issue (retaining previously linked ones during the run) by an account that is
 not a Trusted account, made since a few minutes before the Fix run started,
 fails the run before continuing with that session, pushing or merging.
+It also stops before using a linked closing issue, including when the Fix run
+was started as a Pass, unless that issue's author is a Trusted account and no
+account that is not one has edited its title or body. That stop does not take
+the next candidate.
 Repairs share the usual five-session cap,
 Check re-run and optional Base fix. A Fix run starts no implementation or initial
 Standards/Spec review session.
@@ -3896,6 +3900,10 @@ linked earlier in the run): a title or body edit by an account that is not a
 Trusted account, made since a few minutes before the Review run started, stops
 the run without starting the next session, converting the pull request to a
 draft, pushing or merging.
+It also stops before using a linked closing issue, including when the Review run
+was started as a Pass, unless that issue's author is a Trusted account and no
+account that is not one has edited its title or body. That stop does not take
+the next candidate.
 Without `--recommend-only`, the session addresses findings using the same rules
 as a Ticket run: it runs each behavior finding's test or command before deciding,
 fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
@@ -3994,7 +4002,9 @@ the filtered input is in `.thirdshift-review-input.md`. All linked closing issue
 (retaining previously linked ones during the run) are checked against untrusted
 title or body edits since a few minutes before the Process started before
 writing that file, around every Step, session, Repair and Resume, and before
-Delivery or Self-merge pushes, comments or merges. This version keeps these
+Delivery or Self-merge pushes, comments or merges. It also stops before using
+a linked closing issue unless that issue's author is a Trusted account and no
+account that is not one has edited its title or body. This version keeps these
 Steps sequential and requires `review-and-address` before `delivery`, optionally
 followed directly by `self-merge`. Copied Processes retain the opt-in merge choice.
 

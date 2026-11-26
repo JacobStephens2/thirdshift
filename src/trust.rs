@@ -55,6 +55,52 @@ impl fmt::Display for IssueText {
     }
 }
 
+/// Why a linked closing issue must not be handed to a session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClosingIssueUse {
+    Author,
+    Edited(IssueText),
+}
+
+impl fmt::Display for ClosingIssueUse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Author => f.write_str("author is not a Trusted account"),
+            Self::Edited(text) => {
+                write!(
+                    f,
+                    "{text} edited by an account that is not a Trusted account"
+                )
+            }
+        }
+    }
+}
+
+/// Issue `number` cannot be used as a linked closing issue.
+#[derive(Debug)]
+pub struct UnusableClosingIssue {
+    number: u64,
+    why: ClosingIssueUse,
+}
+
+impl UnusableClosingIssue {
+    pub(crate) fn new(number: u64, why: ClosingIssueUse) -> Self {
+        Self { number, why }
+    }
+}
+
+impl fmt::Display for UnusableClosingIssue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "#{} {}; starting no further session",
+            self.number, self.why
+        )
+    }
+}
+
+impl std::error::Error for UnusableClosingIssue {}
+
 /// A `ready-for-agent` labelling or an edit of an issue: the account that
 /// made it, if GitHub still knows it, and when.
 #[derive(Clone, Debug)]
@@ -123,6 +169,20 @@ pub fn ticket_trust(
     Ok(check
         .untrusted_edit(ticket, since)?
         .map(UntrustedIssue::Edited))
+}
+
+/// Whether `issue` may be used as a linked closing issue. Its author must be
+/// a Trusted account, and no account that is not one may have edited its
+/// title or body. The author is read first; edits are read only after that
+/// passes, body before title.
+pub fn closing_issue_use(reads: &impl Reads, issue: &IssueUrl) -> Result<Option<ClosingIssueUse>> {
+    let mut check = Check::new(reads);
+    if !check.trusted_author(issue)? {
+        return Ok(Some(ClosingIssueUse::Author));
+    }
+    Ok(check
+        .untrusted_edit(issue, None)?
+        .map(ClosingIssueUse::Edited))
 }
 
 /// The first edit to `issue`'s body or title made after `since`, or ever
@@ -631,6 +691,74 @@ mod tests {
         assert_eq!(
             untrusted_edit(&reads, &url(ISSUE), Some(at(1))).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn a_linked_closing_issue_needs_a_trusted_author_before_its_edits_are_read() {
+        for association in ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR"] {
+            let reads = InMemory::with(Issue {
+                association: Some(association),
+                body_edits: vec![by("outsider", 2)],
+                ..Issue::default()
+            });
+
+            assert_eq!(
+                closing_issue_use(&reads, &url(ISSUE)).unwrap(),
+                Some(ClosingIssueUse::Author)
+            );
+            assert!(reads.edits_read.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_linked_closing_issue_refuses_any_untrusted_title_or_body_edit() {
+        let body = InMemory::with(Issue {
+            body_edits: vec![by("acme", 1), by("outsider", 2)],
+            ..Issue::default()
+        });
+        assert_eq!(
+            closing_issue_use(&body, &url(ISSUE)).unwrap(),
+            Some(ClosingIssueUse::Edited(IssueText::Body))
+        );
+
+        let title = InMemory::with(Issue {
+            title_edits: vec![unknown(1)],
+            ..Issue::default()
+        });
+        assert_eq!(
+            closing_issue_use(&title, &url(ISSUE)).unwrap(),
+            Some(ClosingIssueUse::Edited(IssueText::Title))
+        );
+        assert_eq!(
+            UnusableClosingIssue::new(ISSUE, ClosingIssueUse::Edited(IssueText::Body)).to_string(),
+            "#7 body edited by an account that is not a Trusted account; starting no further session"
+        );
+    }
+
+    #[test]
+    fn a_trusted_authors_edits_by_trusted_accounts_may_be_used() {
+        let reads = InMemory::with(Issue {
+            association: Some("COLLABORATOR"),
+            body_edits: vec![by("reader", 1)],
+            title_edits: vec![by("acme", 2)],
+            ..Issue::default()
+        });
+
+        assert_eq!(closing_issue_use(&reads, &url(ISSUE)).unwrap(), None);
+    }
+
+    #[test]
+    fn a_failed_membership_read_does_not_make_a_closing_issue_usable() {
+        let reads = InMemory::with(Issue {
+            body_edits: vec![by("broken", 1)],
+            ..Issue::default()
+        });
+
+        let error = closing_issue_use(&reads, &url(ISSUE)).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("could not check Trusted account membership"),
+            "{error:#}"
         );
     }
 }

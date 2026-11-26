@@ -418,6 +418,11 @@ impl GitHub {
         );
         let closing_issues = self.closing_issues(pr)?;
         for issue in &closing_issues {
+            if let Some(why) = crate::trust::closing_issue_use(self, issue)? {
+                return Err(crate::trust::UnusableClosingIssue::new(issue.number, why).into());
+            }
+        }
+        for issue in &closing_issues {
             markdown.push_str("\n## Linked closing issue (Spec)\n\n");
             markdown.push_str(&self.issue_for_session(issue)?);
         }

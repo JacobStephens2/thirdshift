@@ -296,6 +296,9 @@ impl ReviewProcess {
                 pr,
                 closing_issues: &closing_issues,
             };
+            // Since-start edits fail first, before the issue text is read.
+            let linked = github.closing_issues(pr)?;
+            guard.check_known_issues(&linked)?;
             let input = github.review_input(pr, &snapshot)?;
             guard.check_known_issues(&input.closing_issues)?;
             skills::exclude(&git, "/.thirdshift-review-input.md")?;
