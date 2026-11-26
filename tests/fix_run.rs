@@ -636,6 +636,7 @@ fn untrusted_closing_issue_stops_a_fix_run_before_repair() {
             scenario.claude_calls()
         );
         assert!(scenario.origin_file("colleague", "pwned.txt").is_none());
+        assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
     }
 }
 

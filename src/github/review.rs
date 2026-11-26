@@ -422,7 +422,7 @@ impl GitHub {
         let closing_issues = self.closing_issues(pr)?;
         for issue in &closing_issues {
             if let Some(why) = crate::trust::closing_issue_trust(self, issue)? {
-                return Err(crate::trust::UnusableClosingIssue::new(issue.number, why).into());
+                return Err(crate::trust::UnusableClosingIssue::new(issue, why).into());
             }
         }
         for issue in &closing_issues {

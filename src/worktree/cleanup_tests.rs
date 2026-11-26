@@ -9,6 +9,63 @@ const BRANCH: &str = "issue-7";
 
 mod disposal_tests;
 
+#[test]
+fn local_preservation_keeps_dirty_or_unpushed_work_and_cleans_a_clean_checkout() {
+    for (dirty, committed) in [(false, false), (true, false), (false, true)] {
+        let (_temp, launch) = super::tests::launch_directory();
+        let mut worktree = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
+        let path = worktree.path().to_path_buf();
+        let git = Git::new(&path);
+        let logs = path.join(".review-logs");
+        fs::create_dir(&logs).unwrap();
+        fs::write(logs.join("test.log"), "disposable output\n").unwrap();
+        let changed = dirty || committed;
+        if changed {
+            fs::write(path.join("repair.txt"), "local repair\n").unwrap();
+        }
+        if committed {
+            git.run(&["add", "repair.txt"]).unwrap();
+            git.run(&["commit", "-qm", "Repair work"]).unwrap();
+        }
+
+        assert_eq!(worktree.preserve_unpublished_locally(), changed);
+        drop(worktree);
+
+        assert_eq!(path.exists(), changed);
+        assert_eq!(
+            launch
+                .run(&["ls-remote", "--heads", "origin", "refs/heads/issue-7"])
+                .unwrap(),
+            ""
+        );
+        if changed {
+            assert_eq!(
+                fs::read_to_string(path.join("repair.txt")).unwrap(),
+                "local repair\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn local_preservation_keeps_an_unfinished_merge_with_a_clean_index() {
+    let (_temp, launch) = super::tests::launch_directory();
+    let mut worktree = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
+    let git = Git::new(worktree.path());
+    launch
+        .run(&["commit", "--allow-empty", "-qm", "Unmerged base commit"])
+        .unwrap();
+    git.run(&["merge", "--no-ff", "--no-commit", "main"])
+        .unwrap();
+    assert!(git.run(&["status", "--porcelain"]).unwrap().is_empty());
+    assert!(git.merge_in_progress().unwrap());
+
+    assert!(worktree.preserve_unpublished_locally());
+    drop(worktree);
+
+    assert!(git.merge_in_progress().unwrap());
+}
+
 /// Hold the selected Git transition open while a sibling asks to merge its
 /// Base branch. Release and join both workers before any assertion can unwind.
 fn merge_during_worktree_change<T: Send>(

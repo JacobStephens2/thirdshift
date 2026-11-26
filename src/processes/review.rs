@@ -821,13 +821,7 @@ impl Guard<'_> {
     /// Ensure PR metadata, head commit, and linked closing issues are intact.
     pub(super) fn unchanged(&self, snapshot: &ReviewPullRequest) -> Result<()> {
         let current = self.compatible(snapshot)?;
-        ensure!(
-            current.head == snapshot.head,
-            "pull request changed during Review run: head moved; expected {}, actual {}",
-            snapshot.head,
-            current.head,
-        );
-        Ok(())
+        check_review_head(&snapshot.head, &current.head)
     }
 
     /// Delivery may report a moved head and the Base branch tip may advance,
@@ -850,6 +844,14 @@ impl Guard<'_> {
         self.check_issues()?;
         Ok(current)
     }
+}
+
+fn check_review_head(expected: &str, actual: &str) -> Result<()> {
+    ensure!(
+        actual == expected,
+        "pull request changed during Review run: head moved; expected {expected}, actual {actual}",
+    );
+    Ok(())
 }
 
 fn unchanged_checkout(git: &Git, snapshot: &ReviewPullRequest) -> Result<()> {

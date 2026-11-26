@@ -76,16 +76,19 @@ impl fmt::Display for UntrustedClosingIssue {
     }
 }
 
-/// Issue `number` cannot be used as a linked closing issue.
+/// An issue that cannot be used as a linked closing issue.
 #[derive(Debug)]
 pub struct UnusableClosingIssue {
-    number: u64,
+    issue: IssueUrl,
     why: UntrustedClosingIssue,
 }
 
 impl UnusableClosingIssue {
-    pub(crate) fn new(number: u64, why: UntrustedClosingIssue) -> Self {
-        Self { number, why }
+    pub(crate) fn new(issue: &IssueUrl, why: UntrustedClosingIssue) -> Self {
+        Self {
+            issue: issue.clone(),
+            why,
+        }
     }
 }
 
@@ -93,8 +96,8 @@ impl fmt::Display for UnusableClosingIssue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "#{} {}; starting no further session",
-            self.number, self.why
+            "{}/{}#{} {}; starting no further session",
+            self.issue.owner, self.issue.repo, self.issue.number, self.why
         )
     }
 }
@@ -734,9 +737,9 @@ mod tests {
             Some(UntrustedClosingIssue::Edited(IssueText::Title))
         );
         assert_eq!(
-            UnusableClosingIssue::new(ISSUE, UntrustedClosingIssue::Edited(IssueText::Body))
+            UnusableClosingIssue::new(&url(ISSUE), UntrustedClosingIssue::Edited(IssueText::Body))
                 .to_string(),
-            "#7 body edited by an account that is not a Trusted account; starting no further session"
+            "acme/widgets#7 body edited by an account that is not a Trusted account; starting no further session"
         );
     }
 
@@ -750,6 +753,20 @@ mod tests {
         });
 
         assert_eq!(closing_issue_trust(&reads, &url(ISSUE)).unwrap(), None);
+    }
+
+    #[test]
+    fn closing_issue_stop_names_distinct_issues_with_the_same_number() {
+        let urls = [
+            "https://github.com/acme/widgets/issues/7",
+            "https://github.com/acme/other/issues/7",
+        ];
+        let [first, second] = urls.map(|input| {
+            let issue = IssueUrl::parse(input).unwrap();
+            UnusableClosingIssue::new(&issue, UntrustedClosingIssue::Author).to_string()
+        });
+        assert!(first.starts_with("acme/widgets#7 "), "{first}");
+        assert!(second.starts_with("acme/other#7 "), "{second}");
     }
 
     #[test]

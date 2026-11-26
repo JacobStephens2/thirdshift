@@ -230,7 +230,7 @@ impl Delivery<'_> {
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
         let closing_issues = ClosingIssues::new(pr.clone(), self.started, "Fix run");
-        self.fix_pr(worktree, pull_request, pr, &closing_issues, false, steps)
+        self.fix_pr(worktree, pull_request, pr, &closing_issues, steps)
     }
 
     /// Continue an already-delivered Review PR through shared Self-merge,
@@ -244,7 +244,7 @@ impl Delivery<'_> {
         closing_issues: &ClosingIssues,
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
-        self.fix_pr(worktree, pull_request, pr, closing_issues, true, steps)
+        self.fix_pr(worktree, pull_request, pr, closing_issues, steps)
     }
 
     fn fix_pr(
@@ -253,17 +253,12 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         pr: &crate::review::PullRequestUrl,
         closing_issues: &ClosingIssues,
-        self_merge: bool,
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
         if !matches!(steps.as_slice(), [Step::Delivery, Step::SelfMerge]) {
             return Err(anyhow::anyhow!("fix-run must deliver then self-merge").into());
         }
-        let context = RepairContext::PullRequest {
-            pr,
-            closing_issues,
-            self_merge,
-        };
+        let context = RepairContext::PullRequest { pr, closing_issues };
         self.fix_with(
             worktree,
             pull_request,
@@ -548,7 +543,6 @@ enum RepairContext<'a> {
     PullRequest {
         pr: &'a crate::review::PullRequestUrl,
         closing_issues: &'a ClosingIssues,
-        self_merge: bool,
     },
     BaseBranch(&'a str),
 }
@@ -567,16 +561,6 @@ impl<'a> RepairContext<'a> {
             Self::PullRequest { closing_issues, .. } => Some(closing_issues),
             Self::Issue(_) | Self::BaseBranch(_) => None,
         }
-    }
-
-    fn is_review_self_merge(self) -> bool {
-        matches!(
-            self,
-            Self::PullRequest {
-                self_merge: true,
-                ..
-            }
-        )
     }
 }
 
@@ -598,7 +582,7 @@ struct CheckedRun<'a> {
 /// request whose head includes the local work or take the Failed run path.
 fn run_checked<T, S>(
     checked: CheckedRun<'_>,
-    worktree: Worktree,
+    mut worktree: Worktree,
     pull_request: &mut PullRequest,
     tracker: &Tracker,
     on_ok: impl FnOnce(T, Option<PathBuf>) -> S,
@@ -652,16 +636,18 @@ fn run_checked<T, S>(
                 Ok(on_merged(merged, log))
             } else {
                 let interrupted = interrupt::requested();
-                let error = interrupted_or(error, interrupted);
-                // Review Self-merge runs after Delivery has already left the PR
-                // ready for review: an untrusted linked closing issue stops
-                // cleanly without drafting the PR or pushing dirty/unreviewed
-                // Repair work.
-                if context.is_review_self_merge()
+                // A closing-issue trust stop can leave unpublished Repair work.
+                // Keep it local without mutating the PR during failure handling.
+                if context.closing_issues().is_some()
                     && ClosingIssues::is_untrusted_closing_issue(&error)
                 {
                     let stopped_at = stopped_at(tracker, &error);
-                    let mut recovery = Recovery::new(stopped_at, Preservation::None);
+                    let preservation = if worktree.preserve_unpublished_locally() {
+                        Preservation::Local
+                    } else {
+                        Preservation::None
+                    };
+                    let mut recovery = Recovery::new(stopped_at, preservation);
                     recovery.record_worktree(worktree.path().to_path_buf());
                     Err(FailedRun {
                         recovery: Some(Box::new(recovery)),
@@ -673,6 +659,7 @@ fn run_checked<T, S>(
                         ticket_lines: Vec::new(),
                     })
                 } else {
+                    let error = interrupted_or(error, interrupted);
                     let stopped_at = stopped_at(tracker, &error);
                     let path = worktree.path().to_path_buf();
                     let mut outside = OnFailure {
@@ -1296,7 +1283,7 @@ pub(crate) fn no_untrusted_edit_since(
 /// or body.
 fn refuse_unusable_closing_issue(issue: &IssueUrl) -> Result<()> {
     match trust::closing_issue_trust(&GitHub::new(), issue)? {
-        Some(why) => Err(trust::UnusableClosingIssue::new(issue.number, why).into()),
+        Some(why) => Err(trust::UnusableClosingIssue::new(issue, why).into()),
         None => Ok(()),
     }
 }

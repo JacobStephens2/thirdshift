@@ -92,11 +92,14 @@ impl Delivery<'_> {
         // error used by the Command record and Run notification.
         let delivered_head = pushed.as_deref().unwrap_or(&snapshot.head);
         // A merge request reports a moved head as its hold, ahead of the
-        // readiness failure that the move may also have caused.
-        let readiness = match mode {
-            Mode::Address if self.merge => self.unchanged_head(delivered_head).and(readiness),
-            Mode::Address => readiness.and_then(|()| self.unchanged_head(delivered_head)),
-            Mode::RecommendOnly => readiness,
+        // readiness failure that the move may also have caused. The trust and
+        // eligibility checks must pass before the observed head can be reported.
+        let readiness = if mode == Mode::Address && (self.merge || readiness.is_ok()) {
+            let current = guard.compatible(snapshot)?;
+            self.check_delivered_head(delivered_head, &current.head)
+                .and(readiness)
+        } else {
+            readiness
         };
         let readiness = if ci_report.is_empty() {
             readiness
@@ -115,7 +118,8 @@ impl Delivery<'_> {
         )?;
         readiness?;
         if mode == Mode::Address {
-            self.unchanged_head(delivered_head)?;
+            let current = guard.compatible(snapshot)?;
+            self.check_delivered_head(delivered_head, &current.head)?;
         }
         Ok(())
     }
@@ -229,21 +233,13 @@ impl Delivery<'_> {
         Ok(Some(head))
     }
 
-    fn unchanged_head(&self, head: &str) -> Result<()> {
-        if self.merge {
-            let current = self.guard.compatible(self.snapshot)?;
-            if current.head != head {
-                return Err(crate::failed_run::MergeHold {
-                    reason: format!("head moved after review; expected {head}, actual {}; the PR stays ready for review", current.head),
-                }.into());
-            }
-            return Ok(());
+    fn check_delivered_head(&self, expected: &str, actual: &str) -> Result<()> {
+        if self.merge && actual != expected {
+            return Err(crate::failed_run::MergeHold {
+                reason: format!("head moved after review; expected {expected}, actual {actual}; the PR stays ready for review"),
+            }.into());
         }
-        let expected = ReviewPullRequest {
-            head: head.into(),
-            ..self.snapshot.clone()
-        };
-        self.guard.unchanged(&expected)
+        check_review_head(expected, actual)
     }
 
     /// GitHub may still serve the pre-push head briefly after a successful push.
