@@ -282,6 +282,23 @@ test('a closed Inbox cannot repopulate its first pre-Dismiss Fleet answer', { ti
   }
 });
 
+test('Fleet Inbox drops a finished answer after its last viewer leaves', async t => {
+  const { browser, caller } = await fleetPair(t, '100', '60000');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const remoteRow = `.command[data-machine="${machine}"]`;
+  await page.goto(caller.origin);
+  await page.locator(remoteRow).waitFor({ state: 'attached' });
+  await page.close();
+
+  // Fetch the initial HTML without starting another Inbox subscription.
+  await waitUntil(async () => {
+    const response = await context.request.get(caller.origin);
+    assert.ok(response.ok());
+    return !(await response.text()).includes(`data-machine="${machine}"`);
+  }, 'a polling sweep should drop the inactive viewer’s finished answer');
+});
+
 test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone', async t => {
   const { homes, cli, remote, caller, before, browser } = await fleetPair(t, '100', '600');
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });

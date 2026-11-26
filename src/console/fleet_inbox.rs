@@ -1,73 +1,23 @@
 //! Subscription-owned Fleet reads. Answers and errors live only in this process.
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+mod reads;
 
-use chrono::{DateTime, Utc};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::Utc;
 use tokio::sync::watch;
 
 use crate::config::{UserConfig, console::fleet::Entry};
-use crate::logs::status::{
-    self,
-    fleet::{Document, Reachability},
-};
+use crate::logs::status::{self, fleet::Reachability};
 
-type AnswerKey = (Option<String>, String);
-type PersonAnswers = BTreeMap<AnswerKey, Answer>;
-type ReadResult = Result<(Document, Vec<super::Scope>), (Reachability, String)>;
+use reads::{InboxReads, Read, ReadResult};
 
 #[derive(Clone)]
 pub(super) struct Fleet {
-    answers: Arc<Mutex<PersonAnswers>>,
+    reads: Arc<InboxReads>,
     pages: watch::Sender<BTreeMap<Option<String>, usize>>,
     notifier: super::changes::Notifier,
-}
-
-struct Answer {
-    entry: Entry,
-    read_floor: Instant,
-    good: Option<Document>,
-    fetched_at: Option<DateTime<Utc>>,
-    error: Option<(Reachability, String)>,
-    scopes: Vec<super::Scope>,
-}
-
-impl Answer {
-    fn new(entry: Entry, requested_at: Instant) -> Self {
-        Self {
-            entry,
-            read_floor: requested_at,
-            good: None,
-            fetched_at: None,
-            error: None,
-            scopes: Vec::new(),
-        }
-    }
-}
-
-struct InboxRead {
-    person: Option<String>,
-    entry: Entry,
-    started_at: Instant,
-}
-
-impl InboxRead {
-    fn key(&self) -> AnswerKey {
-        (self.person.clone(), self.entry.name.clone())
-    }
-
-    fn fetch(self, token: &str) -> InboxAnswer {
-        let result = read(&self.entry, token, self.person.as_deref());
-        InboxAnswer {
-            request: self,
-            result,
-        }
-    }
-}
-
-struct InboxAnswer {
-    request: InboxRead,
-    result: ReadResult,
 }
 
 pub(super) struct Lease(
@@ -132,7 +82,7 @@ impl Fleet {
     pub fn new(notifier: super::changes::Notifier) -> Self {
         let (pages, _) = watch::channel(BTreeMap::new());
         Self {
-            answers: Arc::default(),
+            reads: Arc::default(),
             pages,
             notifier,
         }
@@ -145,33 +95,15 @@ impl Fleet {
         Lease(self.pages.clone(), person)
     }
 
-    fn keep(&self, response: InboxAnswer) {
-        let InboxAnswer { request, result } = response;
-        let mut answers = self.answers.lock().unwrap();
-        let answer = answers
-            .entry(request.key())
-            .or_insert_with(|| Answer::new(request.entry.clone(), request.started_at));
-        if request.started_at < answer.read_floor {
-            return;
+    fn complete(&self, request: Read, result: ReadResult) {
+        if self.reads.complete(request, result, Utc::now()) {
+            self.notifier.commands();
         }
-        if answer.entry != request.entry {
-            *answer = Answer::new(request.entry, request.started_at);
-        }
-        match result {
-            Ok((document, scopes)) => {
-                answer.read_floor = request.started_at;
-                answer.good = Some(document);
-                answer.scopes = scopes;
-                answer.fetched_at = Some(Utc::now());
-                answer.error = None;
-            }
-            Err(error) => {
-                // A later failed read must still let an earlier usable snapshot through.
-                answer.error = Some(error);
-                answer.scopes.clear();
-            }
-        }
-        self.notifier.commands();
+    }
+
+    fn reconcile(&self, request: Read, token: &str) {
+        let result = read(request.entry(), token, request.person());
+        self.complete(request, result);
     }
 
     /// Re-read the owning Inbox as each viewer after a successful Dismiss or Undo.
@@ -182,55 +114,27 @@ impl Fleet {
         person: Option<&str>,
         command: &str,
     ) {
-        let mut people = self.pages.borrow().keys().cloned().collect::<BTreeSet<_>>();
-        people.insert(person.map(str::to_owned));
         let reads = {
-            let mut answers = self.answers.lock().unwrap();
-            let started_at = Instant::now();
-            people.extend(
-                answers
-                    .keys()
-                    .filter(|(_, machine)| machine == &destination.entry.name)
-                    .map(|(viewer, _)| viewer.clone()),
-            );
-            people
-                .into_iter()
-                .filter_map(|person| {
-                    let request = InboxRead {
-                        person,
-                        entry: destination.entry.clone(),
-                        started_at,
-                    };
-                    let answer = answers
-                        .entry(request.key())
-                        .or_insert_with(|| Answer::new(request.entry.clone(), started_at));
-                    if answer.entry != request.entry {
-                        return None;
-                    }
-                    // This cached row and any poll in flight may predate the save.
-                    answer.read_floor = started_at;
-                    if let Some(document) = &mut answer.good {
-                        document.omit_command(command);
-                    }
-                    Some(request)
-                })
-                .collect::<Vec<_>>()
+            let pages = self.pages.borrow();
+            let people = pages.keys().cloned().collect();
+            self.reads
+                .dismissal_saved(&destination.entry, person, &people, command)
         };
         self.notifier.commands();
         let mut caller = None;
         for request in reads {
-            if request.person.as_deref() == person {
+            if request.person() == person {
                 caller = Some(request);
             } else {
                 let fleet = self.clone();
                 let token = destination.token.clone();
                 drop(tokio::task::spawn_blocking(move || {
-                    fleet.keep(request.fetch(&token))
+                    fleet.reconcile(request, &token)
                 }));
             }
         }
         if let Some(request) = caller {
-            self.keep(request.fetch(&destination.token));
+            self.reconcile(request, &destination.token);
         }
     }
 
@@ -240,8 +144,7 @@ impl Fleet {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(timing("THIRDSHIFT_FLEET_INTERVAL_MS", 15));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut jobs = tokio::task::JoinSet::<InboxAnswer>::new();
-            let mut fetching = BTreeSet::new();
+            let mut jobs = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     _ = tick.tick() => {},
@@ -250,15 +153,10 @@ impl Fleet {
                         // Catch up as soon as the first page opens.
                         if pages.borrow_and_update().is_empty() { continue; }
                     },
-                    Some(result) = jobs.join_next(), if !jobs.is_empty() => {
-                        if let Ok(answer) = result {
-                            fetching.remove(&answer.request.key());
-                            fleet.keep(answer);
-                        }
-                        continue;
-                    },
+                    Some(_) = jobs.join_next(), if !jobs.is_empty() => continue,
                 }
-                if pages.borrow().is_empty() {
+                let had_entries = !fleet.reads.is_empty();
+                if pages.borrow().is_empty() && !had_entries {
                     continue;
                 }
                 let live = tokio::task::spawn_blocking(|| -> anyhow::Result<_> {
@@ -270,49 +168,39 @@ impl Fleet {
                         .into_iter()
                         .filter_map(|entry| {
                             let token = credentials.fleet_token(&entry.name)?.to_owned();
-                            Some((entry, token))
+                            Some((entry.name.clone(), (entry, token)))
                         })
-                        .collect::<Vec<_>>())
+                        .collect::<BTreeMap<_, _>>())
                 })
                 .await;
                 let Ok(Ok(live)) = live else {
                     continue;
                 };
-                let people = pages.borrow().keys().cloned().collect::<Vec<_>>();
-                fleet
-                    .answers
-                    .lock()
-                    .unwrap()
-                    .retain(|key @ (person, name), answer| {
-                        (people.contains(person) || fetching.contains(key))
-                            && live
-                                .iter()
-                                .any(|(entry, _)| entry.name == *name && *entry == answer.entry)
-                    });
-                for person in people {
-                    for (entry, token) in live.iter().cloned() {
-                        let mut answers = fleet.answers.lock().unwrap();
-                        let started_at = Instant::now();
-                        let request = InboxRead {
-                            person: person.clone(),
-                            entry,
-                            started_at,
-                        };
-                        let key = request.key();
-                        if !fetching.insert(key.clone()) {
-                            continue;
-                        }
-                        // A save can fence the first poll even if the viewer leaves.
-                        answers
-                            .entry(key)
-                            .or_insert_with(|| Answer::new(request.entry.clone(), started_at));
-                        drop(answers);
-                        jobs.spawn_blocking(move || request.fetch(&token));
-                    }
-                }
+                let requests = {
+                    let pages = pages.borrow();
+                    let people = pages.keys().cloned().collect::<BTreeSet<_>>();
+                    let entries = live.values().map(|(entry, _)| entry).collect::<Vec<_>>();
+                    fleet.reads.sweep(&people, &entries)
+                };
                 // Ages and the unreachable threshold advance even without good answers.
-                if !fleet.answers.lock().unwrap().is_empty() {
+                if had_entries || !requests.is_empty() {
                     fleet.notifier.commands();
+                }
+                for request in requests {
+                    let fleet = fleet.clone();
+                    let entry = request.entry().clone();
+                    let person = request.person().map(str::to_owned);
+                    let token = live[&entry.name].1.clone();
+                    jobs.spawn(async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            read(&entry, &token, person.as_deref())
+                        })
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err((Reachability::Unreachable, "Inbox read task failed".into()))
+                        });
+                        fleet.complete(request, result);
+                    });
                 }
             }
         })
@@ -352,17 +240,11 @@ impl Fleet {
             inbox.idle_passes.clear();
             inbox.pass_starts.clear();
         }
-        let answers = self.answers.lock().unwrap();
         for entry in &config.console.fleet {
             if !selected.is_empty() && selected != entry.name {
                 continue;
             }
-            let Some(answer) = answers
-                .get(&(person.map(str::to_owned), entry.name.clone()))
-                .filter(|answer| {
-                    answer.entry == *entry && (answer.good.is_some() || answer.error.is_some())
-                })
-            else {
+            let Some(answer) = self.reads.answer(person, entry) else {
                 continue;
             };
             let age = answer
