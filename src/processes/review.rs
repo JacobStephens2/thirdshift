@@ -486,7 +486,7 @@ impl ReviewProcess {
                                 last_log = log.clone();
                                 let review = match review {
                                     Err(error)
-                                        if crate::delivery::ClosingIssues::is_untrusted_edit(
+                                        if crate::delivery::ClosingIssues::is_untrusted_closing_issue(
                                             &error,
                                         ) =>
                                     {

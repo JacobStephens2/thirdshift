@@ -57,12 +57,12 @@ impl fmt::Display for IssueText {
 
 /// Why a linked closing issue must not be handed to a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClosingIssueUse {
+pub enum UntrustedClosingIssue {
     Author,
     Edited(IssueText),
 }
 
-impl fmt::Display for ClosingIssueUse {
+impl fmt::Display for UntrustedClosingIssue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Author => f.write_str("author is not a Trusted account"),
@@ -80,11 +80,11 @@ impl fmt::Display for ClosingIssueUse {
 #[derive(Debug)]
 pub struct UnusableClosingIssue {
     number: u64,
-    why: ClosingIssueUse,
+    why: UntrustedClosingIssue,
 }
 
 impl UnusableClosingIssue {
-    pub(crate) fn new(number: u64, why: ClosingIssueUse) -> Self {
+    pub(crate) fn new(number: u64, why: UntrustedClosingIssue) -> Self {
         Self { number, why }
     }
 }
@@ -171,18 +171,21 @@ pub fn ticket_trust(
         .map(UntrustedIssue::Edited))
 }
 
-/// Whether `issue` may be used as a linked closing issue. Its author must be
-/// a Trusted account, and no account that is not one may have edited its
-/// title or body. The author is read first; edits are read only after that
-/// passes, body before title.
-pub fn closing_issue_use(reads: &impl Reads, issue: &IssueUrl) -> Result<Option<ClosingIssueUse>> {
+/// Check a linked closing issue: its author must be a Trusted account, and
+/// no account that is not one may have edited its title or body. The author
+/// is read first; edits are read only after that passes, body before title.
+/// `None` means the issue may be used.
+pub fn closing_issue_trust(
+    reads: &impl Reads,
+    issue: &IssueUrl,
+) -> Result<Option<UntrustedClosingIssue>> {
     let mut check = Check::new(reads);
     if !check.trusted_author(issue)? {
-        return Ok(Some(ClosingIssueUse::Author));
+        return Ok(Some(UntrustedClosingIssue::Author));
     }
     Ok(check
         .untrusted_edit(issue, None)?
-        .map(ClosingIssueUse::Edited))
+        .map(UntrustedClosingIssue::Edited))
 }
 
 /// The first edit to `issue`'s body or title made after `since`, or ever
@@ -704,8 +707,8 @@ mod tests {
             });
 
             assert_eq!(
-                closing_issue_use(&reads, &url(ISSUE)).unwrap(),
-                Some(ClosingIssueUse::Author)
+                closing_issue_trust(&reads, &url(ISSUE)).unwrap(),
+                Some(UntrustedClosingIssue::Author)
             );
             assert!(reads.edits_read.borrow().is_empty());
         }
@@ -718,8 +721,8 @@ mod tests {
             ..Issue::default()
         });
         assert_eq!(
-            closing_issue_use(&body, &url(ISSUE)).unwrap(),
-            Some(ClosingIssueUse::Edited(IssueText::Body))
+            closing_issue_trust(&body, &url(ISSUE)).unwrap(),
+            Some(UntrustedClosingIssue::Edited(IssueText::Body))
         );
 
         let title = InMemory::with(Issue {
@@ -727,11 +730,12 @@ mod tests {
             ..Issue::default()
         });
         assert_eq!(
-            closing_issue_use(&title, &url(ISSUE)).unwrap(),
-            Some(ClosingIssueUse::Edited(IssueText::Title))
+            closing_issue_trust(&title, &url(ISSUE)).unwrap(),
+            Some(UntrustedClosingIssue::Edited(IssueText::Title))
         );
         assert_eq!(
-            UnusableClosingIssue::new(ISSUE, ClosingIssueUse::Edited(IssueText::Body)).to_string(),
+            UnusableClosingIssue::new(ISSUE, UntrustedClosingIssue::Edited(IssueText::Body))
+                .to_string(),
             "#7 body edited by an account that is not a Trusted account; starting no further session"
         );
     }
@@ -745,7 +749,7 @@ mod tests {
             ..Issue::default()
         });
 
-        assert_eq!(closing_issue_use(&reads, &url(ISSUE)).unwrap(), None);
+        assert_eq!(closing_issue_trust(&reads, &url(ISSUE)).unwrap(), None);
     }
 
     #[test]
@@ -755,7 +759,7 @@ mod tests {
             ..Issue::default()
         });
 
-        let error = closing_issue_use(&reads, &url(ISSUE)).unwrap_err();
+        let error = closing_issue_trust(&reads, &url(ISSUE)).unwrap_err();
         assert!(
             format!("{error:#}").contains("could not check Trusted account membership"),
             "{error:#}"

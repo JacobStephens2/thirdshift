@@ -59,7 +59,7 @@ impl Delivery<'_> {
         };
         if readiness
             .as_ref()
-            .is_err_and(crate::delivery::ClosingIssues::is_untrusted_edit)
+            .is_err_and(crate::delivery::ClosingIssues::is_untrusted_closing_issue)
         {
             return readiness;
         }

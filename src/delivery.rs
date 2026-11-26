@@ -654,10 +654,12 @@ fn run_checked<T, S>(
                 let interrupted = interrupt::requested();
                 let error = interrupted_or(error, interrupted);
                 // Review Self-merge runs after Delivery has already left the PR
-                // ready for review: an untrusted closing-issue edit stops
+                // ready for review: an untrusted linked closing issue stops
                 // cleanly without drafting the PR or pushing dirty/unreviewed
                 // Repair work.
-                if context.is_review_self_merge() && ClosingIssues::is_untrusted_edit(&error) {
+                if context.is_review_self_merge()
+                    && ClosingIssues::is_untrusted_closing_issue(&error)
+                {
                     let stopped_at = stopped_at(tracker, &error);
                     let mut recovery = Recovery::new(stopped_at, Preservation::None);
                     recovery.record_worktree(worktree.path().to_path_buf());
@@ -1233,7 +1235,7 @@ impl ClosingIssues {
     /// An untrusted edit since the run started, or a linked closing issue that
     /// must not be used at all. Either stops the run without drafting the
     /// pull request or posting from the untrusted text.
-    pub(crate) fn is_untrusted_edit(error: &anyhow::Error) -> bool {
+    pub(crate) fn is_untrusted_closing_issue(error: &anyhow::Error) -> bool {
         error
             .chain()
             .any(|layer| layer.is::<UntrustedEdit>() || layer.is::<trust::UnusableClosingIssue>())
@@ -1293,7 +1295,7 @@ pub(crate) fn no_untrusted_edit_since(
 /// is not a Trusted account, or an account that is not one edited its title
 /// or body.
 fn refuse_unusable_closing_issue(issue: &IssueUrl) -> Result<()> {
-    match trust::closing_issue_use(&GitHub::new(), issue)? {
+    match trust::closing_issue_trust(&GitHub::new(), issue)? {
         Some(why) => Err(trust::UnusableClosingIssue::new(issue.number, why).into()),
         None => Ok(()),
     }
@@ -1620,7 +1622,7 @@ impl RunOutside<'_> {
     fn finish_session_or_fix<T>(&mut self, result: Result<T>) -> Result<()> {
         let checked = self.check_closing_issues();
         match (result, checked) {
-            (_, Err(err)) if ClosingIssues::is_untrusted_edit(&err) => return Err(err),
+            (_, Err(err)) if ClosingIssues::is_untrusted_closing_issue(&err) => return Err(err),
             (Err(err), _) => return Err(err),
             (Ok(_), Err(err)) => return Err(err),
             (Ok(_), Ok(())) => {}
