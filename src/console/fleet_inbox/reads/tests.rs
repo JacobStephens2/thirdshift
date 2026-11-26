@@ -40,7 +40,7 @@ fn failed() -> ReadResult {
 }
 
 fn selectors(answer: &Answer) -> Vec<String> {
-    let document = serde_json::to_value(answer.good.as_deref().unwrap()).unwrap();
+    let document = serde_json::to_value(answer.good.as_ref().unwrap().document.as_ref()).unwrap();
     document["commands"]
         .as_array()
         .unwrap()
@@ -73,7 +73,7 @@ fn a_save_fences_overlapping_polls_and_omits_only_the_affected_command() {
     for viewer in ["actor", "observer"] {
         let answer = reads.answer(Some(viewer), &owner).unwrap();
         assert_eq!(selectors(&answer), ["unrelated"]);
-        assert_eq!(answer.fetched_at, Some(time(1)));
+        assert_eq!(answer.good.unwrap().fetched_at, time(1));
         assert_eq!(
             selectors(&reads.answer(Some(viewer), &other).unwrap()),
             ["target", "unrelated"]
@@ -122,14 +122,14 @@ fn an_undo_read_can_clear_a_later_polls_failure() {
     assert!(reads.complete(poll, failed(), time(2)));
     let answer = reads.answer(Some("actor"), &owner).unwrap();
     assert_eq!(selectors(&answer), ["unrelated"]);
-    assert_eq!(answer.fetched_at, Some(time(1)));
+    assert_eq!(answer.good.unwrap().fetched_at, time(1));
     assert!(matches!(answer.error, Some((Reachability::Unreachable, _))));
     assert!(answer.scopes.is_empty());
 
     assert!(reads.complete(undo, good(&["restored", "unrelated"]), time(3)));
     let answer = reads.answer(Some("actor"), &owner).unwrap();
     assert_eq!(selectors(&answer), ["restored", "unrelated"]);
-    assert_eq!(answer.fetched_at, Some(time(3)));
+    assert_eq!(answer.good.unwrap().fetched_at, time(3));
     assert!(answer.error.is_none());
     assert!(answer.scopes.contains(&Scope::Act));
 }
@@ -145,7 +145,7 @@ fn a_newer_success_fences_an_older_post_save_failure() {
     assert!(!reads.complete(after_save, failed(), time(2)));
     let answer = reads.answer(Some("actor"), &owner).unwrap();
     assert_eq!(selectors(&answer), ["latest"]);
-    assert_eq!(answer.fetched_at, Some(time(1)));
+    assert_eq!(answer.good.unwrap().fetched_at, time(1));
     assert!(answer.error.is_none());
     assert!(answer.scopes.contains(&Scope::Act));
 }
@@ -161,9 +161,13 @@ fn a_closed_viewers_first_poll_is_fenced_and_kept_until_its_reads_finish() {
     assert!(reads.sweep(&no_subscribers, &[&owner]).is_empty());
 
     let replacements = reads.dismissal_saved(&owner, Some("actor"), &people(&["new"]), "target");
+    assert_eq!(replacements.len(), 3);
     assert_eq!(
-        replacements.iter().map(Read::person).collect::<Vec<_>>(),
-        [Some("actor"), Some("closed"), Some("new")]
+        replacements
+            .iter()
+            .map(Read::person)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([Some("actor"), Some("closed"), Some("new")])
     );
     assert!(!reads.complete(first, good(&["target"]), time(1)));
     assert!(reads.answer(Some("closed"), &owner).is_none());
@@ -190,7 +194,8 @@ fn discarded_reads_cannot_restore_an_answer_after_the_exact_pairing_returns() {
     let viewers = people(&["actor"]);
     let first = only_read(reads.sweep(&viewers, &[&original]));
     assert!(reads.complete(first, good(&["original"]), time(1)));
-    let discarded = only_read(reads.sweep(&viewers, &[&original]));
+    let discarded =
+        only_read(reads.dismissal_saved(&original, Some("actor"), &viewers, "original"));
     assert!(reads.answer(Some("actor"), &replacement).is_none());
 
     let new = only_read(reads.sweep(&viewers, &[&replacement]));
@@ -205,5 +210,49 @@ fn discarded_reads_cannot_restore_an_answer_after_the_exact_pairing_returns() {
     assert_eq!(
         selectors(&reads.answer(Some("actor"), &original).unwrap()),
         ["readded"]
+    );
+}
+
+#[test]
+fn a_readded_pairing_waits_for_its_old_poll() {
+    let reads = InboxReads::default();
+    let owner = pairing("owner");
+    let viewers = people(&["actor"]);
+    let old = only_read(reads.sweep(&viewers, &[&owner]));
+    assert!(reads.sweep(&viewers, &[]).is_empty());
+    assert!(
+        reads.sweep(&viewers, &[&owner]).is_empty(),
+        "the same viewer and machine already have a periodic poll in flight"
+    );
+    assert!(!reads.complete(old, good(&["retired"]), time(1)));
+    assert!(reads.answer(Some("actor"), &owner).is_none());
+    let new = only_read(reads.sweep(&viewers, &[&owner]));
+    assert!(reads.complete(new, good(&["current"]), time(2)));
+}
+
+#[test]
+fn a_save_removes_the_dismissed_dispatch_from_its_retained_parent() {
+    let reads = InboxReads::default();
+    let owner = pairing("owner");
+    let viewers = people(&["actor"]);
+    let document = serde_json::from_value(json!({
+        "version": 2,
+        "hostname": "owner",
+        "active_runs": 0,
+        "commands": [
+            { "selector": "target" },
+            { "selector": "parent", "dispatched": [{ "selector": "target" }, { "selector": "sibling" }] }
+        ],
+    })).unwrap();
+    let poll = only_read(reads.sweep(&viewers, &[&owner]));
+    assert!(reads.complete(poll, Ok((document, vec![Scope::Read])), time(1)));
+    let _refresh = only_read(reads.dismissal_saved(&owner, Some("actor"), &viewers, "target"));
+    let kept = reads.answer(Some("actor"), &owner).unwrap();
+    let document = serde_json::to_value(kept.good.unwrap().document.as_ref()).unwrap();
+    assert_eq!(
+        document["commands"],
+        json!([
+            { "selector": "parent", "dispatched": [{ "selector": "sibling" }] }
+        ])
     );
 }

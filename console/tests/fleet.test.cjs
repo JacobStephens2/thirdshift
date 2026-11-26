@@ -413,6 +413,14 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await replaceRecord(remotePath, JSON.stringify(added));
   const ready = page.locator('[data-group="ready for review"] > .commands > .command[data-machine="remote-workstation-with-a-long-name"]');
   await ready.getByText('Ready on the Fleet machine', { exact: true }).waitFor({ state: 'attached' });
+  // Keep this viewer subscribed while full-page navigation tests both Inbox URLs.
+  const subscribed = await context.newPage();
+  const [events] = await Promise.all([
+    subscribed.waitForResponse(response => response.url() === `${caller.origin}/events`),
+    subscribed.goto(caller.origin),
+  ]);
+  assert.ok(events.ok());
+  await page.bringToFront();
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     for (const section of ['overview', 'ready-for-review']) {
@@ -442,6 +450,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
+  await subscribed.close();
   await page.goto(`${caller.origin}/?section=overview&machine=${machine}&repository=acme%2Fwidgets`);
   await ready.getByText('Merge conflict', { exact: true }).waitFor();
   const readySection = page.getByRole('group', { name: 'Ready for review', exact: true });

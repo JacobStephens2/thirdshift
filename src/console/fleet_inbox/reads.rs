@@ -33,10 +33,15 @@ impl Read {
 
 #[derive(Clone, Default)]
 pub(super) struct Answer {
-    pub good: Option<Arc<Document>>,
-    pub fetched_at: Option<DateTime<Utc>>,
+    pub good: Option<GoodAnswer>,
     pub error: Option<(Reachability, String)>,
     pub scopes: Vec<Scope>,
+}
+
+#[derive(Clone)]
+pub(super) struct GoodAnswer {
+    pub document: Arc<Document>,
+    pub fetched_at: DateTime<Utc>,
 }
 
 #[derive(Default)]
@@ -50,6 +55,27 @@ struct Pairing {
     cutoff: u64,
     pending: BTreeMap<u64, Source>,
     answer: Option<Answer>,
+}
+
+impl Pairing {
+    fn has_poll(&self) -> bool {
+        self.pending.values().any(|source| *source == Source::Poll)
+    }
+
+    fn retained(&self) -> bool {
+        self.answer.is_some()
+            || self
+                .pending
+                .last_key_value()
+                .is_some_and(|(order, _)| *order > self.cutoff)
+    }
+
+    fn discard(&mut self, cutoff: u64) {
+        self.answer = None;
+        self.cutoff = cutoff;
+        // A discarded poll still occupies its slot until its transport returns.
+        self.pending.retain(|_, source| *source == Source::Poll);
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -66,6 +92,13 @@ enum Reason<'a> {
 impl State {
     fn admit(&mut self, person: &Person, entry: &Entry, reason: Reason<'_>) -> Option<Read> {
         let pairings = self.viewers.entry(person.clone()).or_default();
+        if matches!(reason, Reason::Poll)
+            && pairings
+                .iter()
+                .any(|pairing| pairing.entry.name == entry.name && pairing.has_poll())
+        {
+            return None;
+        }
         let index = pairings.iter().position(|pairing| pairing.entry == *entry);
         let pairing = if let Some(index) = index {
             &mut pairings[index]
@@ -79,24 +112,15 @@ impl State {
             pairings.last_mut().unwrap()
         };
         let source = match reason {
-            Reason::Poll => {
-                if pairing
-                    .pending
-                    .values()
-                    .any(|source| *source == Source::Poll)
-                {
-                    return None;
-                }
-                Source::Poll
-            }
+            Reason::Poll => Source::Poll,
             Reason::SavedDismissal(command) => {
                 pairing.cutoff = self.last_order;
-                if let Some(document) = pairing
+                if let Some(good) = pairing
                     .answer
                     .as_mut()
                     .and_then(|answer| answer.good.as_mut())
                 {
-                    Arc::make_mut(document).omit_command(command);
+                    Arc::make_mut(&mut good.document).omit_command(command);
                 }
                 Source::SavedDismissal
             }
@@ -119,10 +143,14 @@ impl InboxReads {
     /// Discard retired pairings and idle viewers before admitting subscribed polls.
     pub fn sweep(&self, subscribed: &BTreeSet<Person>, current: &[&Entry]) -> Vec<Read> {
         let mut state = self.0.lock().unwrap();
+        let cutoff = state.last_order;
         state.viewers.retain(|person, pairings| {
-            pairings.retain(|pairing| {
-                current.contains(&&pairing.entry)
-                    && (subscribed.contains(person) || !pairing.pending.is_empty())
+            pairings.retain_mut(|pairing| {
+                if !current.contains(&&pairing.entry) {
+                    pairing.discard(cutoff);
+                    return pairing.has_poll();
+                }
+                subscribed.contains(person) || !pairing.pending.is_empty()
             });
             !pairings.is_empty()
         });
@@ -146,12 +174,17 @@ impl InboxReads {
         let mut state = self.0.lock().unwrap();
         let mut people = subscribed.clone();
         people.insert(actor.map(str::to_owned));
-        people.extend(state.viewers.iter().filter_map(|(person, pairings)| {
-            pairings
+        people.extend(
+            state
+                .viewers
                 .iter()
-                .any(|pairing| pairing.entry == *entry)
-                .then(|| person.clone())
-        }));
+                .filter(|(_, pairings)| {
+                    pairings
+                        .iter()
+                        .any(|pairing| pairing.entry == *entry && pairing.retained())
+                })
+                .map(|(person, _)| person.clone()),
+        );
         people
             .iter()
             .filter_map(|person| state.admit(person, entry, Reason::SavedDismissal(command)))
@@ -176,8 +209,10 @@ impl InboxReads {
             Ok((document, scopes)) => {
                 pairing.cutoff = read.order;
                 *answer = Answer {
-                    good: Some(Arc::new(document)),
-                    fetched_at: Some(completed_at),
+                    good: Some(GoodAnswer {
+                        document: Arc::new(document),
+                        fetched_at: completed_at,
+                    }),
                     error: None,
                     scopes,
                 };

@@ -248,8 +248,9 @@ impl Fleet {
                 continue;
             };
             let age = answer
-                .fetched_at
-                .map(|time| (Utc::now() - time).to_std().unwrap_or_default());
+                .good
+                .as_ref()
+                .map(|good| (Utc::now() - good.fetched_at).to_std().unwrap_or_default());
             let stale = age.is_none_or(|age| age >= timing("THIRDSHIFT_FLEET_STALE_MS", 60));
             let reachability = match answer.error.as_ref().map(|(state, _)| state) {
                 Some(Reachability::Refused) => "refused",
@@ -257,10 +258,13 @@ impl Fleet {
                 _ if stale => "unreachable",
                 _ => "ok",
             };
-            let count = answer.good.as_ref().map_or(0, |good| good.active_runs);
+            let count = answer
+                .good
+                .as_ref()
+                .map_or(0, |good| good.document.active_runs);
             if let Some(good) = &answer.good {
                 let unavailable = stale || answer.error.is_some();
-                inbox.merge_remote(good, entry, stale, answer.error.is_some())?;
+                inbox.merge_remote(&good.document, entry, stale, answer.error.is_some())?;
                 inbox.remote_actions(
                     &entry.name,
                     !unavailable && answer.scopes.contains(&super::Scope::Act),
