@@ -91,8 +91,8 @@ pub enum Skipped {
     /// These Architect plans are still open on this repository: at least
     /// one.
     OpenPlans(Vec<ListedIssue>),
-    /// These Architect ideas are open on this repository and still labelled
-    /// `needs-triage`: at least one.
+    /// These Architect ideas are open on this repository and waiting for
+    /// triage: at least one.
     IdeasWaiting(Vec<ListedIssue>),
     /// This Ready issue, the lowest-numbered on this repository, goes first.
     ReadyIssue(ListedIssue),

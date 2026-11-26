@@ -1,8 +1,10 @@
 //! An issue's labels and the labels thirdshift knows: every rule about them,
 //! so none is applied without GitHub's case-insensitivity. The triage labels
 //! live here, as no one concept owns them; the labels of one concept, as the
-//! Claim's `in-progress`, live with that concept. Every change thirdshift
-//! makes to an issue's labels is an [`Edit`].
+//! Claim's `in-progress`, live with that concept. One rule lives with the
+//! Claim instead: what waiting for triage means, in [`crate::claim`], as two
+//! of the labels it needs are the Claim's. Every change thirdshift makes to
+//! an issue's labels is an [`Edit`].
 
 use std::fmt;
 
