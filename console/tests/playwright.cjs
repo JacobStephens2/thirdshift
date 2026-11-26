@@ -26,4 +26,17 @@ function quick(browser) {
 const chromium = Object.create(playwright.chromium);
 chromium.launch = async (...args) => quick(await playwright.chromium.launch(...args));
 
-module.exports = { ...playwright, chromium, DEFAULT_TIMEOUT };
+// Keep the viewer active across full-page navigation when testing retained answers.
+async function keepInboxSubscribed(page, origin) {
+  const context = page.context();
+  const watching = await context.browser().newContext({ storageState: await context.storageState() });
+  const subscriber = await watching.newPage();
+  const [events] = await Promise.all([
+    subscriber.waitForResponse(response => response.url() === `${origin}/events`),
+    subscriber.goto(origin),
+  ]);
+  if (!events.ok()) throw new Error(`Inbox subscription returned HTTP ${events.status()}`);
+  await page.bringToFront();
+}
+
+module.exports = { ...playwright, chromium, DEFAULT_TIMEOUT, keepInboxSubscribed };
