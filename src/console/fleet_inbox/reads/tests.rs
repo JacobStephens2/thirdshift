@@ -7,6 +7,7 @@ use super::{Answer, InboxReads, Read, ReadResult};
 use crate::config::console::fleet::Entry;
 use crate::console::Scope;
 use crate::logs::status::fleet::Reachability;
+use crate::logs::status::rows::WireDocument;
 
 fn people(names: &[&str]) -> BTreeSet<Option<String>> {
     names.iter().map(|name| Some((*name).to_owned())).collect()
@@ -20,17 +21,24 @@ fn time(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(seconds, 0).unwrap()
 }
 
+fn command(selector: &str) -> serde_json::Value {
+    json!({
+        "selector": selector, "repository": "acme/widgets", "kind": "Run",
+        "state": "failed", "started_at": "2026-11-15T08:00:00Z",
+        "group": "needs you", "landing": false, "stopping": false, "count": 1
+    })
+}
+
 fn good(selectors: &[&str]) -> ReadResult {
-    let commands: Vec<_> = selectors
-        .iter()
-        .map(|selector| json!({ "selector": selector }))
-        .collect();
-    let document = serde_json::from_value(json!({
+    let commands: Vec<_> = selectors.iter().map(|selector| command(selector)).collect();
+    let document = serde_json::from_value::<WireDocument>(json!({
         "version": 2,
         "hostname": "owner",
         "active_runs": 0,
         "commands": commands,
     }))
+    .unwrap()
+    .admit_console("owner")
     .unwrap();
     Ok((document, vec![Scope::Read, Scope::Act]))
 }
@@ -235,24 +243,26 @@ fn a_save_removes_the_dismissed_dispatch_from_its_retained_parent() {
     let reads = InboxReads::default();
     let owner = pairing("owner");
     let viewers = people(&["actor"]);
-    let document = serde_json::from_value(json!({
+    let mut parent = command("parent");
+    parent["dispatched"] = json!([command("target"), command("sibling")]);
+    let document = serde_json::from_value::<WireDocument>(json!({
         "version": 2,
         "hostname": "owner",
         "active_runs": 0,
-        "commands": [
-            { "selector": "target" },
-            { "selector": "parent", "dispatched": [{ "selector": "target" }, { "selector": "sibling" }] }
-        ],
-    })).unwrap();
+        "commands": [command("target"), parent],
+    }))
+    .unwrap()
+    .admit_console("owner")
+    .unwrap();
     let poll = only_read(reads.sweep(&viewers, &[&owner]));
     assert!(reads.complete(poll, Ok((document, vec![Scope::Read])), time(1)));
     let _refresh = only_read(reads.dismissal_saved(&owner, Some("actor"), &viewers, "target"));
     let kept = reads.answer(Some("actor"), &owner).unwrap();
     let document = serde_json::to_value(kept.good.unwrap().document.as_ref()).unwrap();
-    assert_eq!(
-        document["commands"],
-        json!([
-            { "selector": "parent", "dispatched": [{ "selector": "sibling" }] }
-        ])
-    );
+    let rows = document["commands"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["selector"], "parent");
+    let dispatched = rows[0]["dispatched"].as_array().unwrap();
+    assert_eq!(dispatched.len(), 1);
+    assert_eq!(dispatched[0]["selector"], "sibling");
 }

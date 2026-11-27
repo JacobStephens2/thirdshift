@@ -2,86 +2,17 @@
 //! The Console poller can reuse this blocking fetch-and-merge path off its executor.
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::config::{UserConfig, console::fleet::Entry};
 use crate::resend_key::Credentials;
 
-pub(super) const VERSION: u32 = 2;
+use super::rows::{ConsoleDocument, Document, WireDocument};
+
 const TIMEOUT: Duration = Duration::from_secs(3);
-const NESTED_COMMANDS: [&str; 3] = ["children", "dispatched", "collapsed"];
-
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Document {
-    pub version: u32,
-    pub hostname: String,
-    pub active_runs: usize,
-    // Keep the owning machine's Command-specific metadata intact. Fleet merging
-    // never re-evaluates its GitHub facts, collapse decisions or account ownership.
-    pub(super) commands: Vec<Observation>,
-    #[serde(default)]
-    pub machines: Vec<Machine>,
-    #[serde(flatten)]
-    other: Map<String, Value>,
-}
-
-impl Document {
-    pub(crate) fn omit_command(&mut self, selector: &str) {
-        fn keep(value: &mut Value, selector: &str) -> bool {
-            if super::document_selector(value) == selector {
-                return false;
-            }
-            for field in NESTED_COMMANDS {
-                if let Some(children) = value.get_mut(field).and_then(Value::as_array_mut) {
-                    children.retain_mut(|child| keep(child, selector));
-                }
-            }
-            true
-        }
-        self.commands
-            .retain_mut(|command| keep(&mut command.value, selector));
-    }
-
-    pub(super) fn github_answer_is_stale(&self) -> bool {
-        super::stale_github_answer(
-            self.other
-                .get("github_answer_age_seconds")
-                .and_then(Value::as_u64),
-            self.other
-                .get("github_failure")
-                .is_some_and(Value::is_string),
-        )
-    }
-
-    fn tag_commands(&mut self, name: Option<&str>) -> Result<()> {
-        let stale_github = self.github_answer_is_stale();
-        let name = name.unwrap_or(&self.hostname);
-        for command in &mut self.commands {
-            command.stale_github = stale_github;
-            tag(&mut command.value, &self.hostname, name)?;
-        }
-        Ok(())
-    }
-}
-
-/// Carry the owning machine's freshness through the Fleet merge in memory.
-/// The wire representation remains the original Command object.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub(super) struct Observation {
-    pub value: Value,
-    #[serde(skip)]
-    stale_github: bool,
-}
-
-impl Observation {
-    pub fn text_row(&self) -> Result<super::text::Row> {
-        super::text::Row::read(&self.value, self.stale_github)
-    }
-}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Machine {
@@ -103,9 +34,9 @@ pub(crate) enum Reachability {
     NeedsUpdate,
 }
 
-pub(super) fn local(value: Value, now: DateTime<Utc>) -> Result<Document> {
-    let mut document: Document = serde_json::from_value(value)?;
-    document.tag_commands(None)?;
+pub(super) fn local(value: Value, now: DateTime<Utc>) -> Result<WireDocument> {
+    let mut document: WireDocument = serde_json::from_value(value)?;
+    document.tag(None)?;
     let hostname = &document.hostname;
     document.machines = vec![Machine {
         name: hostname.clone(),
@@ -118,32 +49,15 @@ pub(super) fn local(value: Value, now: DateTime<Utc>) -> Result<Document> {
     Ok(document)
 }
 
-fn tag(row: &mut Value, machine: &str, name: &str) -> Result<()> {
-    let fields = row.as_object_mut().context("invalid Command")?;
-    fields.insert("machine".into(), machine.into());
-    fields.insert("machine_name".into(), name.into());
-    for field in NESTED_COMMANDS {
-        if let Some(nested) = fields.get_mut(field) {
-            for child in nested.as_array_mut().context("invalid Command tree")? {
-                tag(child, machine, name)?;
-            }
-        }
-    }
-    Ok(())
-}
-
 /// `None` and the local hostname both mean the entire Fleet. An explicit other
 /// name selects only that entry. Link-only entries never receive a request.
-pub(crate) fn fetch_and_merge(
+pub(super) fn fetch_and_merge(
     config: &UserConfig,
-    mut local: Document,
+    mut local: WireDocument,
     machine: Option<&str>,
     all: bool,
 ) -> Result<Document> {
     let selected = machine.filter(|name| *name != local.hostname);
-    if selected.is_none() && config.console.fleet.is_empty() {
-        return Ok(local);
-    }
     let credentials = Credentials::read()?;
     if let Some(name) = selected {
         ensure!(
@@ -164,6 +78,7 @@ pub(crate) fn fetch_and_merge(
             .other
             .insert("pass_starts".into(), Value::Array(vec![]));
     }
+    let mut local = local.check_cli()?;
     let client = reqwest::blocking::Client::builder()
         .timeout(TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
@@ -198,26 +113,19 @@ pub(crate) fn fetch_and_merge(
         machine.fetched_at = Utc::now();
         local.machines.push(machine);
     }
-    // Both local and received rows are validated presentations. Sorting uses the
-    // same key as the owning Inbox, without re-evaluating groups or collapsing
-    // independent Commands from different machines.
-    let mut rows = local
-        .commands
-        .into_iter()
-        .map(|command| Ok((command.text_row()?.order(), command)))
-        .collect::<Result<Vec<_>>>()?;
-    rows.sort_by_key(|(order, _)| *order);
-    local.commands = rows.into_iter().map(|(_, value)| value).collect();
+    local.commands.sort_by_cached_key(super::rows::Row::order);
     Ok(local)
 }
 
-pub(crate) fn fetch(
+fn fetch(
     client: &reqwest::blocking::Client,
     entry: &Entry,
     token: &str,
     all: bool,
 ) -> std::result::Result<Document, (Reachability, String)> {
-    fetch_for_person(client, entry, token, all, None)
+    fetch_wire(client, entry, token, all, None)?
+        .admit_cli(&entry.name)
+        .map_err(|error| (Reachability::NeedsUpdate, error.message().into()))
 }
 
 pub(crate) fn fetch_for_person(
@@ -226,7 +134,19 @@ pub(crate) fn fetch_for_person(
     token: &str,
     all: bool,
     person: Option<&str>,
-) -> std::result::Result<Document, (Reachability, String)> {
+) -> std::result::Result<ConsoleDocument, (Reachability, String)> {
+    fetch_wire(client, entry, token, all, person)?
+        .admit_console(&entry.name)
+        .map_err(|error| (Reachability::NeedsUpdate, error.message().into()))
+}
+
+fn fetch_wire(
+    client: &reqwest::blocking::Client,
+    entry: &Entry,
+    token: &str,
+    all: bool,
+    person: Option<&str>,
+) -> std::result::Result<WireDocument, (Reachability, String)> {
     use Reachability::{NeedsUpdate, Refused, Unreachable};
     // Recheck edited config before transmitting the saved bearer token.
     crate::console::fleet::pairing_address(&entry.address)
@@ -258,7 +178,7 @@ pub(crate) fn fetch_for_person(
         };
         return Err((state, format!("Inbox request returned HTTP {status}")));
     }
-    let mut document: Document = response.json().map_err(|error| {
+    response.json().map_err(|error| {
         if error.is_timeout() || error.is_body() {
             (
                 Unreachable,
@@ -267,17 +187,5 @@ pub(crate) fn fetch_for_person(
         } else {
             (NeedsUpdate, "incompatible Inbox response".into())
         }
-    })?;
-    document
-        .tag_commands(Some(&entry.name))
-        .map_err(|_| (NeedsUpdate, "invalid Inbox Command tree".into()))?;
-    if document.version != VERSION
-        || document
-            .commands
-            .iter()
-            .any(|command| command.text_row().is_err())
-    {
-        return Err((NeedsUpdate, "unsupported Inbox version or rows".into()));
-    }
-    Ok(document)
+    })
 }

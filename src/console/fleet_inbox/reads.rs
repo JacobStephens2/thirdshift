@@ -6,10 +6,10 @@ use chrono::{DateTime, Utc};
 
 use crate::config::console::fleet::Entry;
 use crate::console::Scope;
-use crate::logs::status::fleet::{Document, Reachability};
+use crate::logs::status::{fleet::Reachability, rows::ConsoleDocument};
 
 type Person = Option<String>;
-pub(super) type ReadResult = Result<(Document, Vec<Scope>), (Reachability, String)>;
+pub(super) type ReadResult = Result<(ConsoleDocument, Vec<Scope>), (Reachability, String)>;
 
 #[derive(Default)]
 pub(super) struct InboxReads(Mutex<State>);
@@ -40,7 +40,7 @@ pub(super) struct Answer {
 
 #[derive(Clone)]
 pub(super) struct GoodAnswer {
-    pub document: Arc<Document>,
+    pub document: Arc<ConsoleDocument>,
     pub fetched_at: DateTime<Utc>,
 }
 
