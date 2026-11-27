@@ -53,8 +53,14 @@ jobs:
       - name: Install sandbox dependencies
         if: ${{ inputs.probe == 'none' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes apparmor bubblewrap socat
+          # These packages come from Ubuntu. Scope APT to the runner's Ubuntu
+          # sources so an unavailable third-party repository cannot block setup.
+          ubuntu_sources=(
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+            -o Dir::Etc::sourceparts=-
+          )
+          sudo apt-get "${ubuntu_sources[@]}" -o APT::Get::List-Cleanup=false update
+          sudo apt-get "${ubuntu_sources[@]}" install --yes apparmor bubblewrap socat
           # Ubuntu restricts unprivileged user namespaces. Allow bwrap alone
           # to create the namespaces used by the real sandbox tests.
           sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
