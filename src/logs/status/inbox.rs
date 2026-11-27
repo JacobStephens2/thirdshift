@@ -3,7 +3,9 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
 use std::path::Path;
 
-use super::rows::{self, ConsoleDocument, Source, identity};
+use super::rows::{
+    ConsoleCommand, ConsoleDocument, LocalCommand, Source, identity, selector_label,
+};
 use super::{age, ready, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
@@ -386,12 +388,13 @@ impl Inbox {
         now: DateTime<Local>,
     ) -> Result<()> {
         for value in values {
-            let command = rows::Command::local_console(value.clone())?;
-            let group = command.console().group;
+            let checked = LocalCommand::check(value.clone())?;
+            let command = checked.console();
+            let group = command.facts.named_group;
             if let Some(section) = self.sections.iter_mut().find(|section| {
                 group.is_some_and(|group| section.group.eq_ignore_ascii_case(group.title()))
             }) {
-                section.rows.push(present(&command, now));
+                section.rows.push(present(command, now));
                 section.rows.sort_by_key(|row| row.order);
             }
         }
@@ -429,11 +432,13 @@ impl Inbox {
         let now = Local::now();
         let listed = document
             .rows()
-            .iter()
-            .map(|row| row.command.console().id.as_str())
+            .map(|row| row.command.facts.id.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         for checked in document.rows() {
-            let group = checked.metadata.group;
+            let facts = checked.command.facts;
+            let Some(group) = facts.named_group else {
+                continue;
+            };
             let Some(section) = self
                 .sections
                 .iter_mut()
@@ -441,8 +446,7 @@ impl Inbox {
             else {
                 continue;
             };
-            let mut row = present(&checked.command, now);
-            row.order = checked.console_order();
+            let mut row = present(checked.command, now);
             row.children
                 .retain(|child| !listed.contains(child.id.as_str()));
             row.tag_machine(
@@ -451,8 +455,8 @@ impl Inbox {
                 stale || (section.is_ready_for_review() && failed),
             );
             row.stale_github = checked.stale_github && section.is_ready_for_review();
-            let reference = checked.landing_kind().map(|kind| LandingReference {
-                repository: checked.command.console().summary.repository.clone(),
+            let reference = checked.landing_kind.map(|kind| LandingReference {
+                repository: facts.fields.summary.repository.clone(),
                 text: format!("[{}] {} · {kind} · see Needs you", entry.name, row.subject),
             });
             section.rows.push(row);
@@ -501,8 +505,9 @@ pub(crate) fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
 }
 
 /// Render checked facts. The local caller adds activity, paths and Session inventory.
-fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
-    let facts = command.console();
+fn present(command: ConsoleCommand<'_>, now: DateTime<Local>) -> Row {
+    let checked = command.facts;
+    let facts = &checked.fields;
     let summary = &facts.summary;
     let live = facts.state == "live";
     let process =
@@ -510,17 +515,17 @@ fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
     let live_target = live && matches!(summary.kind.as_str(), "Fix run" | "Review run");
     let name = if live_target {
         &summary.kind
-    } else if command.source == Source::Record {
+    } else if command.source() == Source::Record {
         &facts.name
     } else {
         &summary.kind
     };
     let (subject, title) = subject(&summary.repository, name, summary.issue.as_ref(), process);
     let subject_url = issue_url(summary.issue.as_ref());
-    let state = facts
+    let state = checked
         .group
         .map_or(facts.state.as_str(), |group| {
-            group.state_word(facts.needs_you_kind, facts.stopping, &facts.state)
+            group.state_word(checked.needs_you_kind, checked.stopping, &facts.state)
         })
         .to_owned();
     let release_link = command_release_link(
@@ -530,11 +535,11 @@ fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
     );
     let mut row = Row {
         repository: summary.repository.clone(),
-        order: facts.order(),
+        order: checked.order,
         machine: String::new(),
         console: String::new(),
         stale: false,
-        id: facts.id.clone(),
+        id: checked.id.clone(),
         account: summary.account.clone(),
         started_ms: timestamp(&summary.started_at),
         occurred_ms: timestamp(summary.ended_at.as_deref().unwrap_or(&summary.started_at)),
@@ -545,17 +550,17 @@ fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
         selector_label: command.selector_label().to_owned(),
         selector: command.selector().to_owned(),
         can_dismiss: summary.account.is_none()
-            && matches!(command.source, Source::Record | Source::Reservation)
-            && facts.waiting_for_dismissal()
+            && matches!(command.source(), Source::Record | Source::Reservation)
+            && checked.waiting_for_dismissal()
             && command.collapsed_are_owned_records(),
         remote_stop: summary.account.is_none()
             && live
-            && command.source == Source::Record
-            && !facts.has_parent
-            && !facts.stopping,
+            && command.source() == Source::Record
+            && !checked.has_parent
+            && !checked.stopping,
         remote_undo: summary.account.is_none()
             && facts.dismissal.is_some()
-            && !facts.waiting_for_dismissal(),
+            && !checked.waiting_for_dismissal(),
         logs_url: String::new(),
         subject,
         subject_url,
@@ -584,15 +589,15 @@ fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
             facts.health.as_ref(),
             &facts.waiting_for,
         ),
-        timing: Timing::new(live, &summary.started_at, facts.recorded_finish(), now),
-        count: facts.count,
+        timing: Timing::new(live, &summary.started_at, checked.recorded_finish(), now),
+        count: checked.count,
         cause: facts.cause.clone().unwrap_or_default(),
         resume_command: facts
             .resume_command
             .clone()
             .filter(|_| summary.outcome.as_deref() == Some("paused")),
         fix_command: None,
-        release_command: facts.release_command.clone(),
+        release_command: checked.release_command.clone(),
         left: facts
             .dismissal
             .as_ref()
@@ -629,13 +634,13 @@ fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
             .map(|ticket| ticket_text(ticket, &summary.repository))
             .collect(),
         children: command
-            .visible_children()
+            .children()
             .map(|child| present(child, now))
             .collect(),
         findings: facts.security_findings.clone(),
         sessions: Vec::new(),
     };
-    if let Some(reservation) = &facts.reservation {
+    if let Some(reservation) = &checked.reservation {
         row.state = "Reservation".into();
         row.title = reservation.reference.clone();
         row.subject = summary.repository.clone();
@@ -662,9 +667,9 @@ fn present(command: &rows::Command, now: DateTime<Local>) -> Row {
             .rev()
             .find_map(|child| child.ticket_progress);
     }
-    if facts.group == Some(Group::ReadyForReview) {
-        row.present_ready(command.ready_title.as_deref(), &facts.github_checks);
-    } else if facts.group == Some(Group::NeedsYou) {
+    if checked.named_group == Some(Group::ReadyForReview) {
+        row.present_ready(command.ready_title(), &facts.github_checks);
+    } else if checked.group == Some(Group::NeedsYou) {
         row.present_needs_you_target(&summary.kind, &summary.repository);
     }
     row.present_release_target(&summary.kind, &summary.repository);
@@ -1066,9 +1071,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         ));
         row.log_growth = format!("{log_length}:{session_length}");
         row.selector = Observation::Record(command).selector().unwrap_or_default();
-        row.selector_label =
-            rows::Command::selector_label_for(&row.selector, command.record_path.to_str())
-                .to_owned();
+        row.selector_label = selector_label(&row.selector, command.record_path.to_str()).to_owned();
         row.logs_url = logs_url(&command.record_path, root, command.account.as_deref());
         row.timing = Timing::new(
             row.live,
@@ -1089,8 +1092,8 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         }
         Ok(())
     }
-    let checked = rows::Command::local_console(serde_json::to_value(command)?)?;
-    let mut row = present(&checked, now);
+    let checked = LocalCommand::check(serde_json::to_value(command)?)?;
+    let mut row = present(checked.console(), now);
     attach_local(&mut row, command, now, root)?;
     Ok(row)
 }
@@ -1138,16 +1141,15 @@ fn outcome_kind(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Row, outcome_kind};
+    use super::super::rows::WireDocument;
+    use super::{LocalCommand, Row, outcome_kind};
 
     fn present(
         value: &serde_json::Value,
         now: chrono::DateTime<chrono::Local>,
     ) -> anyhow::Result<Row> {
-        Ok(super::present(
-            &super::rows::Command::local_console(value.clone())?,
-            now,
-        ))
+        let checked = LocalCommand::check(value.clone())?;
+        Ok(super::present(checked.console(), now))
     }
 
     #[test]
@@ -1185,6 +1187,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fleet_console_preserves_presentation_for_object_form_enums() {
+        use crate::config::console::fleet::Entry;
+        use serde_json::json;
+
+        let input = json!({
+            "version": 2, "hostname": "owner-host", "active_runs": 1,
+            "commands": [
+                {
+                    "source": "legacy_log", "group": "needs you", "needs_you_kind": {"slow": null},
+                    "landing": true, "stopping": false, "count": 1,
+                    "selector": "/owner/canonical.log", "repository": "acme/canonical-control",
+                    "kind": "Run", "state": "live", "started_at": "2026-11-26T10:00:00Z",
+                    "children": [{
+                        "group": {"ready for review": null}, "selector": "/owner/nested.log",
+                        "repository": "acme/nested-control", "kind": "Run", "state": "done",
+                        "started_at": "2026-11-26T10:00:00Z",
+                        "pull_request": "https://github.com/acme/nested-control/pull/42",
+                        "github_ci": "red"
+                    }]
+                },
+                {
+                    "source": "reservation", "group": {"needs you": null},
+                    "landing": false, "stopping": false, "count": 1,
+                    "selector": "/owner/wire-object.json", "repository": "acme/wire-object-marker",
+                    "kind": "Run", "state": "live", "started_at": "2026-11-26T10:00:00Z",
+                    "reservation": {"reference": "origin"}, "blocking": "Architect run",
+                    "owner_description": "Held", "release_command": "thirdshift release-reservation"
+                }
+            ]
+        });
+        let document = serde_json::from_value::<WireDocument>(input)
+            .unwrap()
+            .admit_console("owner")
+            .unwrap();
+        let mut inbox = super::Inbox {
+            active_runs: 0,
+            sections: [("needs you", "Needs you"), ("landing", "Landing")]
+                .into_iter()
+                .map(|(group, title)| super::Section {
+                    group,
+                    title,
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                })
+                .collect(),
+            idle_passes: Vec::new(),
+            pass_starts: Vec::new(),
+            github_quota_wait: None,
+            plan_usage_banner: None,
+            warning: None,
+            github_warning: None,
+        };
+        inbox.merge_remote(
+            &document,
+            &Entry::link("owner".into(), "https://owner.example.test".into()),
+            false,
+            false,
+        );
+
+        let [parent] = inbox.sections[0].rows.as_slice() else {
+            panic!("only the row with a string group belongs in Needs you");
+        };
+        assert_eq!(parent.selector, "/owner/canonical.log");
+        let [child] = parent.children.as_slice() else {
+            panic!("the nested Command should still render");
+        };
+        assert_eq!(child.selector, "/owner/nested.log");
+        assert!(child.pr_checks.is_none());
+        let [reference] = inbox.sections[1].references.as_slice() else {
+            panic!("the Needs you Command should still have a Landing reference");
+        };
+        assert!(reference.text.ends_with(" · Needs you · see Needs you"));
+    }
+
     /// `row.html` puts `subject_url` in the subject link while the visible
     /// text is the row's repository and issue number. A Fleet document chooses
     /// those independently, so a mismatched URL must not become that href.
@@ -1215,7 +1292,7 @@ mod tests {
                 }]
             })
         };
-        let document = serde_json::from_value::<super::rows::WireDocument>(serde_json::json!({
+        let document = serde_json::from_value::<WireDocument>(serde_json::json!({
             "version": 2,
             "hostname": "remote-host",
             "active_runs": 0,
@@ -1624,7 +1701,7 @@ mod tests {
             ));
         }
 
-        let document = serde_json::from_value::<super::rows::WireDocument>(serde_json::json!({
+        let document = serde_json::from_value::<WireDocument>(serde_json::json!({
             "version": 2,
             "hostname": "remote-host",
             "active_runs": 0,

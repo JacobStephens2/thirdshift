@@ -64,35 +64,38 @@ fn checked_document_preserves_wire_and_prepares_legacy_rows() {
     ready["end_time_estimated"] = json!(true);
     let held = grouped(reservation(), "needs you");
     let input = wire(vec![command, ready, held]);
+    let cli = document(input.clone()).admit_cli("paired-owner").unwrap();
+    assert_eq!(cli.commands[0].command().children().count(), 0);
+    assert!(matches!(
+        cli.commands[2].command().facts,
+        Cli::Reservation(_)
+    ));
     let document = document(input.clone())
         .admit_console("paired-owner")
         .unwrap();
-    let row = &document.rows()[0];
-    assert!(row.metadata.group == Group::NeedsYou);
-    assert_eq!(row.landing_kind().as_deref(), Some("slow"));
+    let mut rows = document.rows();
+    let row = rows.next().unwrap();
+    assert!(row.command.facts.named_group == Some(Group::NeedsYou));
+    assert_eq!(row.landing_kind, Some("slow"));
     assert_eq!(row.command.selector(), "/owner/legacy.log::old");
-    let child = row.command.visible_children().next().unwrap();
+    let child = row.command.children().next().unwrap();
     assert_eq!(child.selector(), "/owner/legacy.log::old");
-    assert!(child.console().group.is_none());
-    let ready = &document.rows()[1];
+    assert!(child.facts.group.is_none());
+    let ready = rows.next().unwrap();
     assert!(ready.stale_github);
     assert_eq!(
         ready.command.selector(),
         "/owner/ticket.command.json::ticket"
     );
-    assert_eq!(
-        ready.command.ready_title.as_deref(),
-        Some("A recorded title")
+    assert_eq!(ready.command.ready_title(), Some("A recorded title"));
+    assert!(ready.command.facts.recorded_finish().is_none());
+    assert!(
+        ready.command.facts.order
+            == Group::ReadyForReview.row_order(None, Some("2026-10-22T10:00:00Z"))
     );
-    assert!(ready.command.console().recorded_finish().is_none());
-    assert!(ready.order() == Group::ReadyForReview.row_order(None, Some("2026-10-22T10:00:00Z")));
-    let held = &document.rows()[2].command;
+    let held = rows.next().unwrap().command;
     assert_eq!(held.selector(), "/owner/reservation.json");
-    assert_eq!(
-        held.console().reservation.as_ref().unwrap().reference,
-        "origin"
-    );
-    assert!(matches!(held.cli(), Cli::Reservation(_)));
+    assert_eq!(held.facts.reservation.as_ref().unwrap().reference, "origin");
     let mut expected = input;
     for root in expected["commands"].as_array_mut().unwrap() {
         root["machine"] = json!("owner-host");
@@ -102,7 +105,7 @@ fn checked_document_preserves_wire_and_prepares_legacy_rows() {
     dispatch["machine"] = json!("owner-host");
     dispatch["machine_name"] = json!("paired-owner");
     expected["machines"] = json!([]);
-    assert_eq!(serde_json::to_value(document).unwrap(), expected);
+    assert_eq!(serde_json::to_value(&document).unwrap(), expected);
 }
 
 #[test]
@@ -160,10 +163,10 @@ fn omission_edits_both_projections_and_preserves_owner_accounting() {
     let mut document = document(wire(vec![parent, grouped(reservation(), "needs you")]))
         .admit_console("owner")
         .unwrap();
-    let checked_parent = &document.rows()[0].command;
-    let visible = |command: &super::Command| {
+    let checked_parent = document.rows().next().unwrap().command;
+    let visible = |command: super::ConsoleCommand<'_>| {
         command
-            .visible_children()
+            .children()
             .map(|child| child.selector().to_owned())
             .collect::<Vec<_>>()
     };
@@ -180,9 +183,9 @@ fn omission_edits_both_projections_and_preserves_owner_accounting() {
     document.omit_command("/owner/reservation.json");
 
     assert_eq!(document.active_runs(), 3);
-    assert_eq!(document.rows().len(), 1);
-    assert_eq!(document.rows()[0].metadata.count, 2);
-    let checked_parent = &document.rows()[0].command;
+    assert_eq!(document.rows().count(), 1);
+    let checked_parent = document.rows().next().unwrap().command;
+    assert_eq!(checked_parent.facts.count, 2);
     assert_eq!(visible(checked_parent), ["sibling"]);
     assert_eq!(checked_parent.dispatched_count(), 1);
     assert!(checked_parent.collapsed_are_owned_records());

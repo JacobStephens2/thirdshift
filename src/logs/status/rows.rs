@@ -97,8 +97,11 @@ impl WireDocument {
     pub(crate) fn admit_console(self, name: &str) -> Result<ConsoleDocument, AdmissionError> {
         let mut document = self.admit_cli(name)?;
         for row in &mut document.commands {
+            // The CLI orders reservations by start. The Console also accepts
+            // an optional end time on a received reservation.
+            let order = (row.command.source != Source::Reservation).then_some(row.order);
             row.command
-                .check_console()
+                .check_console(order)
                 .map_err(|_| AdmissionError::Presentation)?;
         }
         Ok(ConsoleDocument(document))
@@ -110,13 +113,25 @@ impl ConsoleDocument {
         self.0.active_runs
     }
 
-    pub(super) fn rows(&self) -> &[Row] {
-        &self.0.commands
+    pub(super) fn rows(&self) -> impl Iterator<Item = ConsoleRow<'_>> {
+        self.0.commands.iter().map(|row| ConsoleRow {
+            command: row.command.console(),
+            stale_github: row.stale_github,
+            landing_kind: row
+                .lands_from_needs_you()
+                .then(|| row.needs_you_label.as_deref().unwrap_or("Needs you")),
+        })
     }
 
     pub fn omit_command(&mut self, selector: &str) {
         self.0.commands.retain_mut(|row| row.command.keep(selector));
     }
+}
+
+pub(super) struct ConsoleRow<'a> {
+    pub command: ConsoleCommand<'a>,
+    pub stale_github: bool,
+    pub landing_kind: Option<&'a str>,
 }
 
 fn tag(row: &mut Value, hostname: &str, name: &str) -> Result<()> {
@@ -136,27 +151,32 @@ fn tag(row: &mut Value, hostname: &str, name: &str) -> Result<()> {
 #[derive(Clone, Serialize)]
 #[serde(transparent)]
 pub(super) struct Row {
-    pub command: Command,
+    command: Command,
     #[serde(skip)]
     pub metadata: Arc<Metadata>,
     #[serde(skip)]
     pub stale_github: bool,
     #[serde(skip)]
     order: RowOrder,
+    #[serde(skip)]
+    needs_you_label: Option<String>,
 }
 
 impl Row {
     fn read(value: Value, stale_github: bool) -> Result<Self> {
         let metadata = Arc::new(Metadata::deserialize(&value)?);
+        let needs_you_label = value["needs_you_kind"].as_str().map(str::to_owned);
         let command = Command::read(value, true)?;
-        let order = metadata
-            .group
-            .row_order(metadata.needs_you_kind, command.cli().occurrence());
+        let order = metadata.group.row_order(
+            metadata.needs_you_kind,
+            command.cli_root().facts.occurrence(),
+        );
         Ok(Self {
             command,
             metadata,
             stale_github,
             order,
+            needs_you_label,
         })
     }
 
@@ -164,31 +184,20 @@ impl Row {
         self.order
     }
 
-    pub fn console_order(&self) -> RowOrder {
-        // The CLI orders reservations by start. The Console also accepts
-        // an optional end time on a received reservation.
-        if self.command.source == Source::Reservation {
-            self.command.console().order()
-        } else {
-            self.order
-        }
+    pub fn command(&self) -> CliCommand<'_> {
+        self.command.cli_root()
     }
 
     pub fn lands_from_needs_you(&self) -> bool {
         self.metadata.landing && self.metadata.group == Group::NeedsYou
     }
 
-    pub fn landing_kind(&self) -> Option<String> {
-        self.lands_from_needs_you().then(|| {
-            self.metadata.needs_you_kind.map_or_else(
-                || "Needs you".into(),
-                |kind| kind.title().to_ascii_lowercase(),
-            )
-        })
+    pub fn ready_title(&self) -> Option<&str> {
+        self.command.ready_title.as_deref()
     }
 
     pub fn ready_member(&self) -> super::ready::Member<'_> {
-        let (repository, pull_request, account) = match self.command.cli() {
+        let (repository, pull_request, account) = match self.command().facts {
             Cli::Record(record) => (
                 record.facts.repository.as_str(),
                 record.facts.pull_request.as_deref().unwrap_or_default(),
@@ -203,7 +212,7 @@ impl Row {
             order: self.order(),
             machine: &self.metadata.machine,
             account,
-            selector: self.command.selector(),
+            selector: &self.command.selector,
         }
     }
 }
@@ -244,7 +253,7 @@ impl Source {
 /// A single tree controls both omission and serialization. The optional arrays
 /// keep the distinction between a missing field and a present, empty array.
 #[derive(Clone, Serialize)]
-pub(super) struct Command {
+struct Command {
     #[serde(flatten)]
     fields: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,7 +263,7 @@ pub(super) struct Command {
     #[serde(skip_serializing_if = "Option::is_none")]
     collapsed: Option<Vec<Self>>,
     #[serde(skip)]
-    pub source: Source,
+    source: Source,
     #[serde(skip)]
     other_account: bool,
     #[serde(skip)]
@@ -262,7 +271,7 @@ pub(super) struct Command {
     #[serde(skip)]
     selector_label: String,
     #[serde(skip)]
-    pub ready_title: Option<String>,
+    ready_title: Option<String>,
     #[serde(skip)]
     cli: Option<Arc<Cli>>,
     #[serde(skip)]
@@ -277,7 +286,7 @@ impl Command {
             .as_str()
             .or_else(|| fields["command_log"].as_str());
         let selector = selector(&fields, source);
-        let selector_label = Self::selector_label_for(&selector, path).to_owned();
+        let selector_label = selector_label(&selector, path).to_owned();
         let ready_title =
             super::ready::title(&fields, fields["pull_request"].as_str().unwrap_or_default())
                 .map(str::to_owned);
@@ -316,17 +325,12 @@ impl Command {
         })
     }
 
-    pub fn local_console(value: Value) -> Result<Self> {
-        let mut command = Self::read(value, false)?;
-        command.check_console()?;
-        Ok(command)
-    }
-
-    fn check_console(&mut self) -> Result<()> {
+    fn check_console(&mut self, order: Option<RowOrder>) -> Result<()> {
         self.console = Some(Arc::new(Console::read(
             &self.fields,
             self.source,
             &self.selector,
+            order,
         )?));
         for child in self
             .dispatched
@@ -334,7 +338,7 @@ impl Command {
             .flatten()
             .chain(self.children.iter_mut().flatten())
         {
-            child.check_console()?;
+            child.check_console(None)?;
         }
         Ok(())
     }
@@ -356,52 +360,109 @@ impl Command {
         true
     }
 
-    pub fn selector(&self) -> &str {
-        &self.selector
-    }
-
-    pub fn selector_label(&self) -> &str {
-        &self.selector_label
-    }
-
-    pub fn selector_label_for<'a>(selector: &'a str, storage_path: Option<&str>) -> &'a str {
-        // The selector is opaque and its Command name can contain slashes.
-        storage_path
-            .and_then(|path| path.rsplit_once('/'))
-            .and_then(|(directory, _)| selector.strip_prefix(directory))
-            .and_then(|rest| rest.strip_prefix('/'))
-            .unwrap_or(selector)
-    }
-
-    pub fn cli(&self) -> &Cli {
+    fn cli(&self) -> Option<CliCommand<'_>> {
         self.cli
             .as_deref()
-            .expect("CLI-visible Command was checked")
+            .map(|facts| CliCommand { node: self, facts })
     }
 
-    pub fn console(&self) -> &Console {
-        self.console
+    fn cli_root(&self) -> CliCommand<'_> {
+        self.cli().expect("top-level Command was checked for CLI")
+    }
+
+    fn console(&self) -> ConsoleCommand<'_> {
+        let facts = self
+            .console
             .as_deref()
-            .expect("Console-visible Command was checked")
+            .expect("Console-visible Command was checked");
+        ConsoleCommand { node: self, facts }
     }
 
-    pub fn visible_children(&self) -> impl Iterator<Item = &Self> {
+    fn visible_children(&self) -> impl Iterator<Item = &Self> {
         self.dispatched
             .iter()
             .flatten()
             .chain(self.children.iter().flatten())
     }
+}
 
-    pub fn dispatched_count(&self) -> usize {
-        self.dispatched.as_ref().map_or(0, Vec::len)
+#[derive(Clone, Copy)]
+pub(super) struct CliCommand<'a> {
+    node: &'a Command,
+    pub facts: &'a Cli,
+}
+
+impl<'a> CliCommand<'a> {
+    pub fn selector(self) -> &'a str {
+        &self.node.selector
     }
 
-    pub fn collapsed_are_owned_records(&self) -> bool {
-        self.collapsed
+    pub fn children(self) -> impl Iterator<Item = Self> {
+        self.node.visible_children().filter_map(Command::cli)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ConsoleCommand<'a> {
+    node: &'a Command,
+    pub facts: &'a Console,
+}
+
+impl<'a> ConsoleCommand<'a> {
+    pub fn source(self) -> Source {
+        self.node.source
+    }
+
+    pub fn selector(self) -> &'a str {
+        &self.node.selector
+    }
+
+    pub fn selector_label(self) -> &'a str {
+        &self.node.selector_label
+    }
+
+    pub fn ready_title(self) -> Option<&'a str> {
+        self.node.ready_title.as_deref()
+    }
+
+    pub fn children(self) -> impl Iterator<Item = Self> {
+        self.node.visible_children().map(Command::console)
+    }
+
+    pub fn dispatched_count(self) -> usize {
+        self.node.dispatched.as_ref().map_or(0, Vec::len)
+    }
+
+    pub fn collapsed_are_owned_records(self) -> bool {
+        self.node
+            .collapsed
             .iter()
             .flatten()
             .all(|child| child.source == Source::Record && !child.other_account)
     }
+}
+
+pub(super) struct LocalCommand(Command);
+
+impl LocalCommand {
+    pub fn check(value: Value) -> Result<Self> {
+        let mut command = Command::read(value, false)?;
+        command.check_console(None)?;
+        Ok(Self(command))
+    }
+
+    pub fn console(&self) -> ConsoleCommand<'_> {
+        self.0.console()
+    }
+}
+
+pub(super) fn selector_label<'a>(selector: &'a str, storage_path: Option<&str>) -> &'a str {
+    // The selector is opaque and its Command name can contain slashes.
+    storage_path
+        .and_then(|path| path.rsplit_once('/'))
+        .and_then(|(directory, _)| selector.strip_prefix(directory))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(selector)
 }
 
 fn selector(value: &Value, source: Source) -> String {
@@ -521,7 +582,7 @@ impl Cli {
 /// Console fields also apply to older History and reservation rows, and to
 /// children with no Inbox metadata. These rows have their own acceptance rules.
 #[derive(Deserialize)]
-pub(super) struct Console {
+pub(super) struct ConsoleFields {
     #[serde(flatten)]
     pub summary: CommandSummary,
     #[serde(default)]
@@ -549,24 +610,23 @@ pub(super) struct Console {
     #[serde(flatten)]
     pub departure: Option<Departure>,
     pub dismissal: Option<DismissalView>,
-    #[serde(skip)]
+}
+
+pub(super) struct Console {
+    pub fields: ConsoleFields,
     pub group: Option<Group>,
-    #[serde(skip)]
+    // Object-form enum values still inform state, but only a string names
+    // an Inbox section or enables the associated presentation and actions.
+    pub named_group: Option<Group>,
     pub needs_you_kind: Option<NeedsYouKind>,
-    #[serde(skip)]
     pub stopping: bool,
-    #[serde(skip)]
     pub has_parent: bool,
-    #[serde(skip)]
-    pub end_time_estimated: bool,
-    #[serde(skip)]
+    end_time_estimated: bool,
     pub count: usize,
-    #[serde(skip)]
     pub reservation: Option<ReservationDisplay>,
-    #[serde(skip)]
     pub release_command: Option<String>,
-    #[serde(skip)]
     pub id: String,
+    pub order: RowOrder,
 }
 
 pub(super) struct ReservationDisplay {
@@ -576,45 +636,59 @@ pub(super) struct ReservationDisplay {
 }
 
 impl Console {
-    fn read(value: &Value, source: Source, selector: &str) -> Result<Self> {
-        let mut facts = Self::deserialize(value)?;
-        facts.group = value.get("group").map(Group::deserialize).transpose()?;
-        facts.needs_you_kind = value
+    fn read(
+        value: &Value,
+        source: Source,
+        selector: &str,
+        order: Option<RowOrder>,
+    ) -> Result<Self> {
+        let fields = ConsoleFields::deserialize(value)?;
+        let group = value.get("group").map(Group::deserialize).transpose()?;
+        let named_group = group.filter(|_| value["group"].is_string());
+        let needs_you_kind = value
             .get("needs_you_kind")
             .and_then(|kind| NeedsYouKind::deserialize(kind).ok());
-        facts.stopping = value["stopping"] == true;
-        facts.has_parent = !value["parent_record"].is_null();
-        facts.end_time_estimated = value["end_time_estimated"] == true;
-        facts.count = value["count"].as_u64().unwrap_or(1) as usize;
-        facts.reservation = (source == Source::Reservation).then(|| ReservationDisplay {
-            reference: text(&value["reservation"]["reference"]),
-            blocking: text(&value["blocking"]),
-            owner_description: text(&value["owner_description"]),
+        let summary = &fields.summary;
+        let order = order.unwrap_or_else(|| {
+            group.unwrap_or(Group::History).row_order(
+                needs_you_kind,
+                summary.ended_at.as_deref().or(Some(&summary.started_at)),
+            )
         });
-        facts.release_command = value["release_command"].as_str().map(str::to_owned);
-        facts.id = identity(&format!(
+        let id = identity(&format!(
             "{selector}\0{}\0{}",
-            facts.summary.kind, facts.summary.started_at
+            summary.kind, summary.started_at
         ));
-        Ok(facts)
-    }
-
-    pub fn order(&self) -> RowOrder {
-        self.group.unwrap_or(Group::History).row_order(
-            self.needs_you_kind,
-            self.summary
-                .ended_at
-                .as_deref()
-                .or(Some(&self.summary.started_at)),
-        )
+        Ok(Self {
+            fields,
+            group,
+            named_group,
+            needs_you_kind,
+            order,
+            id,
+            stopping: value["stopping"] == true,
+            has_parent: !value["parent_record"].is_null(),
+            end_time_estimated: value["end_time_estimated"] == true,
+            count: value["count"].as_u64().unwrap_or(1) as usize,
+            reservation: (source == Source::Reservation).then(|| ReservationDisplay {
+                reference: text(&value["reservation"]["reference"]),
+                blocking: text(&value["blocking"]),
+                owner_description: text(&value["owner_description"]),
+            }),
+            release_command: value["release_command"].as_str().map(str::to_owned),
+        })
     }
 
     pub fn waiting_for_dismissal(&self) -> bool {
-        matches!(self.group, Some(Group::NeedsYou | Group::ReadyForReview))
+        matches!(
+            self.named_group,
+            Some(Group::NeedsYou | Group::ReadyForReview)
+        )
     }
 
     pub fn recorded_finish(&self) -> Option<&str> {
-        self.summary
+        self.fields
+            .summary
             .ended_at
             .as_deref()
             .filter(|_| !self.end_time_estimated)

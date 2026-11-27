@@ -3,11 +3,11 @@ use crate::logs::reading::Group;
 
 use super::{
     ready,
-    rows::{Cli, Command, Row},
+    rows::{Cli, CliCommand, Row},
 };
 
-fn print_command(command: &Command, state: &str, indent: &str, machine: Option<&str>) {
-    match command.cli() {
+fn print_command(command: CliCommand<'_>, state: &str, indent: &str, machine: Option<&str>) {
+    match command.facts {
         Cli::Reservation(row) => {
             println!(
                 "{indent}{}{} · {state} · {}",
@@ -48,8 +48,8 @@ fn print_command(command: &Command, state: &str, indent: &str, machine: Option<&
             );
             super::print_tickets(&record.facts, &format!("{indent}  "));
             super::print_pause(&record.facts, indent);
-            for child in command.visible_children() {
-                print_command(child, child.cli().state(), &format!("{indent}  "), machine);
+            for child in command.children() {
+                print_command(child, child.facts.state(), &format!("{indent}  "), machine);
             }
         }
         Cli::History(history) => {
@@ -88,10 +88,10 @@ impl Row {
         let state = meta.group.state_word(
             meta.needs_you_kind,
             meta.stopping,
-            self.command.cli().state(),
+            self.command().facts.state(),
         );
         print_command(
-            &self.command,
+            self.command(),
             state,
             indent,
             tags.then_some(meta.machine.as_str()),
@@ -115,7 +115,7 @@ impl Row {
             println!("{indent}  {}", dismissal.line());
         }
         if meta.count > 1
-            && let Cli::Record(record) = self.command.cli()
+            && let Cli::Record(record) = self.command().facts
         {
             println!(
                 "{indent}  {} Commands with this cause: {}",
@@ -126,7 +126,7 @@ impl Row {
     }
 
     pub fn print_reference(&self, tags: bool) {
-        if let Cli::Record(record) = self.command.cli() {
+        if let Cli::Record(record) = self.command().facts {
             let name = record
                 .facts
                 .issue
@@ -165,11 +165,7 @@ pub(super) fn print_ready(rows: Vec<&Row>, tags: bool) {
         // The title follows the validated URL on this line. Document text can
         // carry a carriage return or escape, which a terminal would use to
         // erase that URL, so render it as visible text first.
-        let title = newest
-            .command
-            .ready_title
-            .as_deref()
-            .unwrap_or("(title unavailable)");
+        let title = newest.ready_title().unwrap_or("(title unavailable)");
         println!(
             "{} · {} · {} · {} Command{}",
             pr.label,
@@ -180,10 +176,10 @@ pub(super) fn print_ready(rows: Vec<&Row>, tags: bool) {
         );
         for member in group.members {
             member.print_indented(true, "  ");
-            if let Cli::Record(record) = member.command.cli() {
+            if let Cli::Record(record) = member.command().facts {
                 println!(
                     "    Command: {}",
-                    crate::cronjobs::report_line(member.command.selector())
+                    crate::cronjobs::report_line(member.command().selector())
                 );
                 println!(
                     "    Started {} · Ended {}",
