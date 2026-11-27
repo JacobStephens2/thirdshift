@@ -3563,7 +3563,7 @@ fails when its head branch is occupied and names the occupying worktree.
 At the repository&#39;s Command limit, or with no eligible PR it can reserve,
 it exits <code>0</code>, prints a skip reason on stderr, records an Activity log skip
 when the reason changes, and sends no Run notification. A failed Fix run
-leaves a draft, so later Passes skip it until the Day shift makes it ready.</p>
+that leaves a draft stays out of later Passes until the Day shift makes it ready.</p>
 <p>The Built-in process <code>fix-run</code> is <code>delivery</code> followed by <code>self-merge</code>.
 <code>thirdshift processes</code> lists it; <code>thirdshift process show fix-run</code> prints it.
 It reserves <code>refs/thirdshift/reservations/&lt;PR number&gt;</code> on origin and adds
@@ -3578,6 +3578,10 @@ each session, including a Resume. A title or body edit to any closing
 issue (retaining previously linked ones during the run) by an account that is
 not a Trusted account, made since a few minutes before the Fix run started,
 fails the run before continuing with that session, pushing or merging.
+It also stops before using a linked closing issue, including when the Fix run
+was started as a Pass, unless that issue&#39;s author is a Trusted account and no
+account that is not one has edited its title or body. That stop does not take
+the next candidate.
 Repairs share the usual five-session cap,
 Check re-run and optional Base fix. A Fix run starts no implementation or initial
 Standards/Spec review session.</p>
@@ -3604,9 +3608,10 @@ This preserves <a href="https://github.com/JacobStephens2/thirdshift/blob/main/d
 <code>--</code>) override <code>email.always</code> and <code>email.unless_merged</code>. Command records, logs,
 Activity log lines and Run notifications identify a <strong>Fix run</strong>.</p>
 <p>Success prints <code>PR &lt;url&gt; is ready for review</code> or <code>PR &lt;url&gt; is merged</code>.
-Failure or interruption preserves uncommitted work as
-<code>thirdshift: failed fix run (&lt;reason&gt;)</code>, pushes unpublished work and drafts the
-PR. A Self-merge refused with a mergeable, green PR leaves it ready.
+A closing-issue trust stop keeps unpublished Repair work local and leaves the
+PR in its current state. Other failures and interruptions preserve uncommitted
+work as <code>thirdshift: failed fix run (&lt;reason&gt;)</code>, push unpublished work and draft
+the PR. A Self-merge refused with a mergeable, green PR leaves it ready.
 Recovery offers <code>thirdshift fix &lt;PR URL&gt;</code> with the original flags. An unchanged
 Repair creates no empty failure commit. A PR closed or merged during the run
 stops further publication; a PR made draft during Repair stays draft.</p>
@@ -3708,6 +3713,10 @@ linked earlier in the run): a title or body edit by an account that is not a
 Trusted account, made since a few minutes before the Review run started, stops
 the run without starting the next session, converting the pull request to a
 draft, pushing or merging.
+It also stops before using a linked closing issue, including when the Review run
+was started as a Pass, unless that issue&#39;s author is a Trusted account and no
+account that is not one has edited its title or body. That stop does not take
+the next candidate.
 Without <code>--recommend-only</code>, the session addresses findings using the same rules
 as a Ticket run: it runs each behavior finding&#39;s test or command before deciding,
 fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
@@ -3792,7 +3801,9 @@ the filtered input is in <code>.thirdshift-review-input.md</code>. All linked cl
 (retaining previously linked ones during the run) are checked against untrusted
 title or body edits since a few minutes before the Process started before
 writing that file, around every Step, session, Repair and Resume, and before
-Delivery or Self-merge pushes, comments or merges. This version keeps these
+Delivery or Self-merge pushes, comments or merges. It also stops before using
+a linked closing issue unless that issue&#39;s author is a Trusted account and no
+account that is not one has edited its title or body. This version keeps these
 Steps sequential and requires <code>review-and-address</code> before <code>delivery</code>, optionally
 followed directly by <code>self-merge</code>. Copied Processes retain the opt-in merge choice.</p>
 </div></details>

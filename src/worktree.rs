@@ -191,7 +191,7 @@ pub struct Worktree {
 enum Cleanup {
     Remove,
     Retain,
-    KeepUnpublished,
+    KeepUnpublished(UntrackedFiles),
 }
 
 impl Worktree {
@@ -319,8 +319,23 @@ impl Worktree {
     /// removing the checkout and local branch.
     pub fn keep_unpublished_on_cleanup(&mut self) {
         if matches!(self.cleanup, Cleanup::Remove) {
-            self.cleanup = Cleanup::KeepUnpublished;
+            self.cleanup = Cleanup::KeepUnpublished(UntrackedFiles::Preserve);
         }
+    }
+
+    /// Keep unpublished work in this checkout and report whether any may remain.
+    /// Cleanup rechecks the evidence before removal.
+    pub(crate) fn preserve_unpublished_locally(&mut self) -> bool {
+        let untracked = UntrackedFiles::DiscardNamedValidationArtifacts;
+        if matches!(self.cleanup, Cleanup::Remove) {
+            self.cleanup = Cleanup::KeepUnpublished(untracked);
+        }
+        self.checkout
+            .ordinary(&self.launch, |operation| {
+                self.checkout
+                    .ensure_work_published(|args| operation.run(args), untracked)
+            })
+            .is_err()
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
@@ -583,9 +598,9 @@ impl Drop for Worktree {
         match self.cleanup {
             Cleanup::Remove => self.checkout.cleanup(&self.launch, false),
             Cleanup::Retain => self.checkout.cleanup(&self.launch, true),
-            Cleanup::KeepUnpublished => self
+            Cleanup::KeepUnpublished(untracked) => self
                 .checkout
-                .cleanup_preserving_work(&self.launch, UntrackedFiles::Preserve),
+                .cleanup_preserving_work(&self.launch, untracked),
         }
     }
 }

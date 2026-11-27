@@ -455,6 +455,48 @@ fn untrusted_closing_issue_edit_during_self_merge_repair_stops_without_merging()
 }
 
 #[test]
+fn unusable_closing_issue_during_self_merge_repair_stops_without_merging() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("foreign", "colleague", &["Late foreign commit"]);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "gh fake on-merge 1 'git fetch -q origin foreign; git push -q origin FETCH_HEAD:refs/heads/colleague'\n{NO_FINDINGS}"
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "gh fake edits 7 '[{{\"kind\":\"body\",\"by\":\"outsider\",\"at\":\"2020-01-02T00:00:00Z\"}}]'\n{NO_FINDINGS}"
+        ),
+    );
+
+    let result = scenario.run(&["review", &url, "merge"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "#7 body edited by an account that is not a Trusted account; starting no further session"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("since the Review run started"),
+        "{}",
+        result.stderr
+    );
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "OPEN", "{state}");
+    assert_eq!(state["prs"][0]["isDraft"], false, "{state}");
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+}
+
+#[test]
 fn untrusted_closing_issue_edit_during_self_merge_repair_stops_before_push_and_merge() {
     let future = "2999-01-01T00:00:00Z";
     let scenario = Scenario::new();

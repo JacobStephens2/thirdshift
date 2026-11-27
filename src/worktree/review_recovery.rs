@@ -10,21 +10,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use super::{Checkout, Directory};
+use super::{Checkout, Directory, OPERATION_MARKERS};
 use crate::git::Git;
 use crate::{interrupt, progress, skills};
 
 const TOKEN: &str = ".thirdshift-review-token";
 const RECORD: &str = "thirdshift-review.json";
 const VERSION: u32 = 1;
-const OPERATION_MARKERS: [&str; 6] = [
-    "MERGE_HEAD",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD",
-    "rebase-merge",
-    "rebase-apply",
-    "sequencer",
-];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -329,13 +321,7 @@ fn verify_retained(
     checkout.inspect(launch)?;
     evidence.verify(checkout)?;
     let git = Git::new(checkout.path());
-    for name in OPERATION_MARKERS {
-        match fs::symlink_metadata(checkout.admin.path.join(name)) {
-            Ok(_) => bail!("retained Review worktree has an unfinished Git operation"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("cannot inspect retained Git operation"),
-        }
-    }
+    checkout.ensure_no_unfinished_operation()?;
     if super::super::uncommitted_changes(
         |args| git.run(&without_repository_programs(args)),
         super::super::UntrackedFiles::DiscardAllUntracked,

@@ -21,6 +21,15 @@ pub(super) use review_recovery::pull_request_conflict;
 pub(super) use review_recovery::{Publication, recover as recover_review};
 pub(super) use review_recovery::{clean_retained, restart_retained, retained_pull_request};
 
+const OPERATION_MARKERS: [&str; 6] = [
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+];
+
 pub(super) struct Checkout {
     root: Directory,
     admin: Directory,
@@ -199,17 +208,34 @@ impl Checkout {
     pub(super) fn cleanup_preserving_work(&self, launch: &Git, untracked: super::UntrackedFiles) {
         self.cleanup_checked(launch, false, &|| {
             let git = Git::new(self.path()).completion();
-            if super::uncommitted_changes(|args| git.run(args), untracked)? {
-                bail!("the worktree has uncommitted changes");
-            }
-            if !git
-                .run(&["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"])?
-                .is_empty()
-            {
-                bail!("the worktree has unpushed commits");
-            }
-            Ok(())
+            self.ensure_work_published(|args| git.run(args), untracked)
         });
+    }
+
+    pub(super) fn ensure_work_published(
+        &self,
+        run: impl Fn(&[&str]) -> Result<String>,
+        untracked: super::UntrackedFiles,
+    ) -> Result<()> {
+        self.ensure_no_unfinished_operation()?;
+        if super::uncommitted_changes(&run, untracked)? {
+            bail!("the worktree has uncommitted changes");
+        }
+        if !run(&["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"])?.is_empty() {
+            bail!("the worktree has unpushed commits");
+        }
+        Ok(())
+    }
+
+    fn ensure_no_unfinished_operation(&self) -> Result<()> {
+        for marker in OPERATION_MARKERS {
+            match fs::symlink_metadata(self.admin.path.join(marker)) {
+                Ok(_) => bail!("the worktree has an unfinished Git operation"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("cannot inspect unfinished Git operation"),
+            }
+        }
+        Ok(())
     }
 
     fn cleanup_checked(&self, launch: &Git, kept: bool, evidence: &dyn Fn() -> Result<()>) {

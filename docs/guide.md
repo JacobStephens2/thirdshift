@@ -3738,7 +3738,7 @@ fails when its head branch is occupied and names the occupying worktree.
 At the repository's Command limit, or with no eligible PR it can reserve,
 it exits `0`, prints a skip reason on stderr, records an Activity log skip
 when the reason changes, and sends no Run notification. A failed Fix run
-leaves a draft, so later Passes skip it until the Day shift makes it ready.
+that leaves a draft stays out of later Passes until the Day shift makes it ready.
 
 The Built-in process `fix-run` is `delivery` followed by `self-merge`.
 `thirdshift processes` lists it; `thirdshift process show fix-run` prints it.
@@ -3755,6 +3755,10 @@ each session, including a Resume. A title or body edit to any closing
 issue (retaining previously linked ones during the run) by an account that is
 not a Trusted account, made since a few minutes before the Fix run started,
 fails the run before continuing with that session, pushing or merging.
+It also stops before using a linked closing issue, including when the Fix run
+was started as a Pass, unless that issue's author is a Trusted account and no
+account that is not one has edited its title or body. That stop does not take
+the next candidate.
 Repairs share the usual five-session cap,
 Check re-run and optional Base fix. A Fix run starts no implementation or initial
 Standards/Spec review session.
@@ -3783,9 +3787,10 @@ This preserves [ADR 0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merg
 Activity log lines and Run notifications identify a **Fix run**.
 
 Success prints `PR <url> is ready for review` or `PR <url> is merged`.
-Failure or interruption preserves uncommitted work as
-`thirdshift: failed fix run (<reason>)`, pushes unpublished work and drafts the
-PR. A Self-merge refused with a mergeable, green PR leaves it ready.
+A closing-issue trust stop keeps unpublished Repair work local and leaves the
+PR in its current state. Other failures and interruptions preserve uncommitted
+work as `thirdshift: failed fix run (<reason>)`, push unpublished work and draft
+the PR. A Self-merge refused with a mergeable, green PR leaves it ready.
 Recovery offers `thirdshift fix <PR URL>` with the original flags. An unchanged
 Repair creates no empty failure commit. A PR closed or merged during the run
 stops further publication; a PR made draft during Repair stays draft.
@@ -3896,6 +3901,10 @@ linked earlier in the run): a title or body edit by an account that is not a
 Trusted account, made since a few minutes before the Review run started, stops
 the run without starting the next session, converting the pull request to a
 draft, pushing or merging.
+It also stops before using a linked closing issue, including when the Review run
+was started as a Pass, unless that issue's author is a Trusted account and no
+account that is not one has edited its title or body. That stop does not take
+the next candidate.
 Without `--recommend-only`, the session addresses findings using the same rules
 as a Ticket run: it runs each behavior finding's test or command before deciding,
 fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
@@ -3994,7 +4003,9 @@ the filtered input is in `.thirdshift-review-input.md`. All linked closing issue
 (retaining previously linked ones during the run) are checked against untrusted
 title or body edits since a few minutes before the Process started before
 writing that file, around every Step, session, Repair and Resume, and before
-Delivery or Self-merge pushes, comments or merges. This version keeps these
+Delivery or Self-merge pushes, comments or merges. It also stops before using
+a linked closing issue unless that issue's author is a Trusted account and no
+account that is not one has edited its title or body. This version keeps these
 Steps sequential and requires `review-and-address` before `delivery`, optionally
 followed directly by `self-merge`. Copied Processes retain the opt-in merge choice.
 

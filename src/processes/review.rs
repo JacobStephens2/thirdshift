@@ -296,6 +296,9 @@ impl ReviewProcess {
                 pr,
                 closing_issues: &closing_issues,
             };
+            // Since-start edits fail first, before the issue text is read.
+            let linked = github.closing_issues(pr)?;
+            guard.check_known_issues(&linked)?;
             let input = github.review_input(pr, &snapshot)?;
             guard.check_known_issues(&input.closing_issues)?;
             skills::exclude(&git, "/.thirdshift-review-input.md")?;
@@ -483,7 +486,7 @@ impl ReviewProcess {
                                 last_log = log.clone();
                                 let review = match review {
                                     Err(error)
-                                        if crate::delivery::ClosingIssues::is_untrusted_edit(
+                                        if crate::delivery::ClosingIssues::is_untrusted_closing_issue(
                                             &error,
                                         ) =>
                                     {
@@ -818,13 +821,7 @@ impl Guard<'_> {
     /// Ensure PR metadata, head commit, and linked closing issues are intact.
     pub(super) fn unchanged(&self, snapshot: &ReviewPullRequest) -> Result<()> {
         let current = self.compatible(snapshot)?;
-        ensure!(
-            current.head == snapshot.head,
-            "pull request changed during Review run: head moved; expected {}, actual {}",
-            snapshot.head,
-            current.head,
-        );
-        Ok(())
+        check_review_head(&snapshot.head, &current.head)
     }
 
     /// Delivery may report a moved head and the Base branch tip may advance,
@@ -847,6 +844,14 @@ impl Guard<'_> {
         self.check_issues()?;
         Ok(current)
     }
+}
+
+fn check_review_head(expected: &str, actual: &str) -> Result<()> {
+    ensure!(
+        actual == expected,
+        "pull request changed during Review run: head moved; expected {expected}, actual {actual}",
+    );
+    Ok(())
 }
 
 fn unchanged_checkout(git: &Git, snapshot: &ReviewPullRequest) -> Result<()> {

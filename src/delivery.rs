@@ -230,7 +230,7 @@ impl Delivery<'_> {
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
         let closing_issues = ClosingIssues::new(pr.clone(), self.started, "Fix run");
-        self.fix_pr(worktree, pull_request, pr, &closing_issues, false, steps)
+        self.fix_pr(worktree, pull_request, pr, &closing_issues, steps)
     }
 
     /// Continue an already-delivered Review PR through shared Self-merge,
@@ -244,7 +244,7 @@ impl Delivery<'_> {
         closing_issues: &ClosingIssues,
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
-        self.fix_pr(worktree, pull_request, pr, closing_issues, true, steps)
+        self.fix_pr(worktree, pull_request, pr, closing_issues, steps)
     }
 
     fn fix_pr(
@@ -253,17 +253,12 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         pr: &crate::review::PullRequestUrl,
         closing_issues: &ClosingIssues,
-        self_merge: bool,
         steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
         if !matches!(steps.as_slice(), [Step::Delivery, Step::SelfMerge]) {
             return Err(anyhow::anyhow!("fix-run must deliver then self-merge").into());
         }
-        let context = RepairContext::PullRequest {
-            pr,
-            closing_issues,
-            self_merge,
-        };
+        let context = RepairContext::PullRequest { pr, closing_issues };
         self.fix_with(
             worktree,
             pull_request,
@@ -548,7 +543,6 @@ enum RepairContext<'a> {
     PullRequest {
         pr: &'a crate::review::PullRequestUrl,
         closing_issues: &'a ClosingIssues,
-        self_merge: bool,
     },
     BaseBranch(&'a str),
 }
@@ -567,16 +561,6 @@ impl<'a> RepairContext<'a> {
             Self::PullRequest { closing_issues, .. } => Some(closing_issues),
             Self::Issue(_) | Self::BaseBranch(_) => None,
         }
-    }
-
-    fn is_review_self_merge(self) -> bool {
-        matches!(
-            self,
-            Self::PullRequest {
-                self_merge: true,
-                ..
-            }
-        )
     }
 }
 
@@ -598,7 +582,7 @@ struct CheckedRun<'a> {
 /// request whose head includes the local work or take the Failed run path.
 fn run_checked<T, S>(
     checked: CheckedRun<'_>,
-    worktree: Worktree,
+    mut worktree: Worktree,
     pull_request: &mut PullRequest,
     tracker: &Tracker,
     on_ok: impl FnOnce(T, Option<PathBuf>) -> S,
@@ -652,14 +636,18 @@ fn run_checked<T, S>(
                 Ok(on_merged(merged, log))
             } else {
                 let interrupted = interrupt::requested();
-                let error = interrupted_or(error, interrupted);
-                // Review Self-merge runs after Delivery has already left the PR
-                // ready for review: an untrusted closing-issue edit stops
-                // cleanly without drafting the PR or pushing dirty/unreviewed
-                // Repair work.
-                if context.is_review_self_merge() && ClosingIssues::is_untrusted_edit(&error) {
+                // A closing-issue trust stop can leave unpublished Repair work.
+                // Keep it local without mutating the PR during failure handling.
+                if context.closing_issues().is_some()
+                    && ClosingIssues::is_untrusted_closing_issue(&error)
+                {
                     let stopped_at = stopped_at(tracker, &error);
-                    let mut recovery = Recovery::new(stopped_at, Preservation::None);
+                    let preservation = if worktree.preserve_unpublished_locally() {
+                        Preservation::Local
+                    } else {
+                        Preservation::None
+                    };
+                    let mut recovery = Recovery::new(stopped_at, preservation);
                     recovery.record_worktree(worktree.path().to_path_buf());
                     Err(FailedRun {
                         recovery: Some(Box::new(recovery)),
@@ -671,6 +659,7 @@ fn run_checked<T, S>(
                         ticket_lines: Vec::new(),
                     })
                 } else {
+                    let error = interrupted_or(error, interrupted);
                     let stopped_at = stopped_at(tracker, &error);
                     let path = worktree.path().to_path_buf();
                     let mut outside = OnFailure {
@@ -1205,8 +1194,9 @@ trait FailedOutside {
 }
 
 /// Tracks linked closing issues seen on a pull request across Steps, sessions,
-/// Repairs, Resumes, pushes, and merges so any untrusted title or body edit
-/// stops further sessions and publication cleanly.
+/// Repairs, Resumes, pushes, and merges. An untrusted edit since the run
+/// started, or a linked closing issue that must not be used at all, stops
+/// further sessions and publication cleanly.
 #[derive(Clone)]
 pub(crate) struct ClosingIssues {
     pr: crate::review::PullRequestUrl,
@@ -1229,12 +1219,18 @@ impl ClosingIssues {
         }
     }
 
-    pub(crate) fn is_untrusted_edit(error: &anyhow::Error) -> bool {
-        error.chain().any(|layer| layer.is::<UntrustedEdit>())
+    /// An untrusted edit since the run started, or a linked closing issue that
+    /// must not be used at all. Either stops the run without drafting the
+    /// pull request or posting from the untrusted text.
+    pub(crate) fn is_untrusted_closing_issue(error: &anyhow::Error) -> bool {
+        error
+            .chain()
+            .any(|layer| layer.is::<UntrustedEdit>() || layer.is::<trust::UnusableClosingIssue>())
     }
 
-    /// Record `issues` (retaining earlier seen links) and fail with
-    /// [`UntrustedEdit`] if an untrusted account edited any of them since the Run started.
+    /// Record `issues` (retaining earlier seen links). An edit since the run
+    /// started fails first. Otherwise the issue's author must be a Trusted
+    /// account and no account that is not one may have edited its title or body.
     pub(crate) fn check_known(&self, issues: &[IssueUrl]) -> Result<()> {
         let mut seen = self.seen.borrow_mut();
         let mut ids: std::collections::BTreeSet<_> = seen.iter().map(IssueUrl::identity).collect();
@@ -1246,11 +1242,16 @@ impl ClosingIssues {
         for issue in seen.iter() {
             no_untrusted_edit_since(issue, self.started, self.run_name)?;
         }
+        for issue in seen.iter() {
+            refuse_unusable_closing_issue(issue)?;
+        }
         Ok(())
     }
 
     /// Fetch the pull request's current closing issues, retain all previously
-    /// seen links, and enforce [`no_untrusted_edit_since`] across the union.
+    /// seen links, and enforce [`Self::check_known`]: an edit since the run
+    /// started, then an untrusted author or any earlier untrusted title or
+    /// body edit.
     pub(crate) fn check(&self, github: &GitHub) -> Result<()> {
         let current = github.closing_issues(&self.pr)?;
         self.check_known(&current)
@@ -1273,6 +1274,16 @@ pub(crate) fn no_untrusted_edit_since(
             run_name,
         }
         .into()),
+        None => Ok(()),
+    }
+}
+
+/// Fail when `issue` must not be used as a linked closing issue: its author
+/// is not a Trusted account, or an account that is not one edited its title
+/// or body.
+fn refuse_unusable_closing_issue(issue: &IssueUrl) -> Result<()> {
+    match trust::closing_issue_trust(&GitHub::new(), issue)? {
+        Some(why) => Err(trust::UnusableClosingIssue::new(issue, why).into()),
         None => Ok(()),
     }
 }
@@ -1311,10 +1322,11 @@ fn hand_over_pull_request(
             "pull request became draft during Fix run"
         );
     }
+    // Since-start edits fail first, before the issue text is read. An
+    // untrusted author, or any older untrusted edit, fails in that same check.
+    let linked = github.closing_issues(pr)?;
+    closing_issues.check_known(&linked)?;
     let input = github.review_input(pr, &snapshot)?;
-    // The Repair session works from these issues and can push. Stop before
-    // writing them when an untrusted account has edited one (including any
-    // closing issue seen earlier in the Run and since unlinked) since the run started.
     closing_issues.check_known(&input.closing_issues)?;
     skills::exclude(&Git::new(worktree), "/.thirdshift-review-input.md")?;
     crate::processes::review::write_review_input(
@@ -1597,7 +1609,7 @@ impl RunOutside<'_> {
     fn finish_session_or_fix<T>(&mut self, result: Result<T>) -> Result<()> {
         let checked = self.check_closing_issues();
         match (result, checked) {
-            (_, Err(err)) if ClosingIssues::is_untrusted_edit(&err) => return Err(err),
+            (_, Err(err)) if ClosingIssues::is_untrusted_closing_issue(&err) => return Err(err),
             (Err(err), _) => return Err(err),
             (Ok(_), Err(err)) => return Err(err),
             (Ok(_), Ok(())) => {}

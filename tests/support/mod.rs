@@ -52,7 +52,7 @@ pub mod scoring;
 pub mod session_trace;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -1366,6 +1366,24 @@ test -f {root}/{COPY_REPLACED}
             fs::write(path, contents).unwrap();
             git(seed, &["add", file]);
             git(seed, &["commit", "-q", "-m", subject]);
+        });
+    }
+
+    /// Commit `branch` so `.thirdshift-review-input.md` is a symlink to `target`.
+    pub fn commit_review_input_symlink(&self, branch: &str, target: &Path) {
+        self.push_from_seed(branch, |seed| {
+            git(seed, &["checkout", "-q", branch]);
+            symlink(target, seed.join(".thirdshift-review-input.md")).unwrap();
+            git(seed, &["add", ".thirdshift-review-input.md"]);
+            git(
+                seed,
+                &[
+                    "commit",
+                    "-q",
+                    "-m",
+                    "Point the review input at another file",
+                ],
+            );
         });
     }
 
