@@ -107,7 +107,7 @@ details[data-fact] > dl { margin: 4px 0 6px; }
 .ci, .merge-conflict { color: var(--tag-done-text); background: var(--tag-done-bg); border-radius: var(--radius); padding: 0 4px; font-size: 12px; white-space: nowrap; }
 .merge-conflict { color: var(--tag-urgent-text); background: var(--tag-urgent-bg); }
 .ci-stale { color: var(--tag-urgent-text); background: var(--tag-urgent-bg); border-radius: var(--radius); padding: 0 4px; font-size: 12px; max-inline-size: min(32ch, 100%); white-space: normal; overflow-wrap: anywhere; }
-.ci[data-ci="CI green"] { color: var(--tag-ready-text); background: var(--tag-ready-bg); }
+.ci[data-ci="CI green"] { color: var(--tag-ci-green-text); background: var(--tag-ci-green-bg); }
 .ci[data-ci="CI red"] { color: var(--tag-urgent-text); background: var(--tag-urgent-bg); }
 .ci[data-ci="CI pending"] { color: var(--tag-look-text); background: var(--tag-look-bg); }
 .account-tag { color: var(--dim); font-size: .85em; border: 1px solid currentColor; border-radius: var(--radius); padding: 0 4px; }

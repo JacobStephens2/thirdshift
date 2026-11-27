@@ -33,6 +33,11 @@ fn custom_theme_cli_round_trip_defaults_validation_and_log() {
     assert_eq!(theme["tokens"]["bg"], "#123456");
     assert_eq!(theme["tokens"]["body-size"], "13px");
     assert_eq!(theme["tokens"]["font-body"], "my-font.woff2, sans-serif");
+    assert_eq!(theme["tokens"]["tag-ci-green-bg"], "var(--tag-ready-bg)");
+    assert_eq!(
+        theme["tokens"]["tag-ci-green-text"],
+        "var(--tag-ready-text)"
+    );
     assert_eq!(
         serde_json::from_slice::<Value>(
             &fs::read(home.path().join(".thirdshift/console/themes/my-night.json")).unwrap()
