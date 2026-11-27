@@ -59,6 +59,8 @@
   --tag-landing-text: var(--text);
   --tag-ready-bg: transparent;
   --tag-ready-text: var(--text);
+  --tag-ci-green-bg: transparent;
+  --tag-ci-green-text: light-dark(#23633A, #86D99D);
   --tag-done-bg: transparent;
   --tag-done-text: var(--text);
   --activity-decoration: none;
@@ -109,6 +111,8 @@
   --tag-landing-text: var(--text);
   --tag-ready-bg: transparent;
   --tag-ready-text: var(--text);
+  --tag-ci-green-bg: var(--tag-ready-bg);
+  --tag-ci-green-text: var(--tag-ready-text);
   --tag-done-bg: transparent;
   --tag-done-text: var(--text);
   --activity-decoration: none;
@@ -159,6 +163,8 @@
   --tag-landing-text: var(--on-landing);
   --tag-ready-bg: var(--ready);
   --tag-ready-text: var(--on-ready);
+  --tag-ci-green-bg: var(--tag-ready-bg);
+  --tag-ci-green-text: var(--tag-ready-text);
   --tag-done-bg: var(--done);
   --tag-done-text: var(--on-done);
   --activity-decoration: none;
@@ -209,6 +215,8 @@
   --tag-landing-text: var(--on-landing);
   --tag-ready-bg: var(--ready);
   --tag-ready-text: var(--on-ready);
+  --tag-ci-green-bg: var(--tag-ready-bg);
+  --tag-ci-green-text: var(--tag-ready-text);
   --tag-done-bg: var(--done);
   --tag-done-text: var(--on-done);
   --activity-decoration: none;
@@ -259,6 +267,8 @@
   --tag-landing-text: var(--on-landing);
   --tag-ready-bg: var(--ready);
   --tag-ready-text: var(--on-ready);
+  --tag-ci-green-bg: var(--tag-ready-bg);
+  --tag-ci-green-text: var(--tag-ready-text);
   --tag-done-bg: var(--done);
   --tag-done-text: var(--on-done);
   --activity-decoration: repeating-linear-gradient(90deg, var(--working) 0 6px, transparent 6px 12px);
@@ -310,6 +320,8 @@
   --tag-landing-text: var(--on-landing);
   --tag-ready-bg: var(--ready);
   --tag-ready-text: var(--on-ready);
+  --tag-ci-green-bg: var(--tag-ready-bg);
+  --tag-ci-green-text: var(--tag-ready-text);
   --tag-done-bg: var(--done);
   --tag-done-text: var(--on-done);
   --activity-decoration: repeating-linear-gradient(90deg, var(--working) 0 6px, transparent 6px 12px);

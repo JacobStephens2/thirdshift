@@ -1596,12 +1596,16 @@ test("Shift+T switches all built-in Themes and saves hidden sections across brow
   } finally { await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n'); }
 });
 
+function contrastRatio(a, b) {
+  const luminance = rgb => rgb.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+  const first = luminance(a), second = luminance(b);
+  return (Math.max(first, second) + .05) / (Math.min(first, second) + .05);
+}
+
 test("every built-in Theme text pair meets AA in both system modes, including solid tags", async t => {
   const page = await pageFor(t);
   const failures = [];
   const { APCAcontrast, sRGBtoY } = await import('apca-w3');
-  const luminance = rgb => rgb.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
-  const ratio = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
   await page.goto(origin);
   const backgrounds = { focus: ['rgb(247, 247, 245)', 'rgb(18, 18, 20)'], plain: ['rgb(252, 252, 251)', 'rgb(17, 18, 20)'], press: ['rgb(232, 230, 225)', 'rgb(10, 10, 10)'], signal: ['rgb(250, 250, 250)', 'rgb(17, 19, 21)'], garden: ['rgb(246, 240, 225)', 'rgb(22, 26, 20)'], factory: ['rgb(227, 230, 232)', 'rgb(28, 29, 31)'] };
   for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
@@ -1643,13 +1647,14 @@ test("every built-in Theme text pair meets AA in both system modes, including so
         }, theme);
         assert.equal(background, backgrounds[family][(mode === 'auto' ? system : mode) === 'dark' ? 1 : 0], `${theme} must respect the chosen mode on ${system}`);
         for (const pair of pairs) {
-          if (ratio(pair.text, pair.background) < 4.5) failures.push(`${theme} (${system}): ${pair.name} = ${ratio(pair.text, pair.background)}`);
+          const ratio = contrastRatio(pair.text, pair.background);
+          if (ratio < 4.5) failures.push(`${theme} (${system}): ${pair.name} = ${ratio}`);
           if (family === 'focus' && !pair.name.startsWith('on-')) {
             assert.ok(Math.abs(APCAcontrast(sRGBtoY(pair.text), sRGBtoY(pair.background))) >= 45, `${theme}: ${pair.name} below APCA Lc 45`);
           }
           if (pair.name.startsWith('on-')) {
-            const best = Math.max(ratio([0, 0, 0], pair.background), ratio([255, 255, 255], pair.background));
-            assert.equal(ratio(pair.text, pair.background), best, `${theme}: ${pair.name} must use the better black or white`);
+            const best = Math.max(contrastRatio([0, 0, 0], pair.background), contrastRatio([255, 255, 255], pair.background));
+            assert.equal(ratio, best, `${theme}: ${pair.name} must use the better black or white`);
           }
         }
       }
@@ -2444,7 +2449,7 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
   });
   const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
   const states = [
-    [229, 'green', 'CI green', 'ready', 'conflicting'], [230, 'red', 'CI red', 'urgent', 'mergeable'],
+    [229, 'green', 'CI green', 'ci-green', 'conflicting'], [230, 'red', 'CI red', 'urgent', 'mergeable'],
     [231, 'pending', 'CI pending', 'look', 'unknown'], [232, 'no_checks', 'No CI checks', 'done', 'conflicting'],
     [233, undefined, 'CI unknown', 'done'], [234, null, 'CI unknown', 'done'],
   ];
@@ -2465,6 +2470,37 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
     await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
     await writeFile(changed, 'CI fixture');
     const rowFor = (page, number) => page.locator(`.command:has(> .row-head > .subject a[href="https://github.com/acme/widgets/pull/${number}"])`);
+    const page = await pageFor(t);
+    const { APCAcontrast, sRGBtoY } = await import('apca-w3');
+    const themes = [
+      ['focus-light', 'dark'], ['focus-dark', 'light'],
+      ...['focus', 'plain', 'press', 'signal', 'garden', 'factory'].flatMap(family =>
+        ['light', 'dark'].map(system => [`${family}-auto`, system])),
+    ];
+    for (const path of ['/', '/?section=ready-for-review']) {
+      await page.goto(`${origin}${path}`);
+      const row = rowFor(page, 229);
+      const badge = row.locator('.ci').getByText('CI green', { exact: true });
+      await badge.waitFor();
+      await row.getByText('Merge conflict', { exact: true }).waitFor();
+      for (const [theme, system] of themes) {
+        await page.emulateMedia({ colorScheme: system });
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        const { text, background } = await badge.evaluate(node => {
+          const rgb = color => color.match(/[\d.]+/g).slice(0, 3).map(Number);
+          let surface = node;
+          while (getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement;
+          return { text: rgb(getComputedStyle(node).color), background: rgb(getComputedStyle(surface).backgroundColor) };
+        });
+        const context = `${path} ${theme} on ${system}`;
+        if (theme.startsWith('focus-')) {
+          const [red, green, blue] = text;
+          assert.ok(green > red && green > blue, `${context}: CI green text is rgb(${text.join(', ')})`);
+          assert.ok(Math.abs(APCAcontrast(sRGBtoY(text), sRGBtoY(background))) >= 45, `${context}: CI green below APCA Lc 45`);
+        }
+        assert.ok(contrastRatio(text, background) >= 4.5, `${context}: CI green below AA contrast`);
+      }
+    }
     for (const javaScriptEnabled of [true, false]) {
       const page = await pageFor(t, { javaScriptEnabled });
       await page.goto(`${origin}/?section=ready-for-review`);
@@ -2515,8 +2551,6 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       }
     }
-    const page = await pageFor(t);
-    await page.goto(`${origin}/?section=ready-for-review`);
     const row = rowFor(page, 229);
     await row.locator('.merge-conflict').waitFor();
     subjects['https://github.com/acme/widgets/pull/229'].mergeable = 'mergeable';
