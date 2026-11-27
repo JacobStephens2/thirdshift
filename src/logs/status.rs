@@ -4,11 +4,11 @@ pub(crate) mod fleet;
 mod inbox;
 pub mod inspect;
 mod ready;
+pub(crate) mod rows;
 mod target;
 mod text;
 pub(crate) mod time;
 mod watching;
-pub(crate) use inbox::validate_remote;
 pub(crate) use inbox::{Archive, ArchivePage};
 pub(crate) use inbox::{
     DisplayRow, DisplaySection, Inbox, Row, issue_url, subject, subject_link_matches,
@@ -84,7 +84,7 @@ impl Read {
             .collect::<Result<Vec<_>, _>>()?;
         commands.extend(self.reservations.iter().cloned());
         Ok(Status {
-            version: fleet::VERSION,
+            version: rows::VERSION,
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             active_runs: self.snapshot.active_runs(),
             commands,
@@ -99,14 +99,11 @@ impl Read {
     }
 
     pub fn json(&self, config: &UserConfig, all: bool) -> Result<serde_json::Value> {
-        Ok(serde_json::to_value(self.document(config, all)?)?)
-    }
-
-    pub fn document(&self, config: &UserConfig, all: bool) -> Result<fleet::Document> {
-        fleet::local(
+        let document = fleet::local(
             serde_json::to_value(self.status(config, all)?)?,
             self.now.into(),
-        )
+        )?;
+        Ok(serde_json::to_value(document)?)
     }
 
     pub fn inbox(&self, config: &UserConfig) -> Result<Inbox> {
@@ -239,12 +236,17 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
     }
     let status = read.status(&config, all)?;
     let local = fleet::local(serde_json::to_value(&status)?, read.now.into())?;
-    let document = if local_only {
-        local
-    } else {
-        fleet::fetch_and_merge(&config, local, machine, all)?
-    };
     let include_local = machine.is_none_or(|machine| machine == status.hostname);
+    let merge = !local_only && (!include_local || !config.console.fleet.is_empty());
+    if json && !merge {
+        println!("{}", serde_json::to_string_pretty(&local)?);
+        return Ok(());
+    }
+    let document = if merge {
+        fleet::fetch_and_merge(&config, local, machine, all)?
+    } else {
+        local.check_cli()?
+    };
     let tags = document.machines.len() > 1 || !include_local;
     if json {
         println!("{}", serde_json::to_string_pretty(&document)?);
@@ -270,18 +272,15 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         if include_local && let Some(warning) = read.kept.warning() {
             println!("Warning: {warning}");
         }
-        let rows: Vec<_> = document
-            .commands
-            .iter()
-            .map(fleet::Observation::text_row)
-            .collect::<Result<_>>()?;
+        let rows = &document.commands;
         for group in Group::ORDER {
-            let items: Vec<_> = rows.iter().filter(|row| row.group == group).collect();
+            let items: Vec<_> = rows
+                .iter()
+                .filter(|row| row.metadata.group == group)
+                .collect();
             let references: Vec<_> = rows
                 .iter()
-                .filter(|row| {
-                    group == Group::Landing && row.landing && row.group == Group::NeedsYou
-                })
+                .filter(|row| group == Group::Landing && row.lands_from_needs_you())
                 .collect();
             if items.is_empty() && references.is_empty() {
                 continue;
@@ -312,33 +311,6 @@ pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> R
         }
     }
     Ok(())
-}
-
-/// Exact Command selector from a status Document, including older peer rows
-/// that supplied the log path in place of the record path.
-fn document_selector(value: &serde_json::Value) -> String {
-    if let Some(selector) = value["selector"].as_str() {
-        return selector.to_owned();
-    }
-    let path = value["record_path"]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| {
-            let log = value["command_log"].as_str()?;
-            Some(if value["source"] == "command_record" {
-                std::path::Path::new(log)
-                    .with_extension("command.json")
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                log.to_owned()
-            })
-        });
-    match (path, value["name"].as_str().filter(|name| !name.is_empty())) {
-        (Some(path), Some(name)) => format!("{path}::{name}"),
-        (Some(path), None) => path,
-        (None, _) => String::new(),
-    }
 }
 
 fn stale_github_answer(age_seconds: Option<u64>, failed: bool) -> bool {

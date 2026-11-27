@@ -1712,7 +1712,7 @@ async fn render_page(
             let mut inbox = read.inbox(&config)?;
             let machine = query_value(&query, "machine");
             let machines = if archive_page.is_none() {
-                fleet.merge(&config, &mut inbox, &machine, viewer.fleet_person())?
+                fleet.merge(&config, &mut inbox, &machine, viewer.fleet_person())
             } else {
                 Vec::new()
             };

@@ -69,12 +69,6 @@ fn read(entry: &Entry, token: &str, person: Option<&str>) -> ReadResult {
         })?;
     let scopes = super::fleet::effective_scopes(&client, entry, token, person)?;
     let document = status::fleet::fetch_for_person(&client, entry, token, false, person)?;
-    status::validate_remote(&document).map_err(|_| {
-        (
-            Reachability::NeedsUpdate,
-            "incompatible Inbox presentation".into(),
-        )
-    })?;
     Ok((document, scopes))
 }
 
@@ -212,7 +206,7 @@ impl Fleet {
         inbox: &mut status::Inbox,
         selected: &str,
         person: Option<&str>,
-    ) -> anyhow::Result<Vec<Machine>> {
+    ) -> Vec<Machine> {
         let hostname = crate::host::name().unwrap_or_else(|| "unknown".into());
         let local_count = inbox.active_runs;
         for section in &mut inbox.sections {
@@ -261,10 +255,10 @@ impl Fleet {
             let count = answer
                 .good
                 .as_ref()
-                .map_or(0, |good| good.document.active_runs);
+                .map_or(0, |good| good.document.active_runs());
             if let Some(good) = &answer.good {
                 let unavailable = stale || answer.error.is_some();
-                inbox.merge_remote(&good.document, entry, stale, answer.error.is_some())?;
+                inbox.merge_remote(&good.document, entry, stale, answer.error.is_some());
                 inbox.remote_actions(
                     &entry.name,
                     !unavailable && answer.scopes.contains(&super::Scope::Act),
@@ -287,6 +281,6 @@ impl Fleet {
                     .unwrap_or_default(),
             });
         }
-        Ok(machines)
+        machines
     }
 }

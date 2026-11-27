@@ -3,6 +3,9 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
 use std::path::Path;
 
+use super::rows::{
+    ConsoleCommand, ConsoleDocument, LocalCommand, Source, identity, selector_label,
+};
 use super::{age, ready, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
@@ -385,13 +388,13 @@ impl Inbox {
         now: DateTime<Local>,
     ) -> Result<()> {
         for value in values {
-            let row = present(value, now)?;
-            if let Some(section) = self
-                .sections
-                .iter_mut()
-                .find(|section| value["group"] == section.group)
-            {
-                section.rows.push(row);
+            let checked = LocalCommand::check(value.clone())?;
+            let command = checked.console();
+            let group = command.facts.named_group;
+            if let Some(section) = self.sections.iter_mut().find(|section| {
+                group.is_some_and(|group| section.group.eq_ignore_ascii_case(group.title()))
+            }) {
+                section.rows.push(present(command, now));
                 section.rows.sort_by_key(|row| row.order);
             }
         }
@@ -418,72 +421,56 @@ impl Inbox {
         }
     }
 
-    /// Received rows keep the owning machine's grouping and presentation facts;
-    /// this path never opens their paths or evaluates them against local GitHub.
+    /// Merge the owning machine's checked facts without reading local paths or GitHub.
     pub fn merge_remote(
         &mut self,
-        document: &super::fleet::Document,
+        document: &ConsoleDocument,
         entry: &crate::config::console::fleet::Entry,
         stale: bool,
         failed: bool,
-    ) -> Result<()> {
-        let rows = document
-            .commands
-            .iter()
-            .map(|command| present(&command.value, chrono::Local::now()))
-            .collect::<Result<Vec<_>>>()?;
-        let listed = rows
-            .iter()
-            .map(|row| row.id.clone())
+    ) {
+        let now = Local::now();
+        let listed = document
+            .rows()
+            .map(|row| row.command.facts.id.as_str())
             .collect::<std::collections::BTreeSet<_>>();
-        let stale_github = document.github_answer_is_stale();
-        for (command, mut row) in document.commands.iter().zip(rows) {
-            let checked = command.text_row()?;
-            let value = &command.value;
+        for checked in document.rows() {
+            let facts = checked.command.facts;
+            let Some(group) = facts.named_group else {
+                continue;
+            };
             let Some(section) = self
                 .sections
                 .iter_mut()
-                .find(|section| section.group == value["group"].as_str().unwrap_or_default())
+                .find(|section| section.group.eq_ignore_ascii_case(group.title()))
             else {
                 continue;
             };
-            row.children.retain(|child| !listed.contains(&child.id));
-            // `row.html` shows repository and issue number as the link text.
-            // A received document chooses `issue.url` independently, so keep
-            // the href only when it names that same GitHub issue or pull request.
-            bind_subject_link(&mut row);
+            let mut row = present(checked.command, now);
+            row.children
+                .retain(|child| !listed.contains(child.id.as_str()));
             row.tag_machine(
                 &entry.name,
                 &entry.address,
                 stale || (section.is_ready_for_review() && failed),
             );
-            row.stale_github = stale_github && section.is_ready_for_review();
-            let subject = row.subject.clone();
+            row.stale_github = checked.stale_github && section.is_ready_for_review();
+            let reference = checked.landing_kind.map(|kind| LandingReference {
+                repository: facts.fields.summary.repository.clone(),
+                text: format!("[{}] {} · {kind} · see Needs you", entry.name, row.subject),
+            });
             section.rows.push(row);
-            // Local rows were already ordered; merge with the same Needs you
-            // priorities and newest occurrence ordering, without cross-host collapse.
+            // Keep the owning Inbox's order without collapsing across machines.
             section.rows.sort_by_key(|row| row.order);
-            if checked.landing && value["group"] == "needs you" {
-                // The secondary Landing reference belongs beside all machines' rows.
-                let reference = LandingReference {
-                    repository: value["repository"].as_str().unwrap_or_default().to_owned(),
-                    text: format!(
-                        "[{}] {} · {} · see Needs you",
-                        entry.name,
-                        subject,
-                        value["needs_you_kind"].as_str().unwrap_or("Needs you")
-                    ),
-                };
-                if let Some(landing) = self
+            if let Some(reference) = reference
+                && let Some(landing) = self
                     .sections
                     .iter_mut()
                     .find(|section| section.group == "landing")
-                {
-                    landing.references.push(reference);
-                }
+            {
+                landing.references.push(reference);
             }
         }
-        Ok(())
     }
 }
 
@@ -492,9 +479,6 @@ impl Inbox {
 fn bind_subject_link(row: &mut Row) {
     if !subject_link_matches(&row.subject, row.subject_url.as_deref()) {
         row.subject_url = None;
-    }
-    for child in &mut row.children {
-        bind_subject_link(child);
     }
 }
 
@@ -520,137 +504,63 @@ pub(crate) fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
     })
 }
 
-pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
-    for command in &document.commands {
-        present(&command.value, chrono::Local::now())?;
-    }
-    Ok(())
-}
-
-/// Pure presentation shared by local observations and received Commands.
-/// Only the local caller attaches captured paths, activity and Session inventory.
-fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
-    use serde::Deserialize;
-    #[derive(Deserialize)]
-    struct Facts {
-        account: Option<String>,
-        repository: String,
-        kind: String,
-        issue: Option<Issue>,
-        #[serde(default)]
-        name: String,
-        state: String,
-        started_at: String,
-        ended_at: Option<String>,
-        outcome: Option<String>,
-        cause: Option<String>,
-        pull_request: Option<String>,
-        release_url: Option<String>,
-        base_branch: Option<String>,
-        harness: Option<String>,
-        model: Option<String>,
-        effort: Option<String>,
-        stage: Option<crate::logs::reading::CurrentStage>,
-        health: Option<Health>,
-        #[serde(default)]
-        waiting_for: Vec<String>,
-        resume_command: Option<String>,
-        process_name: Option<String>,
-        #[serde(flatten)]
-        github_checks: PullRequestChecks,
-        #[serde(default)]
-        children: Vec<serde_json::Value>,
-        #[serde(default)]
-        dispatched: Vec<serde_json::Value>,
-        #[serde(default)]
-        tickets: Vec<crate::logs::command_record::TicketRecord>,
-        #[serde(default)]
-        security_findings: Vec<crate::security::RecordedFinding>,
-        #[serde(flatten)]
-        departure: Option<crate::logs::reading::Departure>,
-        dismissal: Option<crate::logs::dismiss::DismissalView>,
-    }
-    let facts: Facts = serde_json::from_value(value.clone())?;
+/// Render checked facts. The local caller adds activity, paths and Session inventory.
+fn present(command: ConsoleCommand<'_>, now: DateTime<Local>) -> Row {
+    let checked = command.facts;
+    let facts = &checked.fields;
+    let summary = &facts.summary;
     let live = facts.state == "live";
-    // A child Ticket shares its outer Command log, but owns a different
-    // record. Use the owning observation's path rather than the log stem.
-    let selector = super::document_selector(value);
-    let selector_label = selector_label(
-        &selector,
-        value["record_path"]
-            .as_str()
-            .or_else(|| value["command_log"].as_str()),
-    );
     let process =
-        (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
-    let live_target = live && matches!(facts.kind.as_str(), "Fix run" | "Review run");
+        (summary.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
+    let live_target = live && matches!(summary.kind.as_str(), "Fix run" | "Review run");
     let name = if live_target {
-        &facts.kind
-    } else if value["source"] == "command_record" {
+        &summary.kind
+    } else if command.source() == Source::Record {
         &facts.name
     } else {
-        &facts.kind
+        &summary.kind
     };
-    let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
-    let subject_url = issue_url(facts.issue.as_ref());
-    let ready = value["group"] == Section::READY_FOR_REVIEW;
-    let ready_title = ready::title(value, facts.pull_request.as_deref().unwrap_or_default());
-    let group: Option<Group> = value
-        .get("group")
-        .map(|group| serde_json::from_value(group.clone()))
-        .transpose()?;
-    let kind = value
-        .get("needs_you_kind")
-        .and_then(|kind| serde_json::from_value(kind.clone()).ok());
-    let state = group
+    let (subject, title) = subject(&summary.repository, name, summary.issue.as_ref(), process);
+    let subject_url = issue_url(summary.issue.as_ref());
+    let state = checked
+        .group
         .map_or(facts.state.as_str(), |group| {
-            group.state_word(kind, value["stopping"] == true, &facts.state)
+            group.state_word(checked.needs_you_kind, checked.stopping, &facts.state)
         })
         .to_owned();
-    let release_link =
-        command_release_link(&facts.kind, facts.release_url.as_deref(), &facts.repository);
+    let release_link = command_release_link(
+        &summary.kind,
+        facts.release_url.as_deref(),
+        &summary.repository,
+    );
     let mut row = Row {
-        repository: facts.repository.clone(),
-        order: group
-            .unwrap_or(Group::History)
-            .row_order(kind, facts.ended_at.as_deref().or(Some(&facts.started_at))),
+        repository: summary.repository.clone(),
+        order: checked.order,
         machine: String::new(),
         console: String::new(),
         stale: false,
-        id: identity(&format!("{selector}\0{}\0{}", facts.kind, facts.started_at)),
-        account: facts.account.clone(),
-        started_ms: timestamp(&facts.started_at),
-        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
+        id: checked.id.clone(),
+        account: summary.account.clone(),
+        started_ms: timestamp(&summary.started_at),
+        occurred_ms: timestamp(summary.ended_at.as_deref().unwrap_or(&summary.started_at)),
         live,
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
         slow: matches!(facts.health, Some(Health::Slow { .. })),
         log_growth: String::new(),
-        selector_label: selector_label.to_owned(),
-        selector,
-        can_dismiss: facts.account.is_none()
-            && matches!(
-                value["source"].as_str(),
-                Some("command_record" | "reservation")
-            )
-            && matches!(
-                value["group"].as_str(),
-                Some("needs you" | "ready for review")
-            )
-            && value["collapsed"].as_array().is_none_or(|rows| {
-                rows.iter()
-                    .all(|row| row["account"].is_null() && row["source"] == "command_record")
-            }),
-        remote_stop: facts.account.is_none()
+        selector_label: command.selector_label().to_owned(),
+        selector: command.selector().to_owned(),
+        can_dismiss: summary.account.is_none()
+            && matches!(command.source(), Source::Record | Source::Reservation)
+            && checked.waiting_for_dismissal()
+            && command.collapsed_are_owned_records(),
+        remote_stop: summary.account.is_none()
             && live
-            && value["source"] == "command_record"
-            && value["parent_record"].is_null()
-            && value["stopping"] != true,
-        remote_undo: facts.account.is_none()
+            && command.source() == Source::Record
+            && !checked.has_parent
+            && !checked.stopping,
+        remote_undo: summary.account.is_none()
             && facts.dismissal.is_some()
-            && !matches!(
-                value["group"].as_str(),
-                Some("needs you" | "ready for review")
-            ),
+            && !checked.waiting_for_dismissal(),
         logs_url: String::new(),
         subject,
         subject_url,
@@ -659,38 +569,35 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .as_deref()
             .filter(|_| live_target)
             .and_then(|url| crate::review::PullRequestUrl::parse(url).ok())
-            .filter(|pr| pr.issue.repo_slug().eq_ignore_ascii_case(&facts.repository)),
-        base_branch: facts.base_branch.filter(|_| live_target),
+            .filter(|pr| {
+                pr.issue
+                    .repo_slug()
+                    .eq_ignore_ascii_case(&summary.repository)
+            }),
+        base_branch: facts.base_branch.clone().filter(|_| live_target),
         release_link,
         title,
         command_kind: process.map_or_else(
-            || crate::logs::display_name(&facts.kind).to_owned(),
+            || crate::logs::display_name(&summary.kind).to_owned(),
             |name| format!("Process {name}"),
         ),
         state,
         now_line: super::stage_details(
-            facts.outcome.as_deref(),
+            summary.outcome.as_deref(),
             &facts.state,
             facts.stage.as_ref(),
             facts.health.as_ref(),
             &facts.waiting_for,
         ),
-        timing: Timing::new(
-            live,
-            &facts.started_at,
-            facts
-                .ended_at
-                .as_deref()
-                .filter(|_| value["end_time_estimated"] != true),
-            now,
-        ),
-        count: value["count"].as_u64().unwrap_or(1) as usize,
-        cause: facts.cause.unwrap_or_default(),
+        timing: Timing::new(live, &summary.started_at, checked.recorded_finish(), now),
+        count: checked.count,
+        cause: facts.cause.clone().unwrap_or_default(),
         resume_command: facts
             .resume_command
-            .filter(|_| facts.outcome.as_deref() == Some("paused")),
+            .clone()
+            .filter(|_| summary.outcome.as_deref() == Some("paused")),
         fix_command: None,
-        release_command: value["release_command"].as_str().map(String::from),
+        release_command: checked.release_command.clone(),
         left: facts
             .dismissal
             .as_ref()
@@ -705,7 +612,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             facts.model.as_deref().unwrap_or("default Model"),
             facts.effort.as_deref().unwrap_or("default Effort")
         ),
-        pull_request: facts.pull_request.unwrap_or_default(),
+        pull_request: facts.pull_request.clone().unwrap_or_default(),
         pr_checks: None,
         stale_github: false,
         ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
@@ -724,31 +631,25 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         tickets: facts
             .tickets
             .iter()
-            .map(|ticket| ticket_text(ticket, &facts.repository))
+            .map(|ticket| ticket_text(ticket, &summary.repository))
             .collect(),
-        children: facts
-            .dispatched
-            .iter()
-            .chain(&facts.children)
+        children: command
+            .children()
             .map(|child| present(child, now))
-            .collect::<Result<_>>()?,
-        findings: facts.security_findings,
+            .collect(),
+        findings: facts.security_findings.clone(),
         sessions: Vec::new(),
     };
-    if value["source"] == "reservation" {
+    if let Some(reservation) = &checked.reservation {
         row.state = "Reservation".into();
-        row.title = value["reservation"]["reference"]
-            .as_str()
-            .unwrap_or_default()
-            .into();
-        row.subject = facts.repository.clone();
+        row.title = reservation.reference.clone();
+        row.subject = summary.repository.clone();
         row.subject_url = None;
         row.now_line = format!(
             "{} · {}",
-            value["blocking"].as_str().unwrap_or_default(),
-            value["owner_description"].as_str().unwrap_or_default()
+            reservation.blocking, reservation.owner_description
         );
-        row.timing.age = format!("Held for {}", elapsed(&facts.started_at, now));
+        row.timing.age = format!("Held for {}", elapsed(&summary.started_at, now));
         row.harness.clear();
     }
     // Compact Inbox rows hide nested runs. Keep each Slow descendant's
@@ -761,21 +662,21 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     // Compact Inbox rows hide nested runs. Carry the dispatched Spec's
     // recorded accounting onto its Pass without counting child attempts.
     if row.ticket_progress.is_none() {
-        row.ticket_progress = row.children[..facts.dispatched.len()]
+        row.ticket_progress = row.children[..command.dispatched_count()]
             .iter()
             .rev()
             .find_map(|child| child.ticket_progress);
     }
-    if ready {
-        row.present_ready(ready_title, &facts.github_checks);
-    } else if group == Some(Group::NeedsYou) {
-        row.present_needs_you_target(&facts.kind, &facts.repository);
+    if checked.named_group == Some(Group::ReadyForReview) {
+        row.present_ready(command.ready_title(), &facts.github_checks);
+    } else if checked.group == Some(Group::NeedsYou) {
+        row.present_needs_you_target(&summary.kind, &summary.repository);
     }
-    row.present_release_target(&facts.kind, &facts.repository);
+    row.present_release_target(&summary.kind, &summary.repository);
     // A record can name one repository and carry another repository's issue
     // URL. The visible subject stays; the href has to name that same record.
     bind_subject_link(&mut row);
-    Ok(row)
+    row
 }
 
 pub(crate) struct Archive {
@@ -1191,19 +1092,10 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         }
         Ok(())
     }
-    let mut row = present(&serde_json::to_value(command)?, now)?;
+    let checked = LocalCommand::check(serde_json::to_value(command)?)?;
+    let mut row = present(checked.console(), now);
     attach_local(&mut row, command, now, root)?;
     Ok(row)
-}
-
-fn selector_label<'a>(selector: &'a str, storage_path: Option<&str>) -> &'a str {
-    // Only trim the directory named by the observation. Both the path and
-    // Command name can contain characters used in the opaque selector.
-    storage_path
-        .and_then(|path| path.rsplit_once('/'))
-        .and_then(|(directory, _)| selector.strip_prefix(directory))
-        .and_then(|rest| rest.strip_prefix('/'))
-        .unwrap_or(selector)
 }
 
 fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {
@@ -1219,17 +1111,6 @@ fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str
 
 fn timestamp(value: &str) -> i64 {
     DateTime::parse_from_rfc3339(value).map_or(0, |time| time.timestamp_millis())
-}
-
-fn identity(value: &str) -> String {
-    // Encode the exact storage identity: issue numbers and timestamps alone
-    // can collide, and DOM IDs cannot contain whitespace.
-    let encoded: String = value
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("command-{encoded}")
 }
 
 fn elapsed(time: &str, now: DateTime<Local>) -> String {
@@ -1260,7 +1141,16 @@ fn outcome_kind(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::outcome_kind;
+    use super::super::rows::WireDocument;
+    use super::{LocalCommand, Row, outcome_kind};
+
+    fn present(
+        value: &serde_json::Value,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> anyhow::Result<Row> {
+        let checked = LocalCommand::check(value.clone())?;
+        Ok(super::present(checked.console(), now))
+    }
 
     #[test]
     fn outcome_kinds_drop_the_pr_issue_or_error_they_name() {
@@ -1297,6 +1187,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fleet_console_preserves_presentation_for_object_form_enums() {
+        use crate::config::console::fleet::Entry;
+        use serde_json::json;
+
+        let input = json!({
+            "version": 2, "hostname": "owner-host", "active_runs": 1,
+            "commands": [
+                {
+                    "source": "legacy_log", "group": "needs you", "needs_you_kind": {"slow": null},
+                    "landing": true, "stopping": false, "count": 1,
+                    "selector": "/owner/canonical.log", "repository": "acme/canonical-control",
+                    "kind": "Run", "state": "live", "started_at": "2026-11-26T10:00:00Z",
+                    "children": [{
+                        "group": {"ready for review": null}, "selector": "/owner/nested.log",
+                        "repository": "acme/nested-control", "kind": "Run", "state": "done",
+                        "started_at": "2026-11-26T10:00:00Z",
+                        "pull_request": "https://github.com/acme/nested-control/pull/42",
+                        "github_ci": "red"
+                    }]
+                },
+                {
+                    "source": "reservation", "group": {"needs you": null},
+                    "landing": false, "stopping": false, "count": 1,
+                    "selector": "/owner/wire-object.json", "repository": "acme/wire-object-marker",
+                    "kind": "Run", "state": "live", "started_at": "2026-11-26T10:00:00Z",
+                    "reservation": {"reference": "origin"}, "blocking": "Architect run",
+                    "owner_description": "Held", "release_command": "thirdshift release-reservation"
+                }
+            ]
+        });
+        let document = serde_json::from_value::<WireDocument>(input)
+            .unwrap()
+            .admit_console("owner")
+            .unwrap();
+        let mut inbox = super::Inbox {
+            active_runs: 0,
+            sections: [("needs you", "Needs you"), ("landing", "Landing")]
+                .into_iter()
+                .map(|(group, title)| super::Section {
+                    group,
+                    title,
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                })
+                .collect(),
+            idle_passes: Vec::new(),
+            pass_starts: Vec::new(),
+            github_quota_wait: None,
+            plan_usage_banner: None,
+            warning: None,
+            github_warning: None,
+        };
+        inbox.merge_remote(
+            &document,
+            &Entry::link("owner".into(), "https://owner.example.test".into()),
+            false,
+            false,
+        );
+
+        let [parent] = inbox.sections[0].rows.as_slice() else {
+            panic!("only the row with a string group belongs in Needs you");
+        };
+        assert_eq!(parent.selector, "/owner/canonical.log");
+        let [child] = parent.children.as_slice() else {
+            panic!("the nested Command should still render");
+        };
+        assert_eq!(child.selector, "/owner/nested.log");
+        assert!(child.pr_checks.is_none());
+        let [reference] = inbox.sections[1].references.as_slice() else {
+            panic!("the Needs you Command should still have a Landing reference");
+        };
+        assert!(reference.text.ends_with(" · Needs you · see Needs you"));
+    }
+
     /// `row.html` puts `subject_url` in the subject link while the visible
     /// text is the row's repository and issue number. A Fleet document chooses
     /// those independently, so a mismatched URL must not become that href.
@@ -1327,7 +1292,7 @@ mod tests {
                 }]
             })
         };
-        let document: crate::logs::status::fleet::Document = serde_json::from_value(serde_json::json!({
+        let document = serde_json::from_value::<WireDocument>(serde_json::json!({
             "version": 2,
             "hostname": "remote-host",
             "active_runs": 0,
@@ -1386,6 +1351,8 @@ mod tests {
             ],
             "machines": []
         }))
+        .unwrap()
+        .admit_console("remote")
         .unwrap();
         let mut inbox = super::Inbox {
             active_runs: 0,
@@ -1410,21 +1377,19 @@ mod tests {
             warning: None,
             github_warning: None,
         };
-        inbox
-            .merge_remote(
-                &document,
-                &Entry {
-                    name: "remote".into(),
-                    address: "https://fleet.example".into(),
-                    hostname: None,
-                    thirdshift_version: None,
-                    scopes: Vec::new(),
-                    last_contact: None,
-                },
-                false,
-                false,
-            )
-            .unwrap();
+        inbox.merge_remote(
+            &document,
+            &Entry {
+                name: "remote".into(),
+                address: "https://fleet.example".into(),
+                hostname: None,
+                thirdshift_version: None,
+                scopes: Vec::new(),
+                last_contact: None,
+            },
+            false,
+            false,
+        );
         let rows = &inbox.sections[0].rows;
         assert_eq!(rows.len(), 5);
         let row = |title: &str| {
@@ -1504,7 +1469,7 @@ mod tests {
             matches!(group, "done" | "resolved" | "history")
         }
 
-        let done = super::present(
+        let done = present(
             &make(
                 "done",
                 None,
@@ -1530,7 +1495,7 @@ mod tests {
         );
         assert_eq!(done.target_pr, None);
 
-        let needs = super::present(
+        let needs = present(
             &make(
                 "needs you",
                 Some("Failed"),
@@ -1556,7 +1521,7 @@ mod tests {
         );
 
         for group in ["resolved", "history"] {
-            let preserved = super::present(
+            let preserved = present(
                 &make(
                     group,
                     None,
@@ -1584,7 +1549,7 @@ mod tests {
             );
         }
 
-        let unlinked = super::present(
+        let unlinked = present(
             &make(
                 "done",
                 None,
@@ -1600,7 +1565,7 @@ mod tests {
         assert_eq!(unlinked.subject_url, None);
         assert_eq!(unlinked.release_link, None);
 
-        let without_pr = super::present(
+        let without_pr = present(
             &make(
                 "needs you",
                 Some("Failed"),
@@ -1625,7 +1590,7 @@ mod tests {
             })
         );
 
-        let ticket = super::present(
+        let ticket = present(
             &serde_json::json!({
                 "repository": "acme/widgets",
                 "kind": "Run",
@@ -1736,15 +1701,16 @@ mod tests {
             ));
         }
 
-        let document: crate::logs::status::fleet::Document =
-            serde_json::from_value(serde_json::json!({
-                "version": 2,
-                "hostname": "remote-host",
-                "active_runs": 0,
-                "commands": commands,
-                "machines": []
-            }))
-            .unwrap();
+        let document = serde_json::from_value::<WireDocument>(serde_json::json!({
+            "version": 2,
+            "hostname": "remote-host",
+            "active_runs": 0,
+            "commands": commands,
+            "machines": []
+        }))
+        .unwrap()
+        .admit_console("remote")
+        .unwrap();
         let mut inbox = super::Inbox {
             active_runs: 0,
             sections: vec![super::Section {
@@ -1760,21 +1726,19 @@ mod tests {
             warning: None,
             github_warning: None,
         };
-        inbox
-            .merge_remote(
-                &document,
-                &Entry {
-                    name: "remote".into(),
-                    address: "https://fleet.example".into(),
-                    hostname: None,
-                    thirdshift_version: None,
-                    scopes: Vec::new(),
-                    last_contact: None,
-                },
-                false,
-                false,
-            )
-            .unwrap();
+        inbox.merge_remote(
+            &document,
+            &Entry {
+                name: "remote".into(),
+                address: "https://fleet.example".into(),
+                hostname: None,
+                thirdshift_version: None,
+                scopes: Vec::new(),
+                last_contact: None,
+            },
+            false,
+            false,
+        );
 
         let rows = &inbox.sections[0].rows;
         let row = |marker: &str| {
