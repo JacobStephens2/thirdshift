@@ -4,14 +4,13 @@ use anyhow::Result;
 
 use super::{Input, Options, existing, investigate};
 use crate::asks::Flags;
-use crate::claim::{AGENT_FAILED, IN_PROGRESS};
 use crate::command::Skip;
 use crate::command_limit::Sharing;
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, ListedIssue};
 use crate::issue::Repo;
-use crate::labels::{self, Label};
+use crate::labels;
 use crate::launch::{self, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::LaunchAndGitHub;
@@ -152,18 +151,10 @@ fn ineligible(
     github: &GitHub,
     skip_authors: &crate::skip_authors::SkipAuthors,
 ) -> Result<Option<String>> {
-    let excluded: [Label; 6] = [
-        labels::READY_FOR_AGENT,
-        labels::READY_FOR_HUMAN,
-        labels::NEEDS_INFO,
-        labels::WONTFIX,
-        IN_PROGRESS,
-        AGENT_FAILED,
-    ];
     if !listed.labels.has(labels::NEEDS_TRIAGE) {
         return Ok(Some("is no longer labelled needs-triage".into()));
     }
-    if let Some(label) = excluded.into_iter().find(|label| listed.labels.has(*label)) {
+    if let Some(label) = listed.labels.triage_disqualifiers().into_iter().next() {
         return Ok(Some(format!("is labelled {label}")));
     }
     let candidate = github.candidate(&listed.issue, labels::NEEDS_TRIAGE)?;

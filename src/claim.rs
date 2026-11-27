@@ -13,6 +13,11 @@
 //! Custom process's Delivery removes it when the pull request is ready for
 //! review, without putting `ready-for-agent` back.
 //!
+//! What waiting for triage means by labels alone also lives here, as an
+//! exception to labels' rules living with them: two of its disqualifying
+//! labels are the Claim's, which `labels` cannot name, and the Architect
+//! run and the Triage Pass must share the one rule.
+//!
 //! What it reads and changes of GitHub and origin, whether the run is
 //! interrupted, and its progress lines all go through [`Outside`]:
 //! [`OnGitHub`] does each through `gh`, `git` and the progress lines;
@@ -45,6 +50,40 @@ pub const AGENT_FAILED: Label = Label::new(
     "agent-failed",
     "thirdshift failed on this issue; it waits for the Day shift",
 );
+
+/// The labels that, beside `needs-triage`, keep the Triage Pass from taking
+/// an issue: a triage outcome already decided, or a Claim state. Shared by
+/// the Triage Pass, which passes such an issue over, and an Architect run,
+/// which must not wait for triage on an issue the Triage Pass cannot take,
+/// so the two cannot disagree about what is waiting for triage.
+pub const TRIAGE_DISQUALIFIERS: [Label; 6] = [
+    READY_FOR_AGENT,
+    labels::READY_FOR_HUMAN,
+    labels::NEEDS_INFO,
+    labels::WONTFIX,
+    IN_PROGRESS,
+    AGENT_FAILED,
+];
+
+impl Labels {
+    /// Each of [`TRIAGE_DISQUALIFIERS`] among these labels, in that order.
+    pub fn triage_disqualifiers(&self) -> Vec<Label> {
+        TRIAGE_DISQUALIFIERS
+            .into_iter()
+            .filter(|label| self.has(*label))
+            .collect()
+    }
+
+    /// Whether these labels wait for triage as the Triage Pass can take
+    /// them, by labels alone: `needs-triage` and none of
+    /// [`TRIAGE_DISQUALIFIERS`].
+    pub fn waiting_for_triage(&self) -> bool {
+        self.has(labels::NEEDS_TRIAGE)
+            && !TRIAGE_DISQUALIFIERS
+                .into_iter()
+                .any(|label| self.has(label))
+    }
+}
 
 /// How the Run or the Spec run that made a Claim ended, as ending the Claim
 /// needs to know it.
@@ -1139,6 +1178,28 @@ mod tests {
          is on origin, release it by hand: \
          gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress && \
          gh api --method POST repos/acme/widgets/issues/7/labels -f 'labels[]=ready-for-agent'";
+
+    #[test]
+    fn waiting_for_triage_is_needs_triage_with_no_disqualifier() {
+        let labelled = |names: &[&str]| -> Labels { names.iter().copied().collect() };
+
+        assert!(labelled(&["needs-triage", "bug"]).waiting_for_triage());
+        assert!(!labelled(&["bug"]).waiting_for_triage());
+        assert!(!labelled(&["ready-for-human"]).waiting_for_triage());
+        for disqualifier in TRIAGE_DISQUALIFIERS {
+            let labels = labelled(&["needs-triage", disqualifier.name()]);
+            assert!(!labels.waiting_for_triage(), "{disqualifier}");
+            assert_eq!(labels.triage_disqualifiers(), [disqualifier]);
+        }
+        let cased = labelled(&["Needs-Triage", "READY-FOR-HUMAN"]);
+        assert!(!cased.waiting_for_triage());
+        assert_eq!(cased.triage_disqualifiers(), [labels::READY_FOR_HUMAN]);
+        let several = labelled(&["needs-triage", "agent-failed", "wontfix"]);
+        assert_eq!(
+            several.triage_disqualifiers(),
+            [labels::WONTFIX, AGENT_FAILED]
+        );
+    }
 
     #[test]
     fn a_stop_leaves_the_issue_for_triage_keeping_the_claim_only_with_work_on_origin() {

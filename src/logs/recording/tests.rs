@@ -2182,3 +2182,32 @@ fn listing_disagreement_logs_once_per_repo_label_and_keeps_idle_pass_skip_histor
         "{activity}"
     );
 }
+
+#[test]
+fn conflicted_architect_idea_logs_once_per_change_per_idea() {
+    let memory = Scripted::default();
+    let repo = issue().repo();
+    let line = "Architect idea #5 \"Issue 5\" is labelled needs-triage and ready-for-human, \
+                so it is not waiting for triage: https://github.com/acme/widgets/issues/5";
+
+    for _ in 0..2 {
+        let mut record = Record::new(memory.clone());
+        record.begin(Begin::ArchitectRun);
+        record.configured(&config(false));
+        record.conflicted_architect_idea(&repo, 5, line);
+    }
+    let changed = "Architect idea #5 \"Issue 5\" is labelled needs-triage and wontfix, \
+                   so it is not waiting for triage: https://github.com/acme/widgets/issues/5";
+    let other = "Architect idea #6 \"Issue 6\" is labelled needs-triage and ready-for-human, \
+                 so it is not waiting for triage: https://github.com/acme/widgets/issues/6";
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::ArchitectRun);
+    record.configured(&config(false));
+    record.conflicted_architect_idea(&repo, 5, changed);
+    record.conflicted_architect_idea(&repo, 6, other);
+
+    let activity = memory.file(ACTIVITY);
+    assert_eq!(activity.matches(line).count(), 1, "{activity}");
+    assert_eq!(activity.matches(changed).count(), 1, "{activity}");
+    assert_eq!(activity.matches(other).count(), 1, "{activity}");
+}
