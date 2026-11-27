@@ -1602,6 +1602,31 @@ function contrastRatio(a, b) {
   return (Math.max(first, second) + .05) / (Math.min(first, second) + .05);
 }
 
+function renderedTextColors(root) {
+  const rgb = color => color.match(/[\d.]+/g).slice(0, 3).map(Number);
+  const texts = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const pairs = [];
+  while (texts.nextNode()) {
+    const node = texts.currentNode;
+    const label = node.textContent.trim();
+    if (!label) continue;
+    const range = document.createRange();
+    range.selectNode(node);
+    const bounds = range.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) continue;
+    const style = getComputedStyle(node.parentElement);
+    let surface = node.parentElement;
+    while (surface && getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement;
+    if (!surface) continue;
+    pairs.push({
+      name: `rendered ${label.slice(0, 30)}`,
+      text: rgb(style.color),
+      background: rgb(getComputedStyle(surface).backgroundColor),
+    });
+  }
+  return pairs;
+}
+
 test("every built-in Theme text pair meets AA in both system modes, including solid tags", async t => {
   const page = await pageFor(t);
   const failures = [];
@@ -1631,22 +1656,11 @@ test("every built-in Theme text pair meets AA in both system modes, including so
             pairs.push({ name: `on-${state}`, text: color(`on-${state}`), background: color(state) });
           }
           probe.remove();
-          const texts = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          while (texts.nextNode()) {
-            const node = texts.currentNode;
-            if (!node.textContent.trim()) continue;
-            const range = document.createRange(); range.selectNode(node);
-            if (!range.getBoundingClientRect().width || !range.getBoundingClientRect().height) continue;
-            const style = getComputedStyle(node.parentElement);
-            let parent = node.parentElement;
-            while (parent && getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)') parent = parent.parentElement;
-            if (!parent) continue;
-            pairs.push({ name: `rendered ${node.textContent.trim().slice(0, 30)}`, text: style.color.match(/[\d.]+/g).slice(0, 3).map(Number), background: getComputedStyle(parent).backgroundColor.match(/[\d.]+/g).slice(0, 3).map(Number) });
-          }
           return { pairs, background: getComputedStyle(document.body).backgroundColor };
         }, theme);
+        const rendered = await page.locator('body').evaluate(renderedTextColors);
         assert.equal(background, backgrounds[family][(mode === 'auto' ? system : mode) === 'dark' ? 1 : 0], `${theme} must respect the chosen mode on ${system}`);
-        for (const pair of pairs) {
+        for (const pair of [...pairs, ...rendered]) {
           const ratio = contrastRatio(pair.text, pair.background);
           if (ratio < 4.5) failures.push(`${theme} (${system}): ${pair.name} = ${ratio}`);
           if (family === 'focus' && !pair.name.startsWith('on-')) {
@@ -2486,12 +2500,7 @@ test('Ready rows link PR subjects, show titles and CI across widths, and update 
       for (const [theme, system] of themes) {
         await page.emulateMedia({ colorScheme: system });
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-        const { text, background } = await badge.evaluate(node => {
-          const rgb = color => color.match(/[\d.]+/g).slice(0, 3).map(Number);
-          let surface = node;
-          while (getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement;
-          return { text: rgb(getComputedStyle(node).color), background: rgb(getComputedStyle(surface).backgroundColor) };
-        });
+        const [{ text, background }] = await badge.evaluate(renderedTextColors);
         const context = `${path} ${theme} on ${system}`;
         if (theme.startsWith('focus-')) {
           const [red, green, blue] = text;
