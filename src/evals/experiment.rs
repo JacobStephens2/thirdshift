@@ -398,8 +398,7 @@ pub(crate) fn for_release(
 }
 
 pub(crate) fn read_conclusion(id: &str) -> Result<Conclusion> {
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
-    store::read_conclusion(&root, id)
+    store::read_conclusion(&store::root()?, id)
 }
 
 /// Results contain private Grader evidence, unlike the public Command facts:
@@ -772,7 +771,7 @@ fn execute(options: Options, repository: &Path, standalone: bool) -> Result<Opti
 pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    let root = store::root()?;
     if let [id, flag, hit, decision, reason_flag, reason] = positional.as_slice()
         && flag.as_str() == "--leak"
         && reason_flag.as_str() == "--reason"

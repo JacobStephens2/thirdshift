@@ -261,6 +261,11 @@ impl std::fmt::Display for State {
     }
 }
 
+enum Upgrade {
+    FullRecord,
+    VerdictOnly,
+}
+
 impl Stored {
     pub fn open(
         root: &Path,
@@ -274,8 +279,7 @@ impl Stored {
         lock.try_lock().context("Experiment is already running")?;
         let path = directory.join("experiment.json");
         let mut stored = if path.exists() {
-            let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
-            ensure!(stored.format == 1, "unsupported Experiment format");
+            let mut stored = Self::metadata(&Native, directory.clone(), &description.id)?;
             let started = directory.join("started").exists();
             if started && stored.description.bar.discriminating_tasks.is_some() {
                 for task in &stored.tasks {
@@ -366,7 +370,7 @@ impl Stored {
         };
         stored.directory = directory;
         stored.lock = Some(lock);
-        stored.upgrade_verdict()?;
+        stored.upgrade_verdict(Upgrade::FullRecord)?;
         stored.save()?;
         Ok(Some(stored))
     }
@@ -467,7 +471,10 @@ impl Stored {
         Ok(())
     }
 
-    fn upgrade_verdict(&mut self) -> Result<()> {
+    fn upgrade_verdict(&mut self, upgrade: Upgrade) -> Result<()> {
+        if self.state != State::Completed {
+            return Ok(());
+        }
         let missing_flip_verdicts = self
             .pending_rechecks
             .iter()
@@ -475,7 +482,7 @@ impl Stored {
         if self.description.bar.min_discriminating_tasks.is_none() && self.verdict.is_some() {
             // A saved pre-Advisory Verdict is evidence, not an invitation to
             // recalculate it under a newer runner's recheck policy.
-            if self.state == State::Completed && missing_flip_verdicts {
+            if matches!(upgrade, Upgrade::FullRecord) && missing_flip_verdicts {
                 let (_, pending) = super::grading::assess(
                     &self.tasks,
                     &self.results()?,
@@ -485,14 +492,11 @@ impl Stored {
                 )?;
                 self.pending_rechecks = pending;
             }
-            return Ok(());
-        }
-        if self.state == State::Completed
-            && (self
-                .verdict
-                .as_ref()
-                .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
-                || missing_flip_verdicts)
+        } else if self
+            .verdict
+            .as_ref()
+            .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
+            || missing_flip_verdicts
         {
             self.refresh_verdict()?;
         }
@@ -542,7 +546,7 @@ impl Stored {
         };
         let mut stored = Self::metadata(&Native, directory, id)?;
         stored.lock = lock;
-        stored.upgrade_verdict()?;
+        stored.upgrade_verdict(Upgrade::FullRecord)?;
         Ok(stored)
     }
 
@@ -691,8 +695,12 @@ pub(super) fn list(root: &Path) -> Result<Vec<Stored>> {
     Ok(experiments)
 }
 
+pub(super) fn root() -> Result<PathBuf> {
+    Ok(crate::config::home()?.join(".thirdshift/evals/experiments"))
+}
+
 pub(crate) fn read(id: Option<&str>) -> Result<Vec<View>> {
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    let root = root()?;
     if let Some(id) = id {
         return Ok(vec![Stored::load(&root, id, false)?.view()?]);
     }
@@ -703,7 +711,7 @@ pub(super) fn read_conclusion(root: &Path, id: &str) -> Result<Conclusion> {
     let mut stored = Stored::retained(&Native, root, id)?;
     // A missing saved Verdict cannot clear a waiting Release run.
     stored.conclusion()?;
-    stored.upgrade_verdict()?;
+    stored.upgrade_verdict(Upgrade::VerdictOnly)?;
     stored.conclusion()
 }
 
@@ -718,7 +726,7 @@ pub(super) fn rename(root: &Path, id: &str, name: Option<String>, json: bool) ->
         write(&stored.directory.join("experiment.json"), &stored)?;
         stored
     };
-    stored.upgrade_verdict()?;
+    stored.upgrade_verdict(Upgrade::FullRecord)?;
     stored.render(json)
 }
 
