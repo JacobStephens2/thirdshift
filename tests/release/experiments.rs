@@ -447,15 +447,20 @@ fn a_pass_without_the_experiment_never_publishes_a_version_pinned_for_one() {
 fn a_refused_release_experiment_shows_its_suite_results_first() {
     let release = Release::new();
     prepare(&release, 1);
-    let output = release_with_experiment(&release, &["0.2.0", "--with-experiment"]);
-    assert!(!output.status.success());
-    let err = stderr(&output);
-    let shown = err.find("spec-review: Advisory suite").expect(&err);
-    assert!(
-        shown
-            < err
-                .find("unattended release has no terminal override")
-                .unwrap(),
-        "{err}"
-    );
+    let suite = "spec-review: Advisory suite";
+    for _ in 0..2 {
+        let output = release_with_experiment(&release, &["0.2.0", "--with-experiment"]);
+        assert!(!output.status.success());
+        let err = stderr(&output);
+        assert_eq!(err.matches(suite).count(), 1, "{err}");
+        assert!(!stdout(&output).contains(suite));
+        let shown = err.find(suite).unwrap();
+        assert!(
+            shown
+                < err
+                    .find("unattended release has no terminal override")
+                    .unwrap(),
+            "{err}"
+        );
+    }
 }

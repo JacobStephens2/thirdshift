@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal, Write};
 use anyhow::{Context, Result, ensure};
 
 use super::*;
+use crate::evals::experiment::{self, Completion, Conclusion};
 
 pub(super) fn experiment(git: &Git, cut: &recovery::Cut, requested: bool) -> Result<()> {
     if !requested {
@@ -18,51 +19,38 @@ pub(super) fn experiment(git: &Git, cut: &recovery::Cut, requested: bool) -> Res
         "checking release Experiment at {} against {previous}",
         cut.base
     ));
-    let Some(mut view) = crate::evals::experiment::for_release(git.dir(), &cut.base, previous)?
+    let Some(Completion { id, mut conclusion }) =
+        experiment::for_release(git.dir(), &cut.base, previous)?
     else {
         return Ok(());
     };
     let mut line = poll::WaitingLine::new();
     loop {
-        let verdict = view
-            .verdict
-            .as_ref()
-            .context("release Experiment has no Verdict")?;
-        match verdict.verdict {
-            crate::evals::experiment::Conclusion::Pass => return Ok(()),
-            crate::evals::experiment::Conclusion::Fail
-            | crate::evals::experiment::Conclusion::Inconclusive => {
+        let outcome = conclusion.outcome();
+        match conclusion {
+            Conclusion::Pass => return Ok(()),
+            Conclusion::Fail | Conclusion::Inconclusive => {
                 ensure!(
                     io::stdin().is_terminal(),
-                    "Experiment {}; unattended release has no terminal override",
-                    verdict.outcome()
+                    "Experiment {outcome}; unattended release has no terminal override"
                 );
-                progress::step(format_args!(
-                    "Experiment {}; release anyway? [y/N]",
-                    verdict.outcome()
-                ));
+                progress::step(format_args!("Experiment {outcome}; release anyway? [y/N]"));
                 ensure!(
                     matches!(answer()?.as_str(), "y" | "yes"),
-                    "Experiment {}; release declined",
-                    verdict.outcome()
+                    "Experiment {outcome}; release declined"
                 );
                 return Ok(());
             }
-            crate::evals::experiment::Conclusion::WaitingOnRechecks
-            | crate::evals::experiment::Conclusion::WaitingOnLeaks
-            | crate::evals::experiment::Conclusion::WaitingOnPeople => {
+            Conclusion::WaitingOnRechecks
+            | Conclusion::WaitingOnLeaks
+            | Conclusion::WaitingOnPeople => {
                 if line.should_report(()) {
                     progress::step(format_args!(
-                        "Experiment {} {}; resolve pending rechecks, leak decisions or pairwise calls with thirdshift experiments {}",
-                        view.description.id,
-                        verdict.outcome(),
-                        view.description.id
+                        "Experiment {id} {outcome}; resolve pending rechecks, leak decisions or pairwise calls with thirdshift experiments {id}"
                     ));
                 }
                 poll::pause()?;
-                view = crate::evals::experiment::read(Some(&view.description.id))?
-                    .pop()
-                    .context("release Experiment disappeared")?;
+                conclusion = experiment::read_conclusion(&id)?;
             }
         }
     }

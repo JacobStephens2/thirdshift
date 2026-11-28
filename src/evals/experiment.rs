@@ -374,13 +374,18 @@ pub fn run(options: Options) -> Result<()> {
     execute(options, &std::env::current_dir()?, true).map(drop)
 }
 
+pub(crate) struct Completion {
+    pub(crate) id: String,
+    pub(crate) conclusion: Conclusion,
+}
+
 /// The Release run calls the same Experiment engine without spawning Cargo or
 /// executing anything from its Launch directory, and retains its own recording.
 pub(crate) fn for_release(
     repository: &Path,
     candidate: &str,
     baseline: &str,
-) -> Result<Option<View>> {
+) -> Result<Option<Completion>> {
     let _recording = logs::nested();
     let options = parse(&[
         "--release".into(),
@@ -392,13 +397,18 @@ pub(crate) fn for_release(
     execute(options, repository, false)
 }
 
+pub(crate) fn read_conclusion(id: &str) -> Result<Conclusion> {
+    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    store::read_conclusion(&root, id)
+}
+
 /// Results contain private Grader evidence, unlike the public Command facts:
 /// print them without copying them into the factory's logs. The standalone
 /// command prints them on stdout; a Release run shows them on stderr, beside
 /// its progress, before it asks whether to release anyway.
-fn print_results(experiment: &store::Stored, json: bool, render: bool) -> Result<()> {
+fn print_results(experiment: &store::Stored, json: bool, standalone: bool) -> Result<()> {
     let results = experiment.render(json)?;
-    if render {
+    if standalone {
         println!("{results}");
     } else {
         eprintln!("{results}");
@@ -406,7 +416,7 @@ fn print_results(experiment: &store::Stored, json: bool, render: bool) -> Result
     Ok(())
 }
 
-fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<View>> {
+fn execute(options: Options, repository: &Path, standalone: bool) -> Result<Option<Completion>> {
     interrupt::install()?;
     let git = Git::new(repository);
     let root = crate::config::home()?.join(".thirdshift/evals");
@@ -445,7 +455,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         release::skip(
             "no_suites",
             "no Eval suite touched; no release Experiment needed",
-            render.then_some(options.json),
+            standalone.then_some(options.json),
         )?;
         return Ok(None);
     }
@@ -540,7 +550,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         release::skip(
             "baseline_without_trial",
             &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
-            render.then_some(options.json),
+            standalone.then_some(options.json),
         )?;
         return Ok(None);
     };
@@ -560,14 +570,14 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
     }
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
-        print_results(&experiment, options.json, render)?;
-        if render {
+        print_results(&experiment, options.json, standalone)?;
+        if standalone {
             logs::start_notice::skipped(format!(
                 "Experiment {} is already completed",
                 experiment.description.id
             ));
         }
-        return experiment.view().map(Some);
+        return experiment.into_completion().map(Some);
     }
     if let Err(error) = cost::confirm(&experiment, options.yes) {
         // A declined new Experiment leaves no record to list as running.
@@ -597,7 +607,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         };
     }
     experiment.details.release |= options.release;
-    let invocation = if render {
+    let invocation = if standalone {
         resume_args(std::env::args().skip(1))
     } else {
         vec![
@@ -723,7 +733,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
         retention::repositories(&experiment);
-        print_results(&experiment, options.json, render)?;
+        print_results(&experiment, options.json, standalone)?;
     }
     let outcome = if interrupt::requested() {
         "interrupted"
@@ -756,7 +766,7 @@ fn execute(options: Options, repository: &Path, render: bool) -> Result<Option<V
         experiment.description.id
     ));
     result.and(saved)?;
-    experiment.view().map(Some)
+    experiment.into_completion().map(Some)
 }
 
 pub fn show(args: &[String]) -> Result<String> {

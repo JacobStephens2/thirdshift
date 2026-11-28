@@ -10,7 +10,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::trial_results::files::{Files, Native};
-use super::{Arm, Description, Task, TrialResult, trial_results};
+use super::{Arm, Completion, Conclusion, Description, Task, TrialResult, trial_results};
 use crate::trial::{Outcome, VoidCause};
 
 #[derive(Serialize, Deserialize)]
@@ -550,6 +550,21 @@ impl Stored {
         super::reading::read(self)
     }
 
+    pub(super) fn into_completion(self) -> Result<Completion> {
+        let conclusion = self.conclusion()?;
+        Ok(Completion {
+            id: self.description.id,
+            conclusion,
+        })
+    }
+
+    fn conclusion(&self) -> Result<Conclusion> {
+        self.verdict
+            .as_ref()
+            .map(|verdict| verdict.verdict)
+            .context("release Experiment has no Verdict")
+    }
+
     pub fn render(&self, json: bool) -> Result<String> {
         let view = self.view()?;
         if json {
@@ -684,6 +699,14 @@ pub(crate) fn read(id: Option<&str>) -> Result<Vec<View>> {
     list(&root)?.iter().map(Stored::view).collect()
 }
 
+pub(super) fn read_conclusion(root: &Path, id: &str) -> Result<Conclusion> {
+    let mut stored = Stored::retained(&Native, root, id)?;
+    // A missing saved Verdict cannot clear a waiting Release run.
+    stored.conclusion()?;
+    stored.upgrade_verdict()?;
+    stored.conclusion()
+}
+
 /// Renames in any state: only the metadata lock fences this write, as it does
 /// a running Experiment's own.
 pub(super) fn rename(root: &Path, id: &str, name: Option<String>, json: bool) -> Result<String> {
@@ -718,3 +741,6 @@ pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> 
             .map(|lines| lines.join("\n"))
     }
 }
+
+#[cfg(test)]
+mod tests;
