@@ -175,16 +175,22 @@ fn wait_for(
     verdict: &str,
 ) -> Value {
     let deadline = Instant::now() + EXPERIMENT_BOUND;
+    let log = release.root().join("experiment-output");
     loop {
         assert!(
             child.try_wait().is_none(),
             "Release ended before {verdict}: {}",
-            fs::read_to_string(release.root().join("experiment-output")).unwrap()
+            fs::read_to_string(&log).unwrap()
         );
         if let Some(view) = views(release).into_iter().find(|view| {
             view["candidate"]["commit"] == candidate && view["verdict"]["verdict"] == verdict
         }) {
-            return view;
+            // Release asks for rechecks after the Experiment drops its lock.
+            let id = view["id"].as_str().unwrap();
+            let notice = format!("Experiment {id} {verdict}; resolve pending rechecks");
+            if String::from_utf8_lossy(&fs::read(&log).unwrap()).contains(&notice) {
+                return view;
+            }
         }
         assert!(
             Instant::now() < deadline,
