@@ -202,7 +202,7 @@ impl Provisional {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Conclusion {
     Pass,
@@ -211,6 +211,19 @@ pub(crate) enum Conclusion {
     WaitingOnRechecks,
     WaitingOnLeaks,
     WaitingOnPeople,
+}
+
+impl Conclusion {
+    pub(crate) fn outcome(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Inconclusive => "inconclusive",
+            Self::WaitingOnRechecks => "waiting_on_rechecks",
+            Self::WaitingOnLeaks => "waiting_on_leaks",
+            Self::WaitingOnPeople => "waiting_on_people",
+        }
+    }
 }
 
 impl From<Decision> for Conclusion {
@@ -309,14 +322,7 @@ impl Verdict {
     }
 
     pub fn outcome(&self) -> &'static str {
-        match self.verdict {
-            Conclusion::Pass => "pass",
-            Conclusion::Fail => "fail",
-            Conclusion::Inconclusive => "inconclusive",
-            Conclusion::WaitingOnRechecks => "waiting_on_rechecks",
-            Conclusion::WaitingOnLeaks => "waiting_on_leaks",
-            Conclusion::WaitingOnPeople => "waiting_on_people",
-        }
+        self.verdict.outcome()
     }
 }
 
