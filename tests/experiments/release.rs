@@ -170,29 +170,30 @@ fn native_release_waits_for_leak_decisions_before_any_push() {
         .stderr(output);
     let mut child = owned.spawn(&mut command);
     let deadline = Instant::now() + Duration::from_secs(300);
-    let waiting = loop {
-        assert!(
-            child.try_wait().is_none(),
-            "{}",
-            fs::read_to_string(&log).unwrap()
-        );
-        let listed = scenario.run(&["experiments", "--json"]);
-        assert_eq!(listed.code, Some(0), "{}", listed.stderr);
-        let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
-        if let Some(view) = listed
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|view| view["verdict"]["verdict"] == "waiting_on_leaks")
-        {
-            break view.clone();
+    loop {
+        let transcript = fs::read(&log).unwrap();
+        let transcript = String::from_utf8_lossy(&transcript);
+        assert!(child.try_wait().is_none(), "{transcript}");
+        // The saved Verdict can be read while the Experiment is still locked.
+        // Release asks for decisions after the Experiment has dropped its lock.
+        if transcript.contains("waiting_on_leaks; resolve pending rechecks") {
+            break;
         }
         assert!(
             Instant::now() < deadline,
-            "Release Experiment never waited on leak decisions"
+            "Release Experiment never waited on leak decisions:\n{transcript}"
         );
         std::thread::sleep(Duration::from_millis(20));
-    };
+    }
+    let listed = scenario.run(&["experiments", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+    let waiting = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["verdict"]["verdict"] == "waiting_on_leaks")
+        .expect("Release asked for leak decisions without a waiting Verdict");
     assert!(
         scenario
             .origin_git(&["branch", "--list", "release-0.2.0"])
